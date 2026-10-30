@@ -455,6 +455,9 @@ class MainActivity : Activity() {
         items.add(MenuItem(R.drawable.ic_layers, "Display over apps", Settings.canDrawOverlays(this)) {
             openSafely(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         })
+        items.add(MenuItem(R.drawable.ic_edge, "Screen off after glow", EdgeOffService.isEnabled(this)) {
+            openSafely(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        })
         listOf(EdgeGlowView.Kind.NOTIFICATION to "Preview notification", EdgeGlowView.Kind.MUSIC to "Preview music", EdgeGlowView.Kind.CALL to "Preview call")
             .forEach { (kind, label) ->
                 items.add(MenuItem(R.drawable.ic_play, label, false) {

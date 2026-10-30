@@ -66,6 +66,19 @@
             android:theme="@style/EdgeTheme" />
 
         <service
+            android:name=".EdgeOffService"
+            android:label="My Launcher: screen off after glow"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/edge_off_service" />
+        </service>
+
+        <service
             android:name=".EdgeListenerService"
             android:label="My Launcher edge lighting"
             android:exported="true"
