@@ -217,7 +217,7 @@ class MainActivity : Activity() {
         organiserButton = barButton(R.drawable.ic_organiser, "Organiser") { showOrganiser(it) }
         hiddenButton = barButton(R.drawable.ic_hidden, "Hidden apps") { setShowHidden(!showHidden) }
         val backgroundButton = barButton(R.drawable.ic_photo, "Drawer background") { showBackgroundMenu(it) }
-        companionButton = barButton(R.drawable.ic_companion, "Companion on or off") { setCompanionOn(!companionOn) }
+        companionButton = barButton(R.drawable.ic_companion, "Companion on or off") { toggleCompanion(!companionOn) }
         updateCompanionButton()
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -378,7 +378,7 @@ class MainActivity : Activity() {
     }
 
     /** Turns the home-screen companion on or off; he walks in next time you close the drawer. */
-    private fun setCompanionOn(on: Boolean) {
+    private fun toggleCompanion(on: Boolean) {
         companionOn = on
         updateCompanionButton()
         if (on) {
