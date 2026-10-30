@@ -169,7 +169,7 @@ class MainActivity : Activity() {
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.END or Gravity.CENTER_VERTICAL
+                Gravity.END or Gravity.BOTTOM
             ).apply { marginEnd = dp(22) }
         )
 
@@ -219,7 +219,8 @@ class MainActivity : Activity() {
             val top = insets.systemWindowInsetTop
             @Suppress("DEPRECATION")
             val bottom = insets.systemWindowInsetBottom
-            homeScroll.setPadding(0, top, 0, bottom)
+            // Column sits low on the right, in easy thumb reach, clear of the gesture bar.
+            homeScroll.setPadding(0, top, 0, bottom + dp(84))
             (hiddenHint.layoutParams as FrameLayout.LayoutParams).topMargin = top + dp(18)
             (pager.layoutParams as FrameLayout.LayoutParams).apply {
                 topMargin = top + dp(48)

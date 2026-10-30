@@ -2,7 +2,7 @@
 
 A minimal Android home screen, in the same spirit as the Tanjiro TV hub.
 
-- Apps sit in a single column on the right side of the screen
+- Apps sit in a single column low on the right side of the screen, within thumb reach
 - Icons are plain white with no labels or borders, and show the app's real colour while you press them
 - The last button in the column (the dot grid) opens the app drawer
 - Phone, Messages and Browser are added to the column the first time it starts
