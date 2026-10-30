@@ -35,18 +35,24 @@ jobs:
             echo "::error::$line"
           done
 
-      - name: Name the APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk my-launcher.apk
+      - name: Name the APKs
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk my-launcher.apk
+          cp camera/build/outputs/apk/debug/camera-debug.apk pro-camera.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: my-launcher
-          path: my-launcher.apk
+          name: apks
+          path: |
+            my-launcher.apk
+            pro-camera.apk
 
       - name: Publish as a release (easy to download on the phone)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: My Launcher ${{ github.run_number }}
-          files: my-launcher.apk
+          files: |
+            my-launcher.apk
+            pro-camera.apk
           make_latest: true

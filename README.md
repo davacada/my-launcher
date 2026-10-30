@@ -29,3 +29,16 @@ New builds install straight over the old one; your home column is kept.
 - **Add an app to the home column:** long-press it in the drawer, tap *Add to home*
 - **Reorder or remove:** long-press an icon in the column
 - **Close the drawer:** Back, Home, or tap empty space
+
+## Pro Camera
+
+Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style controls:
+
+- Resolution (8K, 4K, 1080p, 720p) and frame rate (24, 25, 30, 50, 60, 100, 120): only what your phone can
+  actually record is offered; "S" speeds use the phone's slow-motion mode
+- Shutter angle (video) or speed (photo), ISO, white balance presets, manual focus with distance readout
+- Focus peaking, zebras, false colour, grid, stabilisation, live histogram, audio meter, timecode
+- Lens buttons for each back camera, plus a 2× crop of the main sensor
+- Photos as JPG or RAW (DNG) + JPG; videos as H.265 where supported
+- Volume buttons work as the shutter; the (i) button shows exactly what each lens supports
+- Files go to Movies/ProCamera and Pictures/ProCamera
