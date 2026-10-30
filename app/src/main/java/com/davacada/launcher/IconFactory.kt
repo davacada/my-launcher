@@ -3,10 +3,10 @@ package com.davacada.launcher
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
+import android.graphics.Typeface
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
@@ -28,7 +28,11 @@ object IconFactory {
         d.draw(c)
     }
 
-    fun white(src: Drawable, size: Int): Bitmap {
+    /**
+     * The app's own white glyph, from its monochrome or foreground layer.
+     * Returns null when the app doesn't provide one that works as a white icon.
+     */
+    fun white(src: Drawable, size: Int): Bitmap? {
         if (src is AdaptiveIconDrawable) {
             val layer: Drawable? =
                 if (Build.VERSION.SDK_INT >= 33 && src.monochrome != null) src.monochrome
@@ -47,23 +51,29 @@ object IconFactory {
                 glyph.recycle()
             }
         }
-        return render(size) { c ->
-            val d = copyOf(src)
-            d.setBounds(0, 0, size, size)
-            val m = ColorMatrix().apply { setSaturation(0f) }
-            m.postConcat(
-                ColorMatrix(
-                    floatArrayOf(
-                        1.5f, 0f, 0f, 0f, 70f,
-                        0f, 1.5f, 0f, 0f, 70f,
-                        0f, 0f, 1.5f, 0f, 70f,
-                        0f, 0f, 0f, 1f, 0f
-                    )
-                )
-            )
-            d.colorFilter = ColorMatrixColorFilter(m)
-            d.draw(c)
+        return null
+    }
+
+    /** One of the launcher's own line icons, drawn white at about the same size as app glyphs. */
+    fun fromVector(glyph: Drawable, size: Int): Bitmap = render(size) { c ->
+        val d = copyOf(glyph)
+        val inset = (size * 0.2f).toInt()
+        d.setBounds(inset, inset, size - inset, size - inset)
+        d.colorFilter = PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
+        d.draw(c)
+    }
+
+    /** A clean white initial, for apps with no usable glyph and no matching line icon. */
+    fun monogram(label: String, size: Int): Bitmap = render(size) { c ->
+        val letter = label.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "•"
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = size * 0.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            textAlign = Paint.Align.CENTER
         }
+        val y = size / 2f - (paint.descent() + paint.ascent()) / 2f
+        c.drawText(letter, size / 2f, y, paint)
     }
 
     private fun copyOf(d: Drawable): Drawable =

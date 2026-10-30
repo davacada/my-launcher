@@ -90,7 +90,7 @@ class MainActivity : Activity() {
 
     private val renderSize by lazy { dp(46) }   // icon bitmaps are drawn at this size
     private val homeIconSize by lazy { dp(38) }
-    private val drawerIconSize by lazy { dp(44) }
+    private val drawerIconSize by lazy { dp(36) }
 
     private val packageCallback = object : LauncherApps.Callback() {
         override fun onPackageRemoved(packageName: String, user: UserHandle) = loadApps()
@@ -702,10 +702,45 @@ class MainActivity : Activity() {
         0L
     }
 
+    /** Which app fills which everyday role on this phone (its dialer, camera, gallery…), mapped to a line icon. */
+    private fun roleGlyphs(): Map<String, Int> {
+        val out = HashMap<String, Int>()
+        fun add(intent: Intent, glyph: Int) {
+            try {
+                @Suppress("DEPRECATION")
+                packageManager.queryIntentActivities(intent, 0)
+                    .forEach { out.putIfAbsent(it.activityInfo.packageName, glyph) }
+            } catch (e: Exception) { }
+        }
+        fun category(c: String, glyph: Int) = add(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, c), glyph)
+
+        add(Intent(Intent.ACTION_DIAL), R.drawable.g_phone)
+        add(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:")), R.drawable.g_message)
+        category(Intent.CATEGORY_APP_MESSAGING, R.drawable.g_message)
+        category(Intent.CATEGORY_APP_CONTACTS, R.drawable.g_people)
+        category(Intent.CATEGORY_APP_EMAIL, R.drawable.g_mail)
+        category(Intent.CATEGORY_APP_CALENDAR, R.drawable.g_calendar)
+        category(Intent.CATEGORY_APP_GALLERY, R.drawable.g_photos)
+        category(Intent.CATEGORY_APP_CALCULATOR, R.drawable.g_calc)
+        category(Intent.CATEGORY_APP_MAPS, R.drawable.g_map)
+        category(Intent.CATEGORY_APP_MUSIC, R.drawable.g_music)
+        category(Intent.CATEGORY_APP_MARKET, R.drawable.g_bag)
+        category(Intent.CATEGORY_APP_FITNESS, R.drawable.g_heart)
+        if (Build.VERSION.SDK_INT >= 29) category(Intent.CATEGORY_APP_FILES, R.drawable.g_folder)
+        if (Build.VERSION.SDK_INT >= 31) category(Intent.CATEGORY_APP_WEATHER, R.drawable.g_cloud)
+        add(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS), R.drawable.g_clock)
+        add(Intent(Settings.ACTION_SETTINGS), R.drawable.g_settings)
+        add(Intent(MediaStore.ACTION_IMAGE_CAPTURE), R.drawable.g_camera)
+        add(Intent(MediaStore.Audio.Media.RECORD_SOUND_ACTION), R.drawable.g_mic)
+        add(Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com")).addCategory(Intent.CATEGORY_BROWSABLE), R.drawable.g_globe)
+        return out
+    }
+
     private fun loadApps() {
         val size = renderSize
         val density = resources.displayMetrics.densityDpi
         io.execute {
+            val roles = roleGlyphs()
             val list = userManager.userProfiles
                 .flatMap { launcherApps.getActivityList(null, it) }
                 .filter { it.componentName.packageName != packageName }
@@ -713,7 +748,12 @@ class MainActivity : Activity() {
                     try {
                         val raw = info.getIcon(density) ?: return@mapNotNull null
                         val colour = IconFactory.colour(raw, size)
+                        val pkg = info.componentName.packageName
                         val white = IconFactory.white(raw, size)
+                            ?: (roles[pkg] ?: PACKAGE_GLYPHS[pkg])?.let { res ->
+                                getDrawable(res)?.let { IconFactory.fromVector(it, size) }
+                            }
+                            ?: IconFactory.monogram(info.label.toString(), size)
                         AppEntry(
                             keyOf(info), info.label.toString(), info, white, colour,
                             info.applicationInfo.category, installTime(info.componentName.packageName)
@@ -758,6 +798,53 @@ class MainActivity : Activity() {
 
     private companion object {
         const val REQUEST_PHOTO = 41
+
+        // Line icons for popular apps that don't ship a white icon of their own.
+        val PACKAGE_GLYPHS = mapOf(
+            "com.whatsapp" to R.drawable.g_chat,
+            "com.whatsapp.w4b" to R.drawable.g_chat,
+            "org.telegram.messenger" to R.drawable.g_send,
+            "org.thoughtcrime.securesms" to R.drawable.g_message,
+            "com.facebook.orca" to R.drawable.g_chat,
+            "com.facebook.katana" to R.drawable.g_people,
+            "com.instagram.android" to R.drawable.g_camera,
+            "com.snapchat.android" to R.drawable.g_camera,
+            "com.discord" to R.drawable.g_headphones,
+            "com.spotify.music" to R.drawable.g_music,
+            "com.soundcloud.android" to R.drawable.g_headphones,
+            "com.shazam.android" to R.drawable.g_mic,
+            "com.google.android.youtube" to R.drawable.g_play,
+            "com.google.android.apps.youtube.music" to R.drawable.g_music,
+            "com.netflix.mediaclient" to R.drawable.g_film,
+            "com.amazon.avod.thirdpartyclient" to R.drawable.g_film,
+            "com.disney.disneyplus" to R.drawable.g_film,
+            "com.crunchyroll.crunchyroid" to R.drawable.g_tv,
+            "tv.twitch.android.app" to R.drawable.g_tv,
+            "com.microsoft.xboxone.smartglass" to R.drawable.g_game,
+            "com.valvesoftware.android.steam.community" to R.drawable.g_game,
+            "com.playstation.mobile2ndscreen" to R.drawable.g_game,
+            "com.amazon.mShop.android.shopping" to R.drawable.g_cart,
+            "com.android.vending" to R.drawable.g_bag,
+            "com.google.android.apps.maps" to R.drawable.g_map,
+            "com.ubercab" to R.drawable.g_car,
+            "ee.mtakso.client" to R.drawable.g_car,
+            "com.paypal.android.p2pmobile" to R.drawable.g_card,
+            "com.revolut.revolut" to R.drawable.g_card,
+            "com.google.android.apps.walletnfcrel" to R.drawable.g_card,
+            "com.duolingo" to R.drawable.g_book,
+            "com.amazon.kindle" to R.drawable.g_book,
+            "com.audible.application" to R.drawable.g_headphones,
+            "com.strava" to R.drawable.g_heart,
+            "com.google.android.apps.fitness" to R.drawable.g_heart,
+            "com.google.android.keep" to R.drawable.g_notes,
+            "com.google.android.apps.docs" to R.drawable.g_folder,
+            "com.google.android.apps.photos" to R.drawable.g_photos,
+            "com.google.android.gm" to R.drawable.g_mail,
+            "com.microsoft.office.outlook" to R.drawable.g_mail,
+            "com.google.android.apps.authenticator2" to R.drawable.g_shield,
+            "com.android.chrome" to R.drawable.g_globe,
+            "org.mozilla.firefox" to R.drawable.g_globe
+        )
         const val COLUMNS = 6
         const val ROWS = 8
         const val SORT_TYPE = "type"
