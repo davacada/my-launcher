@@ -156,7 +156,11 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             caps = Caps(lens.chars)
             texture = surfaceTexture
             pickDefaults()
-            if (sameDevice) { configure(); return@post }
+            if (sameDevice) {
+                // Same camera, different focal length: just change the zoom, no restart.
+                if (session != null) repeat() else configure()
+                return@post
+            }
             closeCamera()
             opened = false
             log("open camera ${lens.id} (${lens.label}), safe mode $safeLevel")

@@ -139,8 +139,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     private fun openCamera() {
         if (lenses.isEmpty()) {
             lenses = Caps.lenses(this)
-            val wanted = prefs.getString("lensLabel", "1×")
-            lensIdx = lenses.indexOfFirst { it.label == wanted }.takeIf { it >= 0 } ?: lenses.indexOfFirst { it.isMain }.coerceAtLeast(0)
+            val wanted = prefs.getString("lensLabel", "")
+            lensIdx = lenses.indexOfFirst { it.label == wanted && it.available }.takeIf { it >= 0 } ?: lenses.indexOfFirst { it.isMain }.coerceAtLeast(0)
         }
         if (lenses.isEmpty()) { say("No usable back camera was found."); return }
         lensIdx = lensIdx.coerceIn(0, lenses.size - 1)
@@ -443,16 +443,21 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
 
     private fun renderLenses() {
         lensColumn.removeAllViews()
+        lensColumn.addView(TextView(this).apply {
+            text = "MM"; gravity = Gravity.CENTER; setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
+            letterSpacing = 0.08f; setTextColor(0xFFB9C2CF.toInt())
+        }, LinearLayout.LayoutParams(dp(50), -2).apply { bottomMargin = dp(3) })
         lenses.forEachIndexed { i, l ->
             val on = i == lensIdx
             lensColumn.addView(TextView(this).apply {
                 text = l.label; gravity = Gravity.CENTER
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setTypeface(Typeface.DEFAULT_BOLD)
                 setTextColor(if (on) 0xFF0D1117.toInt() else Color.WHITE)
-                background = pill(if (on) Color.WHITE else 0x1FFFFFFF, dpf(16f))
-                contentDescription = "Lens ${l.label}"
+                background = pill(if (on) Color.WHITE else 0x1FFFFFFF, dpf(14f))
+                alpha = if (l.available) 1f else 0.3f
+                contentDescription = "${l.label} millimetre lens"
                 setOnClickListener { pickLens(i) }
-            }, LinearLayout.LayoutParams(dp(50), dp(32)).apply { bottomMargin = dp(6) })
+            }, LinearLayout.LayoutParams(dp(50), dp(28)).apply { bottomMargin = dp(4) })
         }
     }
 
@@ -487,9 +492,16 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     private fun pickLens(i: Int) {
-        if (busy() || i == lensIdx) return
+        val target = lenses.getOrNull(i) ?: return
+        if (i == lensIdx) return
+        if (!target.available) { say(target.reason); return }
+        // Zooming on the same camera is fine mid-recording; switching to another camera isn't.
+        val sameCamera = lenses.getOrNull(lensIdx)?.id == target.id
+        if (!sameCamera && busy()) return
         lensIdx = i
         renderLenses()
+        if (target.digital && engine.settings.video && (engine.settings.res?.size?.width ?: 0) >= 3840)
+            say("${target.mm} mm is a crop of the sensor, so ${engine.settings.res?.label} will be a little softer than at wider focal lengths.")
         openCamera()
     }
 
@@ -702,7 +714,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         })
         val l = lenses.getOrNull(lensIdx)
         showPanel(lensColumn, "WHAT THIS LENS CAN DO" + (l?.let { " · ${it.label}" } ?: ""), emptyList(),
-            c.describe() + "\n\nDIAGNOSTICS (safe mode ${engine.safeLevel})\n" + engine.debugLog())
+            Caps.nativeSummary + "\n" + c.describe() + "\n\nDIAGNOSTICS (safe mode ${engine.safeLevel})\n" + engine.debugLog())
         // place it on the left, next to the toggles
         (panel as? FrameLayout)?.getChildAt(0)?.let { card ->
             (card.layoutParams as FrameLayout.LayoutParams).leftMargin = dp(70)
@@ -774,11 +786,14 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             CameraDevice.StateCallback.ERROR_CAMERA_DISABLED -> "The camera is turned off by a phone setting or policy."
             else -> null
         }
-        if (reason == null && !lens.isMain && mainIdx >= 0) {
+        val mainId = lenses.getOrNull(mainIdx)?.id
+        if (reason == null && mainId != null && lens.id != mainId) {
             // This lens isn't open to other apps on this phone: remove its button and use the main camera.
-            lenses = lenses.filter { it !== lens }
+            // Mark every button that relied on that camera as unavailable.
+            lenses = lenses.map { if (it.id == lens.id && it.available) Lens(it.id, it.chars, it.mm, it.ratio, available = false, main = it.main,
+                reason = "${it.mm} mm needs a lens this phone doesn't open to other apps.") else it }
             lensIdx = lenses.indexOfFirst { it.isMain }.coerceAtLeast(0)
-            say("The ${lens.label} lens isn't available to other apps on this phone, so you're on the main camera.")
+            say("${lens.label} mm needs a lens this phone doesn't open to other apps, so you're on ${lenses.getOrNull(lensIdx)?.label ?: ""} mm.")
             openCamera()
             return
         }
@@ -816,7 +831,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             .putString("res", s.res?.label ?: "4K")
             .putBoolean("zebras", engine.overlays.zebras).putBoolean("peaking", engine.overlays.peaking)
             .putBoolean("falseColor", engine.overlays.falseColor).putBoolean("grid", overlay.grid)
-            .putString("lensLabel", lenses.getOrNull(lensIdx)?.label ?: "1×")
+            .putString("lensLabel", lenses.getOrNull(lensIdx)?.label ?: "")
             .apply()
     }
 

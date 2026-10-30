@@ -38,7 +38,8 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
   actually record is offered; "S" speeds use the phone's slow-motion mode
 - Shutter angle (video) or speed (photo), ISO, white balance presets, manual focus with distance readout
 - Focus peaking, zebras, false colour, grid, stabilisation, live histogram, audio meter, timecode
-- Lens buttons for each back camera, plus a 2× crop of the main sensor
+- Focal-length buttons: 16, 25, 35, 50 and 78 mm (full-frame equivalent). Each uses the widest real lens
+  that reaches it and zooms in; longer ones are crops of the main sensor
 - Photos as JPG or RAW (DNG) + JPG; videos as H.265 where supported
 - Volume buttons work as the shutter; the (i) button shows exactly what each lens supports
 - Files go to Movies/ProCamera and Pictures/ProCamera

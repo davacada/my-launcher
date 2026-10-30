@@ -23,19 +23,25 @@ import kotlin.math.sqrt
 data class Res(val label: String, val size: Size)
 
 /**
- * One lens button. [ratio] is a zoom ratio sent to the camera: below 1 the phone switches to its
- * ultrawide by itself, above 1 it's a crop of the main sensor. [hidden] marks a camera the phone
- * doesn't list for apps; it's only offered as a fallback and may refuse to open.
+ * One focal-length button (16, 25, 35, 50, 78 mm, full-frame equivalent).
+ * [id] is the real camera used, [ratio] the zoom sent to it (below 1 lets the phone switch to its
+ * ultrawide by itself, above 1 crops the sensor). [available] is false when no lens on the phone can
+ * reach that focal length; [reason] says why. [main] marks the button closest to the main camera.
  */
-class Lens(val id: String, val chars: CameraCharacteristics, val zoom: Float, val ratio: Float = 1f, val hidden: Boolean = false) {
-    val isMain: Boolean get() = abs(zoom * ratio - 1f) < 0.05f
-    val label: String
-        get() {
-            val z = zoom * ratio
-            return if (abs(z - 1f) < 0.05f) "1×"
-            else if (z < 1f) String.format(Locale.US, "%.1f", z).trimEnd('0').trimEnd('.')
-            else String.format(Locale.US, "%.0f×", z)
-        }
+class Lens(
+    val id: String,
+    val chars: CameraCharacteristics,
+    val mm: Int,
+    val ratio: Float,
+    val available: Boolean = true,
+    val main: Boolean = false,
+    val hidden: Boolean = false,
+    val reason: String = ""
+) {
+    val isMain: Boolean get() = main
+    val label: String get() = mm.toString()
+    /** True when this focal length is a crop beyond the lens's optical view (some softness). */
+    val digital: Boolean get() = ratio > 1.05f
 }
 
 /** Everything one camera can do, read from Android's camera characteristics. */
@@ -141,10 +147,16 @@ class Caps(val chars: CameraCharacteristics) {
             "720p" to Size(1280, 720)
         )
 
+        val FOCALS = listOf(16, 25, 35, 50, 78)
+
+        /** Native full-frame-equivalent focal lengths of the phone's back cameras, for the info screen. */
+        var nativeSummary = ""
+            private set
+
         /**
-         * Lens buttons, wide → tele. Prefers what the phone officially offers apps:
-         * the main camera, its own zoom range (which reaches the ultrawide on many phones),
-         * then other listed back cameras. Hidden cameras are only a last resort for the ultrawide.
+         * One button per focal length in [FOCALS]. Each picks the widest real lens that can reach it
+         * and zooms it: the main camera's own zoom range (which reaches the ultrawide on many phones),
+         * another listed back camera, or, as a last resort, an unlisted ultrawide.
          */
         fun lenses(ctx: Context): List<Lens> {
             val mgr = ctx.getSystemService(CameraManager::class.java)
@@ -160,33 +172,49 @@ class Caps(val chars: CameraCharacteristics) {
             if (back.isEmpty()) return emptyList()
             val (mainId, mainChars) = back.first()
             val mainCaps = Caps(mainChars)
-            val mainF = mainCaps.equivFocal().takeIf { it > 0 } ?: 1f
-            val out = ArrayList<Lens>()
-            out.add(Lens(mainId, mainChars, 1f))
+            val mainMm = mainCaps.equivFocal().takeIf { it > 5f } ?: 24f
+            val mainLower = if (Build.VERSION.SDK_INT >= 30) mainChars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.lower ?: 1f else 1f
+            val mainUpper = mainCaps.maxZoom
 
-            // 1. The main camera's own zoom range: below 1× means the phone switches to the ultrawide itself.
-            if (Build.VERSION.SDK_INT >= 30) {
-                val lower = mainChars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.lower ?: 1f
-                if (lower < 0.95f) out.add(Lens(mainId, mainChars, 1f, ratio = lower))
-            }
-            // 2. Other back cameras the phone lists for apps.
-            back.drop(1).forEach { (id, c) ->
-                val z = (Caps(c).equivFocal().takeIf { it > 0 } ?: mainF) / mainF
-                if (out.none { abs(it.zoom * it.ratio - z) < 0.08f }) out.add(Lens(id, c, z))
-            }
-            // 3. Last resort: an unlisted ultrawide.
-            if (out.none { it.zoom * it.ratio < 0.95f }) {
+            // Other real lenses: listed first, then (only if nothing wider exists) an unlisted one.
+            class Real(val id: String, val chars: CameraCharacteristics, val mm: Float, val hidden: Boolean)
+            val others = ArrayList<Real>()
+            back.drop(1).forEach { (id, c) -> others.add(Real(id, c, Caps(c).equivFocal().takeIf { it > 5f } ?: mainMm, false)) }
+            val widestReachable = minOf(mainMm * mainLower, others.minOfOrNull { it.mm } ?: mainMm)
+            if (widestReachable > 17f) {
                 for (i in 0..9) {
                     val id = i.toString()
                     if (id in listed) continue
                     val c = usableBack(id) ?: continue
-                    val z = (Caps(c).equivFocal().takeIf { it > 0 } ?: mainF) / mainF
-                    if (z < 0.95f && out.none { abs(it.zoom * it.ratio - z) < 0.08f }) { out.add(Lens(id, c, z, hidden = true)); break }
+                    val mm = Caps(c).equivFocal().takeIf { it > 5f } ?: continue
+                    if (mm < mainMm * 0.9f) { others.add(Real(id, c, mm, true)); break }
                 }
             }
-            // 4. A 2× crop of the main sensor, unless there's already a lens near 2×.
-            if (mainCaps.maxZoom >= 2f && out.none { it.zoom * it.ratio in 1.8f..2.4f }) out.add(Lens(mainId, mainChars, 1f, ratio = 2f))
-            out.sortBy { it.zoom * it.ratio }
+
+            nativeSummary = buildString {
+                append("Main camera ≈ ").append(mainMm.toInt()).append(" mm")
+                if (mainLower < 0.95f) append(" (zooms out to ≈ ").append((mainMm * mainLower).toInt()).append(" mm)")
+                others.forEach { append(", ").append(if (it.mm < mainMm) "ultrawide" else "other lens").append(" ≈ ").append(it.mm.toInt()).append(" mm") }
+            }
+
+            val out = ArrayList<Lens>()
+            val mainButton = FOCALS.minByOrNull { abs(it - mainMm) } ?: 25
+            for (mm in FOCALS) {
+                val onMain = mm / mainMm
+                if (onMain >= mainLower - 0.01f && onMain <= mainUpper) {
+                    out.add(Lens(mainId, mainChars, mm, onMain.coerceAtLeast(mainLower), main = mm == mainButton))
+                    continue
+                }
+                // Wider than the main camera reaches: use a wider real lens, zoomed in to the exact focal length.
+                val wide = others.filter { it.mm <= mm + 0.5f }.maxByOrNull { it.mm }
+                if (wide != null) {
+                    out.add(Lens(wide.id, wide.chars, mm, (mm / wide.mm).coerceAtLeast(1f), hidden = wide.hidden))
+                } else {
+                    val widest = minOf(mainMm * mainLower, others.minOfOrNull { it.mm } ?: 999f)
+                    out.add(Lens(mainId, mainChars, mm, 1f, available = false,
+                        reason = "$mm mm is wider than this phone lets apps go (≈ ${widest.toInt()} mm)."))
+                }
+            }
             return out
         }
     }
