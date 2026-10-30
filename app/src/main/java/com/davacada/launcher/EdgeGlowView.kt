@@ -15,15 +15,16 @@ import kotlin.math.max
 import kotlin.math.sin
 
 /** The glowing border: a sweep for notifications, a breath for music, a fast pulse for calls. */
-class EdgeGlowView(context: Context, val kind: Kind) : View(context) {
+class EdgeGlowView(context: Context, val kind: Kind, private val loop: Boolean = false) : View(context) {
 
     enum class Kind(val colors: IntArray, val durationMs: Long) {
-        NOTIFICATION(intArrayOf(0xFFFFB020.toInt(), 0xFFFF7A1A.toInt()), 2600),
-        MUSIC(intArrayOf(0xFFB14DFF.toInt(), 0xFFD06BFF.toInt()), 3200),
+        NOTIFICATION(intArrayOf(0xFFFFB347.toInt(), 0xFFFF8C3A.toInt()), 4200),
+        MUSIC(intArrayOf(0xFFB566FF.toInt(), 0xFFCB86FF.toInt()), 4200),
         CALL(intArrayOf(0xFF00E5FF.toInt(), 0xFF3DF5FF.toInt()), Long.MAX_VALUE)
     }
 
     var onFinished: (() -> Unit)? = null
+    private val CYCLE = 4200f
     private val start = SystemClock.uptimeMillis()
     private val d = resources.displayMetrics.density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
@@ -50,28 +51,19 @@ class EdgeGlowView(context: Context, val kind: Kind) : View(context) {
     override fun onDraw(canvas: Canvas) {
         val t = (SystemClock.uptimeMillis() - start).toFloat()
         val dur = kind.durationMs.toFloat()
-        val progress = if (kind.durationMs == Long.MAX_VALUE) 0f else (t / dur).coerceIn(0f, 1f)
-        // fade in quickly, out at the end
-        val envelope = if (kind == Kind.CALL) 1f else (minOf(1f, t / 250f) * minOf(1f, (1f - progress) / 0.25f)).coerceIn(0f, 1f)
+        val progress = if (loop || kind.durationMs == Long.MAX_VALUE) 0f else (t / dur).coerceIn(0f, 1f)
 
         when (kind) {
-            Kind.NOTIFICATION -> {
-                // A bright comet running round the edge, with a soft trail of the full border underneath.
-                drawGlow(canvas, path, kind.colors[1], 0.25f * envelope)
-                val m = measure
-                if (m != null) {
-                    val len = m.length
-                    val head = (t / 1300f % 1f) * len
-                    val tail = len * 0.35f
-                    segment.reset()
-                    if (head - tail >= 0) m.getSegment(head - tail, head, segment, true)
-                    else { m.getSegment(len + head - tail, len, segment, true); m.getSegment(0f, head, segment, true) }
-                    drawGlow(canvas, segment, kind.colors[0], envelope)
+            Kind.NOTIFICATION, Kind.MUSIC -> {
+                // A soft breath every ~4 s: fade in, hold, fade out, rest. Repeats until the screen is turned on.
+                val p = (t % CYCLE) / CYCLE
+                val e = when {
+                    p < 0.35f -> smooth(p / 0.35f)
+                    p < 0.55f -> 1f
+                    p < 0.9f -> 1f - smooth((p - 0.55f) / 0.35f)
+                    else -> 0f
                 }
-            }
-            Kind.MUSIC -> {
-                val breath = 0.35f + 0.65f * (0.5f - 0.5f * kotlin.math.cos(2 * PI * t / 1600f).toFloat())
-                drawGlow(canvas, path, kind.colors[0], breath * envelope)
+                drawGlow(canvas, path, kind.colors[0], 0.55f * e)
             }
             Kind.CALL -> {
                 val pulse = 0.3f + 0.7f * max(0f, sin(2 * PI * t / 800f).toFloat())
@@ -83,11 +75,13 @@ class EdgeGlowView(context: Context, val kind: Kind) : View(context) {
         postInvalidateOnAnimation()
     }
 
+    private fun smooth(x: Float): Float { val c = x.coerceIn(0f, 1f); return c * c * (3 - 2 * c) }
+
     /** Several strokes from wide/faint to thin/bright fake a soft neon blur cheaply. */
     private fun drawGlow(canvas: Canvas, p: Path, color: Int, strength: Float) {
         if (strength <= 0.01f) return
-        val layers = floatArrayOf(22f, 14f, 8f, 4f, 2f)
-        val alphas = floatArrayOf(0.08f, 0.14f, 0.25f, 0.55f, 1f)
+        val layers = floatArrayOf(16f, 10f, 6f, 3f, 1.5f)
+        val alphas = floatArrayOf(0.06f, 0.11f, 0.2f, 0.42f, 0.8f)
         for (i in layers.indices) {
             paint.color = color
             paint.alpha = (255 * alphas[i] * strength).toInt().coerceIn(0, 255)

@@ -28,9 +28,9 @@ New builds install straight over the old one; your home column is kept.
 - **Drawer background** (photo icon at the bottom of the drawer): choose a photo from your phone, or go back to the wallpaper
 - **Companion on/off** (person icon at the bottom of the drawer): highlighted when he's on
 - **Edge lighting** (screen icon at the bottom of the drawer): while the screen is off, a notification wakes it into
-  black with an orange glow round the edges, a new song gives a purple glow, and an incoming call gets a cyan pulse
+  black with a soft orange glow that breathes round the edges until you wake the phone, a new song gives a purple one, and an incoming call gets a cyan pulse
   round the call screen. Needs notification access and "display over other apps"; the menu has previews.
-  After a glow the screen stays black; turn on "Screen off after glow" (an accessibility switch) to switch it straight off
+  The glow stops when you tap the screen or press power (or after 30 minutes)
 - **Add an app to the home column:** long-press it in the drawer, tap *Add to home*
 - **Reorder or remove:** long-press an icon in the column
 - **Close the drawer:** Back, Home, or tap empty space

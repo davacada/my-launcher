@@ -21,7 +21,7 @@ class EdgeGlowActivity : Activity() {
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
         window.attributes = window.attributes.apply {
-            screenBrightness = 0.6f
+            screenBrightness = 0.35f
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
         @Suppress("DEPRECATION")
@@ -29,7 +29,10 @@ class EdgeGlowActivity : Activity() {
             or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
 
         val kind = runCatching { EdgeGlowView.Kind.valueOf(intent.getStringExtra(EXTRA_KIND) ?: "") }.getOrDefault(EdgeGlowView.Kind.NOTIFICATION)
-        val glow = EdgeGlowView(this, kind).apply { onFinished = { afterGlow() } }
+        // Real notifications keep breathing until you tap the screen or press power; previews breathe once.
+        val real = intent.getBooleanExtra(EXTRA_REAL, false)
+        val glow = EdgeGlowView(this, kind, loop = real).apply { onFinished = { afterGlow() } }
+        if (real) window.decorView.postDelayed({ afterGlow() }, 30 * 60 * 1000L) // safety stop after 30 minutes
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(glow, FrameLayout.LayoutParams(-1, -1))
@@ -42,6 +45,7 @@ class EdgeGlowActivity : Activity() {
      */
     private fun afterGlow() {
         if (!intent.getBooleanExtra(EXTRA_REAL, false)) { finish(); return } // previews from the drawer just close
+        if (isFinishing) return
         if (EdgeOffService.screenOff()) { finish(); return }
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF }
