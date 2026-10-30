@@ -222,10 +222,12 @@ class MainActivity : Activity() {
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            addView(organiserButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(14) })
-            addView(hiddenButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14); marginEnd = dp(14) })
-            addView(backgroundButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14); marginEnd = dp(14) })
-            addView(companionButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14) })
+            val slot = { LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(8); marginEnd = dp(8) } }
+            addView(organiserButton, slot())
+            addView(hiddenButton, slot())
+            addView(backgroundButton, slot())
+            addView(companionButton, slot())
+            addView(barButton(R.drawable.ic_edge, "Edge lighting") { showEdgeMenu(it) }, slot())
         }
         drawer.addView(bottomBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
@@ -412,6 +414,43 @@ class MainActivity : Activity() {
             MenuItem(R.drawable.ic_sort_used, "Most used", sort == SORT_USED) { chooseSort(SORT_USED) },
             MenuItem(R.drawable.ic_sort_new, "Newest", sort == SORT_NEW) { chooseSort(SORT_NEW) }
         ))
+    }
+
+    // ---------------------------------------------------------------- edge lighting
+
+    private var edgeOn: Boolean
+        get() = prefs.getBoolean("edge", true)
+        set(v) { prefs.edit().putBoolean("edge", v).apply() }
+
+    private fun hasNotificationAccess(): Boolean =
+        getSystemService(android.app.NotificationManager::class.java)
+            .isNotificationListenerAccessGranted(android.content.ComponentName(this, EdgeListenerService::class.java))
+
+    /** Edge lighting: on/off, the two permissions it needs, and previews of each glow. */
+    private fun showEdgeMenu(anchor: View) {
+        val items = ArrayList<MenuItem>()
+        items.add(MenuItem(R.drawable.ic_edge, "Edge lighting", edgeOn && hasNotificationAccess() && Settings.canDrawOverlays(this)) {
+            edgeOn = !edgeOn
+            if (edgeOn && !hasNotificationAccess()) openSafely(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            else if (edgeOn && !Settings.canDrawOverlays(this)) openSafely(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        })
+        items.add(MenuItem(R.drawable.ic_bell, "Notification access", hasNotificationAccess()) {
+            openSafely(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        })
+        items.add(MenuItem(R.drawable.ic_layers, "Display over apps", Settings.canDrawOverlays(this)) {
+            openSafely(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        })
+        listOf(EdgeGlowView.Kind.NOTIFICATION to "Preview notification", EdgeGlowView.Kind.MUSIC to "Preview music", EdgeGlowView.Kind.CALL to "Preview call")
+            .forEach { (kind, label) ->
+                items.add(MenuItem(R.drawable.ic_play, label, false) {
+                    startActivity(Intent(this, EdgeGlowActivity::class.java).putExtra(EdgeGlowActivity.EXTRA_KIND, kind.name))
+                })
+            }
+        showGlassMenu(anchor as ImageView, items)
+    }
+
+    private fun openSafely(intent: Intent) {
+        try { startActivity(intent) } catch (e: Exception) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
     }
 
     private fun showBackgroundMenu(anchor: View) {
