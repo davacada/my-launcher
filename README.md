@@ -22,6 +22,7 @@ New builds install straight over the old one; your home column is kept.
 - **Organiser** (slider icon at the bottom of the drawer): sort by Type, Most used or Newest.
   Most used asks once for usage access in Settings.
 - **Hide an app:** long-press it in the drawer, tap *Hide*. The eye icon shows hidden apps; tap one to bring it back
+- **Drawer background** (photo icon at the bottom of the drawer): choose a photo from your phone, or go back to the wallpaper
 - **Add an app to the home column:** long-press it in the drawer, tap *Add to home*
 - **Reorder or remove:** long-press an icon in the column
 - **Close the drawer:** Back, Home, or tap empty space

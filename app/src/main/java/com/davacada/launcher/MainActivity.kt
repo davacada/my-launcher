@@ -34,6 +34,7 @@ import android.os.Looper
 import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
@@ -76,6 +77,8 @@ class MainActivity : Activity() {
     private lateinit var bottomBar: LinearLayout
     private lateinit var organiserButton: ImageView
     private lateinit var hiddenButton: ImageView
+    private lateinit var drawerBg: ImageView
+    private var drawerPhoto: Bitmap? = null
 
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -112,6 +115,7 @@ class MainActivity : Activity() {
         setContentView(buildUi())
         launcherApps.registerCallback(packageCallback, main)
         loadApps()
+        loadSavedPhoto()
     }
 
     override fun onResume() {
@@ -169,7 +173,14 @@ class MainActivity : Activity() {
             ).apply { marginEnd = dp(22) }
         )
 
-        // Drawer: clear background, horizontal pages, two icons at the bottom.
+        // Optional photo behind the drawer (fades in with it).
+        drawerBg = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            visibility = View.GONE
+        }
+        root.addView(drawerBg, FrameLayout.LayoutParams(-1, -1))
+
+        // Drawer: horizontal pages, three icons at the bottom.
         drawer = FrameLayout(this).apply {
             visibility = View.GONE
             isClickable = true
@@ -191,11 +202,13 @@ class MainActivity : Activity() {
 
         organiserButton = barButton(R.drawable.ic_organiser, "Organiser") { showOrganiser(it) }
         hiddenButton = barButton(R.drawable.ic_hidden, "Hidden apps") { setShowHidden(!showHidden) }
+        val backgroundButton = barButton(R.drawable.ic_photo, "Drawer background") { showBackgroundMenu(it) }
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             addView(organiserButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(14) })
-            addView(hiddenButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14) })
+            addView(hiddenButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14); marginEnd = dp(14) })
+            addView(backgroundButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14) })
         }
         drawer.addView(bottomBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
@@ -309,6 +322,12 @@ class MainActivity : Activity() {
         drawer.translationY = dp(40).toFloat()
         drawer.visibility = View.VISIBLE
         drawer.animate().alpha(1f).translationY(0f).setStartDelay(0).setDuration(180).start()
+        drawerPhoto?.let {
+            drawerBg.animate().cancel()
+            drawerBg.alpha = 0f
+            drawerBg.visibility = View.VISIBLE
+            drawerBg.animate().alpha(1f).setDuration(180).start()
+        }
         homeScroll.animate().cancel()
         homeScroll.animate().alpha(0f).setStartDelay(0).setDuration(120)
             .withEndAction { if (drawerOpen) homeScroll.visibility = View.INVISIBLE }.start()
@@ -319,11 +338,15 @@ class MainActivity : Activity() {
         drawer.animate().cancel()
         homeScroll.animate().cancel()
         homeScroll.visibility = View.VISIBLE
+        drawerBg.animate().cancel()
         if (!animate) {
             drawer.visibility = View.GONE
+            drawerBg.visibility = View.GONE
             homeScroll.alpha = 1f
             return
         }
+        drawerBg.animate().alpha(0f).setDuration(150)
+            .withEndAction { if (!drawerOpen) drawerBg.visibility = View.GONE }.start()
         homeScroll.animate().alpha(1f).setStartDelay(60).setDuration(180).start()
         drawer.animate().alpha(0f).translationY(dp(40).toFloat()).setStartDelay(0).setDuration(150)
             .withEndAction { if (!drawerOpen) drawer.visibility = View.GONE }.start()
@@ -337,7 +360,26 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- organiser
 
+    private class MenuItem(val icon: Int, val label: String, val selected: Boolean, val action: () -> Unit)
+
     private fun showOrganiser(anchor: View) {
+        showGlassMenu(anchor as ImageView, listOf(
+            MenuItem(R.drawable.ic_sort_type, "Type", sort == SORT_TYPE) { chooseSort(SORT_TYPE) },
+            MenuItem(R.drawable.ic_sort_used, "Most used", sort == SORT_USED) { chooseSort(SORT_USED) },
+            MenuItem(R.drawable.ic_sort_new, "Newest", sort == SORT_NEW) { chooseSort(SORT_NEW) }
+        ))
+    }
+
+    private fun showBackgroundMenu(anchor: View) {
+        val hasPhoto = drawerPhoto != null
+        showGlassMenu(anchor as ImageView, listOf(
+            MenuItem(R.drawable.ic_photo, "Choose photo", hasPhoto) { pickPhoto() },
+            MenuItem(R.drawable.ic_wallpaper, "Wallpaper", !hasPhoto) { clearPhoto() }
+        ))
+    }
+
+    /** Frosted-glass menu that opens just above [anchor]. */
+    private fun showGlassMenu(anchor: ImageView, items: List<MenuItem>) {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
 
@@ -346,14 +388,10 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(8))
         }
-        listOf(
-            Triple(SORT_TYPE, "Type", R.drawable.ic_sort_type),
-            Triple(SORT_USED, "Most used", R.drawable.ic_sort_used),
-            Triple(SORT_NEW, "Newest", R.drawable.ic_sort_new)
-        ).forEach { (key, label, icon) ->
-            panel.addView(menuRow(icon, label, selected = sort == key) {
+        items.forEach { item ->
+            panel.addView(menuRow(item.icon, item.label, item.selected) {
                 dialog.dismiss()
-                chooseSort(key)
+                item.action()
             }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(1); bottomMargin = dp(1) })
         }
         dialog.setContentView(panel, ViewGroup.LayoutParams(menuW, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -364,6 +402,7 @@ class MainActivity : Activity() {
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         )
         val loc = IntArray(2).also { anchor.getLocationOnScreen(it) }
+        val screenW = resources.displayMetrics.widthPixels
 
         dialog.window?.let { w ->
             w.setFormat(PixelFormat.TRANSLUCENT)
@@ -380,12 +419,12 @@ class MainActivity : Activity() {
                 gravity = Gravity.TOP or Gravity.START
                 width = menuW
                 height = WindowManager.LayoutParams.WRAP_CONTENT
-                x = (loc[0] + anchor.width / 2 - menuW / 2).coerceAtLeast(dp(8))
+                x = (loc[0] + anchor.width / 2 - menuW / 2).coerceIn(dp(8), screenW - menuW - dp(8))
                 y = loc[1] - dp(12) - panel.measuredHeight
             }
         }
-        organiserButton.isSelected = true
-        dialog.setOnDismissListener { organiserButton.isSelected = false }
+        anchor.isSelected = true
+        dialog.setOnDismissListener { anchor.isSelected = false }
         dialog.show()
     }
 
@@ -474,6 +513,86 @@ class MainActivity : Activity() {
             i >= 0 -> i
             category == ApplicationInfo.CATEGORY_UNDEFINED -> TYPE_ORDER.size + 1
             else -> TYPE_ORDER.size
+        }
+    }
+
+    // ---------------------------------------------------------------- drawer photo
+
+    private val photoFile by lazy { java.io.File(filesDir, "drawer_background.jpg") }
+
+    private fun pickPhoto() {
+        val intent = if (Build.VERSION.SDK_INT >= 33) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*")
+        } else {
+            Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQUEST_PHOTO)
+        } catch (e: Exception) {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).setType("image/*"), REQUEST_PHOTO)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (requestCode != REQUEST_PHOTO || resultCode != RESULT_OK || uri == null) return
+        val metrics = resources.displayMetrics
+        val target = maxOf(metrics.widthPixels, metrics.heightPixels)
+        io.execute {
+            val bmp = try { decodeScaled(uri, target) } catch (e: Exception) { null } ?: return@execute
+            try {
+                photoFile.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+            } catch (e: Exception) { /* still show it this session */ }
+            main.post { showPhoto(bmp) }
+        }
+    }
+
+    /** Decodes a picked image, shrunk so its longest side is about [target] px. */
+    private fun decodeScaled(uri: Uri, target: Int): Bitmap? {
+        if (Build.VERSION.SDK_INT >= 28) {
+            val src = android.graphics.ImageDecoder.createSource(contentResolver, uri)
+            return android.graphics.ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
+                val longest = maxOf(info.size.width, info.size.height)
+                if (longest > target) {
+                    val scale = target.toFloat() / longest
+                    decoder.setTargetSize((info.size.width * scale).toInt(), (info.size.height * scale).toInt())
+                }
+                decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        }
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= target) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        return contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+    }
+
+    private fun showPhoto(bmp: Bitmap?) {
+        drawerPhoto = bmp
+        drawerBg.setImageBitmap(bmp)
+        if (bmp == null) {
+            drawerBg.visibility = View.GONE
+        } else if (drawerOpen) {
+            drawerBg.alpha = 1f
+            drawerBg.visibility = View.VISIBLE
+        }
+    }
+
+    private fun clearPhoto() {
+        photoFile.delete()
+        showPhoto(null)
+    }
+
+    private fun loadSavedPhoto() {
+        io.execute {
+            val bmp = if (photoFile.exists()) android.graphics.BitmapFactory.decodeFile(photoFile.path) else null
+            if (bmp != null) main.post { showPhoto(bmp) }
         }
     }
 
@@ -636,6 +755,7 @@ class MainActivity : Activity() {
     }
 
     private companion object {
+        const val REQUEST_PHOTO = 41
         const val COLUMNS = 6
         const val ROWS = 8
         const val SORT_TYPE = "type"
