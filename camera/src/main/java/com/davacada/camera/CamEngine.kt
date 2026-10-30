@@ -98,6 +98,27 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         private set
     var displayRotation = Surface.ROTATION_90
 
+    // Safe-mode ladder: each camera hardware error drops to a simpler setup.
+    //  0 = preview + recording + analysis, 1 = no analysis stream,
+    //  2 = recording stream only added while recording, 3 = also 1080p 30 fps
+    var safeLevel = 0
+        private set
+    private var opened = false
+    private var openRetries = 0
+    private var recOwnedByRecorder = false
+    private var pendingStart: MediaRecorder? = null
+    private val logLines = ArrayDeque<String>()
+    private val logTime = SimpleDateFormat("HH:mm:ss", Locale.US)
+
+    private fun log(msg: String) {
+        synchronized(logLines) {
+            logLines.addLast(logTime.format(Date()) + "  " + msg)
+            while (logLines.size > 24) logLines.removeFirst()
+        }
+    }
+
+    fun debugLog(): String = synchronized(logLines) { logLines.joinToString("\n") }
+
     // auto-exposure we run ourselves when the camera's own can't (fixed 24/25 fps, one manual value)
     private var meteredIso = 400
     private var meteredExp = 10_000_000L
@@ -137,16 +158,39 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             pickDefaults()
             if (sameDevice) { configure(); return@post }
             closeCamera()
+            opened = false
+            log("open camera ${lens.id} (${lens.label}), safe mode $safeLevel")
             try {
                 mgr.openCamera(lens.id, bgExecutor, object : CameraDevice.StateCallback() {
-                    override fun onOpened(camera: CameraDevice) { device = camera; configure() }
-                    override fun onDisconnected(camera: CameraDevice) { camera.close(); if (device == camera) device = null }
+                    override fun onOpened(camera: CameraDevice) {
+                        log("opened"); opened = true; openRetries = 0
+                        device = camera; configure()
+                    }
+                    override fun onDisconnected(camera: CameraDevice) {
+                        log("disconnected"); camera.close(); if (device == camera) device = null
+                    }
                     override fun onError(camera: CameraDevice, error: Int) {
+                        log("error $error " + if (opened) "after opening" else "while opening")
                         camera.close(); if (device == camera) device = null
-                        main.post { listener.onOpenFailed(lens, error) }
+                        session = null
+                        val wasOpened = opened
+                        if (wasOpened && error == ERR_DEVICE && safeLevel < 3) {
+                            safeLevel++
+                            log("retrying in safe mode $safeLevel")
+                            if (safeLevel >= 3) settings.res?.let { pickSafeRes() }
+                            bg?.postDelayed({ open(lens, surfaceTexture) }, 500)
+                            main.post { listener.onProblem(SAFE_TEXT[safeLevel]) }
+                        } else if (!wasOpened && openRetries < 2 && error != ERR_DISABLED) {
+                            openRetries++
+                            log("retry open ($openRetries)")
+                            bg?.postDelayed({ open(lens, surfaceTexture) }, 700)
+                        } else {
+                            main.post { listener.onOpenFailed(lens, error) }
+                        }
                     }
                 })
             } catch (e: Exception) {
+                log("openCamera threw: ${e.message}")
                 main.post { listener.onOpenFailed(lens, -1) }
             }
         }
@@ -170,7 +214,8 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         analysisReader?.close(); analysisReader = null
         jpegReader?.close(); jpegReader = null
         rawReader?.close(); rawReader = null
-        recSurface?.release(); recSurface = null
+        if (!recOwnedByRecorder) recSurface?.release()
+        recSurface = null; recOwnedByRecorder = false
         previewSurface?.release(); previewSurface = null
     }
 
@@ -211,7 +256,15 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         val outputs = ArrayList<Surface>()
         outputs.add(pv)
 
-        if (s.video && res != null) {
+        val deferred = safeLevel >= 2
+        if (s.video && res != null && deferred) {
+            // Safe mode: the recording stream only exists while recording.
+            val r = recorder
+            if (recording && r != null) {
+                recSurface = r.surface; recOwnedByRecorder = true
+                outputs.add(r.surface)
+            }
+        } else if (s.video && res != null) {
             val mime = Encoders.best(res.size, s.fps)
             if (mime == null) { problem("This phone can't encode ${res.label} at ${s.fps} fps."); return }
             val surface = MediaCodec.createPersistentInputSurface()
@@ -243,7 +296,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             }
         }
 
-        val analysis = withAnalysis && !highSpeed
+        val analysis = withAnalysis && !highSpeed && safeLevel < 1
         if (analysis) c.analysisSize()?.let { size ->
             val ar = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 3)
             ar.setOnImageAvailableListener({ r -> r.acquireLatestImage()?.let { analyse(it) } }, bg)
@@ -252,19 +305,35 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         }
 
         val type = if (highSpeed) SessionConfiguration.SESSION_HIGH_SPEED else SessionConfiguration.SESSION_REGULAR
+        log("session: preview ${preview.width}x${preview.height}" +
+            (if (s.video && res != null) ", video ${res.label} ${s.fps} fps" + (if (highSpeed) " high-speed" else "") +
+                (if (deferred) (if (recSurface != null) " (recording)" else " (deferred)") else "") else ", photo") +
+            (if (analysisReader != null) ", analysis" else "") + ", ${outputs.size} streams")
         val config = SessionConfiguration(type, outputs.map { OutputConfiguration(it) }, bgExecutor,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(sess: CameraCaptureSession) {
                     if (token != configToken) { sess.close(); return }
                     session = sess
+                    log("session ready")
                     if (!aeLocked || s.iso != null || s.shutterAngle != null) seedSoftAe()
                     repeat()
+                    pendingStart?.let { r ->
+                        pendingStart = null
+                        try {
+                            r.start(); log("recording started (safe mode)")
+                            main.post { listener.onRecording(true) }
+                        } catch (e: Exception) {
+                            log("recorder start failed: ${e.message}")
+                            abortRecording("Recording couldn't start: ${e.message}")
+                        }
+                    }
                     val hasAnalysis = analysisReader != null
                     main.post { listener.onReady(highSpeed, hasAnalysis) }
                 }
 
                 override fun onConfigureFailed(sess: CameraCaptureSession) {
                     if (token != configToken) return
+                    log("session configure failed")
                     // Big resolutions sometimes can't run the extra analysis stream: retry without it.
                     if (analysisReader != null) configure(withAnalysis = false)
                     else problem("The camera couldn't start with these settings. Try a lower resolution or frame rate.")
@@ -273,6 +342,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         try {
             dev.createCaptureSession(config)
         } catch (e: Exception) {
+            log("createCaptureSession threw: ${e.message}")
             if (analysis && analysisReader != null) configure(withAnalysis = false)
             else problem("The camera couldn't start: ${e.message}")
         }
@@ -392,6 +462,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
                 sess.setRepeatingRequest(req, resultCallback, bg)
             }
         } catch (e: Exception) {
+            log("repeating request failed: ${e.message}")
             problem("The camera stopped responding: ${e.message}")
         }
     }
@@ -493,7 +564,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         return (c.sensorOrientation - deg + 360) % 360
     }
 
-    private fun setupRecorder(r: MediaRecorder, surface: Surface, size: Size, fps: Int, mime: String, withAudio: Boolean, output: MediaRecorder.() -> Unit) {
+    private fun setupRecorder(r: MediaRecorder, surface: Surface?, size: Size, fps: Int, mime: String, withAudio: Boolean, output: MediaRecorder.() -> Unit) {
         if (withAudio) r.setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
         r.setVideoSource(MediaRecorder.VideoSource.SURFACE)
         r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -508,7 +579,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             r.setAudioEncodingBitRate(256_000)
             r.setAudioChannels(2)
         }
-        r.setInputSurface(surface)
+        if (surface != null) r.setInputSurface(surface)
         r.setOrientationHint(orientationHint())
     }
 
@@ -516,7 +587,8 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         bg?.post {
             if (recording || !settings.video) return@post
             val res = settings.res ?: return@post
-            val surface = recSurface ?: return@post
+            val deferred = safeLevel >= 2
+            val surface = if (deferred) null else (recSurface ?: return@post)
             val mime = Encoders.best(res.size, settings.fps) ?: return@post
             try {
                 val name = "PRO_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
@@ -534,18 +606,32 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
                 r.prepare()
                 recorder = r; recPfd = pfd; recUri = uri
                 recording = true
-                repeat()
-                r.start()
-                main.post { listener.onRecording(true) }
+                if (deferred) {
+                    pendingStart = r
+                    configure()   // new session with the recorder's stream; starts in onConfigured
+                } else {
+                    repeat()
+                    r.start()
+                    log("recording started")
+                    main.post { listener.onRecording(true) }
+                }
             } catch (e: Exception) {
-                recording = false
-                recorder?.release(); recorder = null
-                recPfd?.close(); recPfd = null
-                recUri?.let { ctx.contentResolver.delete(it, null, null) }; recUri = null
-                repeat()
-                problem("Recording couldn't start: ${e.message}")
+                log("recording setup failed: ${e.message}")
+                abortRecording("Recording couldn't start: ${e.message}")
             }
         }
+    }
+
+    private fun abortRecording(msg: String) {
+        recording = false
+        pendingStart = null
+        try { recorder?.release() } catch (e: Exception) { }
+        recorder = null
+        recPfd?.close(); recPfd = null
+        recUri?.let { ctx.contentResolver.delete(it, null, null) }; recUri = null
+        if (safeLevel >= 2) configure() else repeat()
+        problem(msg)
+        main.post { listener.onRecording(false) }
     }
 
     fun stopRecording() {
@@ -554,8 +640,9 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             if (!recording) return@Runnable
             recording = false
             repeat()
-            val ok = try { recorder?.stop(); true } catch (e: Exception) { false }
+            val ok = try { recorder?.stop(); true } catch (e: Exception) { log("recorder stop failed: ${e.message}"); false }
             recorder?.release(); recorder = null
+            if (safeLevel >= 2 && device != null) configure()
             recPfd?.close(); recPfd = null
             val uri = recUri; recUri = null
             if (uri != null) {
@@ -665,7 +752,24 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         return if (settings.video && r != null && currentPlan()?.highSpeed == true) r.size else c.previewSize()
     }
 
-    private fun problem(msg: String) { main.post { listener.onProblem(msg) } }
+    private fun problem(msg: String) { log("problem: $msg"); main.post { listener.onProblem(msg) } }
+
+    private fun pickSafeRes() {
+        val c = caps ?: return
+        c.resolutions.firstOrNull { it.label == "1080p" }?.let { settings.res = it }
+        settings.fps = if (c.plan(settings.res!!.size, 30) != null) 30 else settings.fps
+    }
+
+    companion object {
+        const val ERR_DEVICE = CameraDevice.StateCallback.ERROR_CAMERA_DEVICE
+        const val ERR_DISABLED = CameraDevice.StateCallback.ERROR_CAMERA_DISABLED
+        val SAFE_TEXT = arrayOf(
+            "",
+            "The camera hiccuped, so the live histogram and overlays are off for now.",
+            "The camera hiccuped again, so it's using a simpler recording setup.",
+            "Still having trouble, so it's using 1080p at 30 fps for now. Tap (i) to see details."
+        )
+    }
 }
 
 class OverlayFlags(var zebras: Boolean = false, var peaking: Boolean = false, var falseColor: Boolean = false)

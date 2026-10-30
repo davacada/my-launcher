@@ -591,15 +591,24 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             row.addView(value, LinearLayout.LayoutParams(dp(64), -2))
             card.addView(row, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
         }
-        if (!note.isNullOrEmpty()) card.addView(TextView(this).apply {
-            text = note; setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setTextColor(0xFFC9D1DC.toInt()); setLineSpacing(0f, 1.25f)
-            maxWidth = dp(320)
-        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+        if (!note.isNullOrEmpty()) {
+            val long = note.length > 300
+            val tv = TextView(this).apply {
+                text = note; setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setTextColor(0xFFC9D1DC.toInt()); setLineSpacing(0f, 1.25f)
+                maxWidth = dp(if (long) 460 else 320)
+                setTextIsSelectable(long)
+            }
+            if (long) {
+                // Long text (capabilities + diagnostics) scrolls inside the card.
+                val sv = android.widget.ScrollView(this).apply { addView(tv) }
+                card.addView(sv, LinearLayout.LayoutParams(dp(460), (root.height - dp(110)).coerceAtLeast(dp(160))).apply { topMargin = dp(10) })
+            } else card.addView(tv, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+        }
 
         val loc = IntArray(2).also { anchor.getLocationInWindow(it) }
         val rootLoc = IntArray(2).also { root.getLocationInWindow(it) }
         val lp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
-            leftMargin = (loc[0] - rootLoc[0]).coerceIn(dp(8), (root.width - dp(360)).coerceAtLeast(dp(8)))
+            leftMargin = (loc[0] - rootLoc[0]).coerceIn(dp(8), (root.width - dp(if ((note?.length ?: 0) > 300) 500 else 360)).coerceAtLeast(dp(8)))
             topMargin = dp(58)
         }
         scrim.addView(card, lp)
@@ -688,9 +697,12 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     private fun showInfoPanel() {
-        val c = engine.caps ?: return
+        val c = engine.caps ?: Caps(lenses.getOrNull(lensIdx)?.chars ?: run {
+            showPanel(lensColumn, "DIAGNOSTICS", emptyList(), engine.debugLog().ifEmpty { "Nothing logged yet." }); return
+        })
         val l = lenses.getOrNull(lensIdx)
-        showPanel(lensColumn, "WHAT THIS LENS CAN DO" + (l?.let { " · ${it.label}" } ?: ""), emptyList(), c.describe())
+        showPanel(lensColumn, "WHAT THIS LENS CAN DO" + (l?.let { " · ${it.label}" } ?: ""), emptyList(),
+            c.describe() + "\n\nDIAGNOSTICS (safe mode ${engine.safeLevel})\n" + engine.debugLog())
         // place it on the left, next to the toggles
         (panel as? FrameLayout)?.getChildAt(0)?.let { card ->
             (card.layoutParams as FrameLayout.LayoutParams).leftMargin = dp(70)
@@ -770,7 +782,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             openCamera()
             return
         }
-        say(reason ?: "The camera couldn't be opened (code $error). Close the app fully and open it again.")
+        say(reason ?: "The camera couldn't be opened (code $error). Tap (i) to see what happened.")
     }
 
     // ------------------------------------------------------------------ settings
