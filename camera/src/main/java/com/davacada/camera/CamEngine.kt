@@ -62,6 +62,7 @@ interface EngineListener {
     fun onRecording(recording: Boolean)
     fun onSaved(uri: Uri, video: Boolean)
     fun onProblem(message: String)
+    fun onOpenFailed(lens: Lens, error: Int)
 }
 
 /** Owns the camera: sessions, preview, recording, photos and manual controls. */
@@ -142,11 +143,11 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
                     override fun onDisconnected(camera: CameraDevice) { camera.close(); if (device == camera) device = null }
                     override fun onError(camera: CameraDevice, error: Int) {
                         camera.close(); if (device == camera) device = null
-                        problem("The camera couldn't be opened (error $error). Another app may be using it.")
+                        main.post { listener.onOpenFailed(lens, error) }
                     }
                 })
             } catch (e: Exception) {
-                problem("The camera couldn't be opened: ${e.message}")
+                main.post { listener.onOpenFailed(lens, -1) }
             }
         }
     }
@@ -353,10 +354,11 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
                 if (s.stab || !s.video) CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON else CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF)
         }
 
-        val crop = lens?.crop ?: 1f
-        if (crop > 1f) {
-            if (Build.VERSION.SDK_INT >= 30) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, crop)
-            else c.chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let { a ->
+        val crop = lens?.ratio ?: 1f
+        if (Build.VERSION.SDK_INT >= 30 && abs(crop - 1f) > 0.01f) {
+            b.set(CaptureRequest.CONTROL_ZOOM_RATIO, crop)
+        } else if (crop > 1f) {
+            c.chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let { a ->
                 val w = (a.width() / crop).toInt(); val h = (a.height() / crop).toInt()
                 b.set(CaptureRequest.SCALER_CROP_REGION, Rect((a.width() - w) / 2, (a.height() - h) / 2, (a.width() + w) / 2, (a.height() + h) / 2))
             }

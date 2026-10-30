@@ -10,6 +10,7 @@ import android.graphics.Matrix
 import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
+import android.hardware.camera2.CameraDevice
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
@@ -136,7 +137,11 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     private fun openCamera() {
-        if (lenses.isEmpty()) lenses = Caps.lenses(this)
+        if (lenses.isEmpty()) {
+            lenses = Caps.lenses(this)
+            val wanted = prefs.getString("lensLabel", "1×")
+            lensIdx = lenses.indexOfFirst { it.label == wanted }.takeIf { it >= 0 } ?: lenses.indexOfFirst { it.isMain }.coerceAtLeast(0)
+        }
         if (lenses.isEmpty()) { say("No usable back camera was found."); return }
         lensIdx = lensIdx.coerceIn(0, lenses.size - 1)
         @Suppress("DEPRECATION")
@@ -748,6 +753,26 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
 
     override fun onProblem(message: String) { say(message) }
 
+    /** A lens refused to open: drop back to the main camera and explain in plain words. */
+    override fun onOpenFailed(lens: Lens, error: Int) {
+        val mainIdx = lenses.indexOfFirst { it.isMain }
+        val reason = when (error) {
+            CameraDevice.StateCallback.ERROR_CAMERA_IN_USE, CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE ->
+                "The camera is busy in another app. Close it and try again."
+            CameraDevice.StateCallback.ERROR_CAMERA_DISABLED -> "The camera is turned off by a phone setting or policy."
+            else -> null
+        }
+        if (reason == null && !lens.isMain && mainIdx >= 0) {
+            // This lens isn't open to other apps on this phone: remove its button and use the main camera.
+            lenses = lenses.filter { it !== lens }
+            lensIdx = lenses.indexOfFirst { it.isMain }.coerceAtLeast(0)
+            say("The ${lens.label} lens isn't available to other apps on this phone, so you're on the main camera.")
+            openCamera()
+            return
+        }
+        say(reason ?: "The camera couldn't be opened (code $error). Close the app fully and open it again.")
+    }
+
     // ------------------------------------------------------------------ settings
 
     private fun loadSettings() {
@@ -767,7 +792,6 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         engine.overlays.zebras = prefs.getBoolean("zebras", false)
         engine.overlays.peaking = prefs.getBoolean("peaking", false)
         engine.overlays.falseColor = prefs.getBoolean("falseColor", false)
-        lensIdx = prefs.getInt("lens", 0)
     }
 
     private fun saveSettings() {
@@ -780,7 +804,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             .putString("res", s.res?.label ?: "4K")
             .putBoolean("zebras", engine.overlays.zebras).putBoolean("peaking", engine.overlays.peaking)
             .putBoolean("falseColor", engine.overlays.falseColor).putBoolean("grid", overlay.grid)
-            .putInt("lens", lensIdx)
+            .putString("lensLabel", lenses.getOrNull(lensIdx)?.label ?: "1×")
             .apply()
     }
 

@@ -15,18 +15,27 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.util.Range
 import android.util.Size
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.sqrt
 
 /** A video resolution the app offers. */
 data class Res(val label: String, val size: Size)
 
-/** One back camera the user can pick (ultrawide, main…), plus optional digital crops of it. */
-class Lens(val id: String, val chars: CameraCharacteristics, val zoom: Float, val crop: Float = 1f) {
+/**
+ * One lens button. [ratio] is a zoom ratio sent to the camera: below 1 the phone switches to its
+ * ultrawide by itself, above 1 it's a crop of the main sensor. [hidden] marks a camera the phone
+ * doesn't list for apps; it's only offered as a fallback and may refuse to open.
+ */
+class Lens(val id: String, val chars: CameraCharacteristics, val zoom: Float, val ratio: Float = 1f, val hidden: Boolean = false) {
+    val isMain: Boolean get() = abs(zoom * ratio - 1f) < 0.05f
     val label: String
-        get() = if (abs(zoom * crop - 1f) < 0.05f) "1×"
-        else if (zoom * crop < 1f) String.format("%.1f", zoom * crop).trimEnd('0').trimEnd('.')
-        else String.format("%.0f×", zoom * crop)
+        get() {
+            val z = zoom * ratio
+            return if (abs(z - 1f) < 0.05f) "1×"
+            else if (z < 1f) String.format(Locale.US, "%.1f", z).trimEnd('0').trimEnd('.')
+            else String.format(Locale.US, "%.0f×", z)
+        }
 }
 
 /** Everything one camera can do, read from Android's camera characteristics. */
@@ -132,35 +141,52 @@ class Caps(val chars: CameraCharacteristics) {
             "720p" to Size(1280, 720)
         )
 
-        /** Back cameras sorted wide → tele, with a 2× crop of the main one; duplicates removed. */
+        /**
+         * Lens buttons, wide → tele. Prefers what the phone officially offers apps:
+         * the main camera, its own zoom range (which reaches the ultrawide on many phones),
+         * then other listed back cameras. Hidden cameras are only a last resort for the ultrawide.
+         */
         fun lenses(ctx: Context): List<Lens> {
             val mgr = ctx.getSystemService(CameraManager::class.java)
-            val ids = LinkedHashSet<String>()
-            try { ids.addAll(mgr.cameraIdList) } catch (e: Exception) { }
-            for (i in 0..9) ids.add(i.toString()) // some phones hide extra lenses from the list
-            val found = ArrayList<Pair<String, CameraCharacteristics>>()
-            for (id in ids) {
-                try {
-                    val c = mgr.getCameraCharacteristics(id)
-                    if (c.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) continue
-                    val caps = Caps(c)
-                    if (caps.resolutions.none { it.label == "1080p" || it.label == "4K" }) continue // skip macro / depth
-                    found.add(id to c)
-                } catch (e: Exception) { }
-            }
-            if (found.isEmpty()) return emptyList()
-            val main = found.first()
-            val mainF = Caps(main.second).equivFocal().takeIf { it > 0 } ?: 1f
+            val listed = try { mgr.cameraIdList.toList() } catch (e: Exception) { emptyList() }
+            fun usableBack(id: String): CameraCharacteristics? = try {
+                val c = mgr.getCameraCharacteristics(id)
+                if (c.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) null
+                else if (Caps(c).resolutions.none { it.label == "1080p" || it.label == "4K" }) null // skip macro / depth
+                else c
+            } catch (e: Exception) { null }
+
+            val back = listed.mapNotNull { id -> usableBack(id)?.let { id to it } }
+            if (back.isEmpty()) return emptyList()
+            val (mainId, mainChars) = back.first()
+            val mainCaps = Caps(mainChars)
+            val mainF = mainCaps.equivFocal().takeIf { it > 0 } ?: 1f
             val out = ArrayList<Lens>()
-            found.forEach { (id, c) ->
+            out.add(Lens(mainId, mainChars, 1f))
+
+            // 1. The main camera's own zoom range: below 1× means the phone switches to the ultrawide itself.
+            if (Build.VERSION.SDK_INT >= 30) {
+                val lower = mainChars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.lower ?: 1f
+                if (lower < 0.95f) out.add(Lens(mainId, mainChars, 1f, ratio = lower))
+            }
+            // 2. Other back cameras the phone lists for apps.
+            back.drop(1).forEach { (id, c) ->
                 val z = (Caps(c).equivFocal().takeIf { it > 0 } ?: mainF) / mainF
-                if (out.none { abs(it.zoom - z) < 0.08f }) out.add(Lens(id, c, z))
+                if (out.none { abs(it.zoom * it.ratio - z) < 0.08f }) out.add(Lens(id, c, z))
             }
-            out.sortBy { it.zoom }
-            val mainLens = out.minByOrNull { abs(it.zoom - 1f) } ?: out.first()
-            if (Caps(mainLens.chars).maxZoom >= 2f && out.none { it.zoom in 1.8f..2.4f }) {
-                out.add(out.indexOf(mainLens) + 1, Lens(mainLens.id, mainLens.chars, mainLens.zoom, crop = 2f))
+            // 3. Last resort: an unlisted ultrawide.
+            if (out.none { it.zoom * it.ratio < 0.95f }) {
+                for (i in 0..9) {
+                    val id = i.toString()
+                    if (id in listed) continue
+                    val c = usableBack(id) ?: continue
+                    val z = (Caps(c).equivFocal().takeIf { it > 0 } ?: mainF) / mainF
+                    if (z < 0.95f && out.none { abs(it.zoom * it.ratio - z) < 0.08f }) { out.add(Lens(id, c, z, hidden = true)); break }
+                }
             }
+            // 4. A 2× crop of the main sensor, unless there's already a lens near 2×.
+            if (mainCaps.maxZoom >= 2f && out.none { it.zoom * it.ratio in 1.8f..2.4f }) out.add(Lens(mainId, mainChars, 1f, ratio = 2f))
+            out.sortBy { it.zoom * it.ratio }
             return out
         }
     }
