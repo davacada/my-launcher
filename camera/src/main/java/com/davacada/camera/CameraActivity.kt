@@ -346,13 +346,13 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         // histogram + meter
         hist = HistogramView(this).apply { background = glass(0x80, dpf(12f)); setPadding(dp(6), dp(6), dp(6), dp(6)) }
         root.addView(hist, FrameLayout.LayoutParams(dp(150), dp(60), Gravity.BOTTOM or Gravity.START).apply {
-            leftMargin = dp(if (portrait) 10 else 72); bottomMargin = dp(if (portrait) 222 else 12)
+            leftMargin = dp(if (portrait) 10 else 72); bottomMargin = dp(if (portrait) 78 else 12)
         })
         val meterBox = FrameLayout(this).apply { background = glass(0x80, dpf(12f)); setPadding(0, dp(8), 0, dp(8)) }
         meter = AudioMeterView(this)
         meterBox.addView(meter, FrameLayout.LayoutParams(-1, -1))
         root.addView(meterBox, FrameLayout.LayoutParams(dp(34), dp(60), Gravity.BOTTOM or Gravity.START).apply {
-            leftMargin = dp(if (portrait) 168 else 232); bottomMargin = dp(if (portrait) 222 else 12)
+            leftMargin = dp(if (portrait) 168 else 232); bottomMargin = dp(if (portrait) 78 else 12)
         })
 
         // focus bar
@@ -391,7 +391,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         focusText = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setTextColor(Color.WHITE); gravity = Gravity.END }
         focusRow.addView(focusText, LinearLayout.LayoutParams(dp(48), -2))
         root.addView(focusRow, FrameLayout.LayoutParams(-1, dp(52), Gravity.BOTTOM).apply {
-            if (portrait) { leftMargin = dp(10); rightMargin = dp(10); bottomMargin = dp(162) }
+            if (portrait) { leftMargin = dp(10); rightMargin = dp(104); bottomMargin = dp(16) }
             else { leftMargin = dp(280); rightMargin = dp(110); bottomMargin = dp(16) }
         })
 
@@ -435,23 +435,22 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             right.addView(thumb, LinearLayout.LayoutParams(dp(40), dp(40)))
             root.addView(right, FrameLayout.LayoutParams(dp(98), -1, Gravity.END).apply { topMargin = dp(52) })
         } else {
-            // Upright: focal lengths in a row, then thumbnail · record · mode, all within thumb reach.
+            // Upright: everything you press while shooting sits in one column at the bottom right, under your thumb:
+            // focal lengths, photo/video, record, last capture.
             (lensColumn.parent as? ViewGroup)?.removeView(lensColumn)
             (recordButton.parent as? ViewGroup)?.removeView(recordButton)
-            lensColumn.orientation = LinearLayout.HORIZONTAL
-            val bottom = LinearLayout(this).apply {
+            lensColumn.orientation = LinearLayout.VERTICAL
+            val thumbRail = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-                background = glass(0x73); setPadding(dp(16), dp(10), dp(16), dp(14))
+                background = glass(0x73, dpf(40f)); setPadding(dp(8), dp(12), dp(8), dp(12))
             }
-            bottom.addView(lensColumn, LinearLayout.LayoutParams(-2, dp(34)))
-            val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            controls.addView(thumb, LinearLayout.LayoutParams(dp(44), dp(44)))
-            controls.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-            controls.addView(recordButton, LinearLayout.LayoutParams(dp(76), dp(76)))
-            controls.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-            controls.addView(modeButton, LinearLayout.LayoutParams(-2, dp(32)))
-            bottom.addView(controls, LinearLayout.LayoutParams(-1, dp(84)).apply { topMargin = dp(6) })
-            root.addView(bottom, FrameLayout.LayoutParams(-1, dp(152), Gravity.BOTTOM))
+            thumbRail.addView(lensColumn, LinearLayout.LayoutParams(-2, -2))
+            thumbRail.addView(modeButton, LinearLayout.LayoutParams(-2, dp(30)).apply { topMargin = dp(10) })
+            thumbRail.addView(recordButton, LinearLayout.LayoutParams(dp(74), dp(74)).apply { topMargin = dp(12) })
+            thumbRail.addView(thumb, LinearLayout.LayoutParams(dp(42), dp(42)).apply { topMargin = dp(12) })
+            root.addView(thumbRail, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+                rightMargin = dp(8); bottomMargin = dp(16)
+            })
         }
 
         // little message strip
@@ -545,8 +544,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         lensColumn.addView(TextView(this).apply {
             text = "MM"; gravity = Gravity.CENTER; setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
             letterSpacing = 0.08f; setTextColor(0xFFB9C2CF.toInt())
-        }, LinearLayout.LayoutParams(if (portraitUi) -2 else dp(50), -2).apply {
-            if (portraitUi) { marginEnd = dp(8); gravity = Gravity.CENTER_VERTICAL } else bottomMargin = dp(3)
+        }, LinearLayout.LayoutParams(dp(50), -2).apply {
+            bottomMargin = dp(3)
         })
         lenses.forEachIndexed { i, l ->
             val on = i == lensIdx
@@ -558,8 +557,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
                 alpha = if (l.available) 1f else 0.3f
                 contentDescription = "${l.label} millimetre lens"
                 setOnClickListener { pickLens(i) }
-            }, LinearLayout.LayoutParams(dp(if (portraitUi) 52 else 50), dp(28)).apply {
-                if (portraitUi) { marginStart = dp(3); marginEnd = dp(3) } else bottomMargin = dp(4)
+            }, LinearLayout.LayoutParams(dp(50), dp(28)).apply {
+                bottomMargin = dp(4)
             })
         }
     }

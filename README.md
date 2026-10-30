@@ -48,7 +48,8 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
 - **Blackmagic remote:** the REMOTE button (top right) pairs over Bluetooth with a Pocket Cinema Camera 4K (enter the code shown
   on the camera). Record, ISO, shutter, white balance, frame rate, focus/autofocus and iris then control the camera,
   and its timecode and recording light show in the top bar. Bluetooth carries settings only, not the picture
-- Works upright too: settings in two rows on top, focal lengths and record at the bottom. Upright clips are saved as
+- Works upright too: settings in two rows on top; focal lengths, photo/video, record and last capture in one column
+  at the bottom right under your thumb. Upright clips are saved as
   vertical 9:16 video; the screen holds its orientation while recording
 - Volume buttons work as the shutter; the (i) button shows exactly what each lens supports
 - Files go to Movies/ProCamera and Pictures/ProCamera
