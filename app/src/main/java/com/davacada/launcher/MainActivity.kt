@@ -88,7 +88,8 @@ class MainActivity : Activity() {
     private var drawerOpen = false
     private var showHidden = false
 
-    private val iconSize by lazy { dp(46) }
+    private val renderSize by lazy { dp(46) }   // icon bitmaps are drawn at this size
+    private val homeIconSize by lazy { dp(38) }
     private val drawerIconSize by lazy { dp(44) }
 
     private val packageCallback = object : LauncherApps.Callback() {
@@ -256,9 +257,9 @@ class MainActivity : Activity() {
         homeColumn.addView(drawerButton(), columnSlot())
     }
 
-    private fun columnSlot() = LinearLayout.LayoutParams(iconSize, iconSize).apply {
-        topMargin = dp(12)
-        bottomMargin = dp(12)
+    private fun columnSlot() = LinearLayout.LayoutParams(homeIconSize, homeIconSize).apply {
+        topMargin = dp(11)
+        bottomMargin = dp(11)
     }
 
     private fun drawerButton(): View = ImageView(this).apply {
@@ -702,7 +703,7 @@ class MainActivity : Activity() {
     }
 
     private fun loadApps() {
-        val size = iconSize
+        val size = renderSize
         val density = resources.displayMetrics.densityDpi
         io.execute {
             val list = userManager.userProfiles
