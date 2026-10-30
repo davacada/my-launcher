@@ -817,6 +817,16 @@ class MainActivity : Activity() {
         return out
     }
 
+    /**
+     * Apps whose own logo doesn't make a good white icon get one of ours instead, even if they
+     * ship a white version. Matched by package, or by name when the package isn't known.
+     */
+    private fun forcedGlyph(pkg: String, label: String): Int? {
+        FORCED_PACKAGES[pkg]?.let { return it }
+        val name = label.lowercase()
+        return FORCED_NAMES.firstOrNull { (key, _) -> name.contains(key) }?.second
+    }
+
     private fun loadApps() {
         val size = renderSize
         val density = resources.displayMetrics.densityDpi
@@ -830,7 +840,10 @@ class MainActivity : Activity() {
                         val raw = info.getIcon(density) ?: return@mapNotNull null
                         val colour = IconFactory.colour(raw, size)
                         val pkg = info.componentName.packageName
-                        val white = IconFactory.white(raw, size)
+                        val white = forcedGlyph(pkg, info.label.toString())?.let { res ->
+                                getDrawable(res)?.let { IconFactory.fromVector(it, size) }
+                            }
+                            ?: IconFactory.white(raw, size)
                             ?: (roles[pkg] ?: PACKAGE_GLYPHS[pkg])?.let { res ->
                                 getDrawable(res)?.let { IconFactory.fromVector(it, size) }
                             }
@@ -879,6 +892,21 @@ class MainActivity : Activity() {
 
     private companion object {
         const val REQUEST_PHOTO = 41
+
+        val FORCED_PACKAGES = mapOf(
+            "com.amazon.avod.thirdpartyclient" to R.drawable.g_prime,
+            "com.amazon.avod" to R.drawable.g_prime,
+            "com.duolingo" to R.drawable.g_owl,
+            "jp.co.shueisha.mangaplus" to R.drawable.g_manga
+        )
+        val FORCED_NAMES = listOf(
+            "prime video" to R.drawable.g_prime,
+            "duolingo" to R.drawable.g_owl,
+            "manga plus" to R.drawable.g_manga,
+            "manga+" to R.drawable.g_manga,
+            "mangaplus" to R.drawable.g_manga,
+            "netless" to R.drawable.g_walkie
+        )
 
         // Line icons for popular apps that don't ship a white icon of their own.
         val PACKAGE_GLYPHS = mapOf(
