@@ -2,12 +2,17 @@ package com.davacada.launcher
 
 import android.app.Activity
 import android.app.ActivityOptions
+import android.app.AppOpsManager
+import android.app.Dialog
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -18,30 +23,32 @@ import android.graphics.Rect
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
+import android.provider.Settings
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.ViewGroup
-import android.widget.AbsListView
-import android.widget.BaseAdapter
+import android.view.Window
+import android.view.WindowManager
 import android.widget.FrameLayout
-import android.widget.GridView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.ScrollView
+import android.widget.TextView
 import java.util.concurrent.Executors
-import kotlin.math.abs
 
 class MainActivity : Activity() {
 
@@ -50,24 +57,36 @@ class MainActivity : Activity() {
         val label: String,
         val info: LauncherActivityInfo,
         val white: Bitmap,
-        val colour: Bitmap
-    )
+        val colour: Bitmap,
+        val category: Int,
+        val installed: Long
+    ) {
+        val pkg: String get() = info.componentName.packageName
+    }
 
     private lateinit var launcherApps: LauncherApps
     private lateinit var userManager: UserManager
     private lateinit var prefs: SharedPreferences
 
     private lateinit var homeColumn: LinearLayout
-    private lateinit var drawer: FrameLayout
-    private lateinit var grid: GridView
     private lateinit var homeScroll: ScrollView
+    private lateinit var drawer: FrameLayout
+    private lateinit var pager: AppPager
+    private lateinit var hiddenHint: TextView
+    private lateinit var bottomBar: LinearLayout
+    private lateinit var organiserButton: ImageView
+    private lateinit var hiddenButton: ImageView
 
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private var apps: List<AppEntry> = emptyList()
-    private val drawerAdapter = DrawerAdapter()
+    private var usage: Map<String, Long> = emptyMap()
+
+    private var drawerOpen = false
+    private var showHidden = false
 
     private val iconSize by lazy { dp(46) }
+    private val drawerIconSize by lazy { dp(44) }
 
     private val packageCallback = object : LauncherApps.Callback() {
         override fun onPackageRemoved(packageName: String, user: UserHandle) = loadApps()
@@ -95,6 +114,12 @@ class MainActivity : Activity() {
         loadApps()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Picks up usage access granted in Settings, and keeps "Most used" fresh.
+        if (sort == SORT_USED) refreshUsage()
+    }
+
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         // Home button pressed while we're already in front: go back to the home column.
@@ -108,7 +133,9 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (drawerOpen) closeDrawer(animate = true)
+        if (drawerOpen) {
+            if (showHidden) setShowHidden(false) else closeDrawer(animate = true)
+        }
         // On the home screen itself, Back does nothing.
     }
 
@@ -123,6 +150,7 @@ class MainActivity : Activity() {
     private fun buildUi(): View {
         val root = FrameLayout(this)
 
+        // Home: one column of icons on the right.
         homeColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -141,24 +169,36 @@ class MainActivity : Activity() {
             ).apply { marginEnd = dp(22) }
         )
 
-        grid = GridView(this).apply {
-            numColumns = 5
-            stretchMode = GridView.STRETCH_COLUMN_WIDTH
-            verticalSpacing = dp(26)
-            gravity = Gravity.CENTER
-            clipToPadding = false
-            isVerticalScrollBarEnabled = false
-            selector = ColorDrawable(Color.TRANSPARENT)
-            adapter = drawerAdapter
-            setOnTouchListener(EmptySpaceTap { closeDrawer(animate = true) })
-        }
+        // Drawer: clear background, horizontal pages, two icons at the bottom.
         drawer = FrameLayout(this).apply {
-            setBackgroundColor(Color.TRANSPARENT)
             visibility = View.GONE
             isClickable = true
             setOnClickListener { closeDrawer(animate = true) }
-            addView(grid, FrameLayout.LayoutParams(-1, -1))
         }
+
+        hiddenHint = TextView(this).apply {
+            text = "Hidden apps · tap one to bring it back"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x99000000.toInt())
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+        }
+        drawer.addView(hiddenHint, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+
+        pager = AppPager(this)
+        drawer.addView(pager, FrameLayout.LayoutParams(-1, -1))
+
+        organiserButton = barButton(R.drawable.ic_organiser, "Organiser") { showOrganiser(it) }
+        hiddenButton = barButton(R.drawable.ic_hidden, "Hidden apps") { setShowHidden(!showHidden) }
+        bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(organiserButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(14) })
+            addView(hiddenButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14) })
+        }
+        drawer.addView(bottomBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+
         root.addView(drawer, FrameLayout.LayoutParams(-1, -1))
 
         root.setOnApplyWindowInsetsListener { _, insets ->
@@ -166,11 +206,31 @@ class MainActivity : Activity() {
             val top = insets.systemWindowInsetTop
             @Suppress("DEPRECATION")
             val bottom = insets.systemWindowInsetBottom
-            grid.setPadding(dp(18), top + dp(40), dp(18), bottom + dp(32))
             homeScroll.setPadding(0, top, 0, bottom)
+            (hiddenHint.layoutParams as FrameLayout.LayoutParams).topMargin = top + dp(18)
+            (pager.layoutParams as FrameLayout.LayoutParams).apply {
+                topMargin = top + dp(48)
+                bottomMargin = bottom + dp(96)
+            }
+            (bottomBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = bottom + dp(24)
+            drawer.requestLayout()
             insets
         }
         return root
+    }
+
+    private fun barButton(icon: Int, description: String, onClick: (View) -> Unit) = ImageView(this).apply {
+        setImageResource(icon)
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        setPadding(dp(15), dp(15), dp(15), dp(15))
+        contentDescription = description
+        background = StateListDrawable().apply {
+            val on = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x2EFFFFFF) }
+            addState(intArrayOf(android.R.attr.state_selected), on)
+            addState(intArrayOf(android.R.attr.state_pressed), on)
+            addState(intArrayOf(), ColorDrawable(Color.TRANSPARENT))
+        }
+        setOnClickListener(onClick)
     }
 
     private fun renderHome() {
@@ -197,6 +257,28 @@ class MainActivity : Activity() {
         setOnClickListener { openDrawer() }
     }
 
+    private fun renderDrawer() {
+        val hidden = hiddenKeys()
+        val visible = apps.filter { (it.key in hidden) == showHidden }
+        val byName = compareBy<AppEntry> { it.label.lowercase() }
+        val sorted = when (sort) {
+            SORT_USED -> visible.sortedWith(compareByDescending<AppEntry> { usage[it.pkg] ?: 0L }.then(byName))
+            SORT_NEW -> visible.sortedWith(compareByDescending<AppEntry> { it.installed }.then(byName))
+            else -> visible.sortedWith(compareBy<AppEntry> { typeRank(it.category) }.then(byName))
+        }
+        val pages = sorted.chunked(COLUMNS * ROWS).ifEmpty { listOf(emptyList()) }.map { chunk ->
+            FixedGrid(this, COLUMNS, ROWS, drawerIconSize).apply {
+                setPadding(dp(12), 0, dp(12), 0)
+                isClickable = true
+                setOnClickListener { closeDrawer(animate = true) }
+                chunk.forEach { e -> addView(ImageView(context).also { bindApp(it, e, fromHome = false) }) }
+            }
+        }
+        pager.setPages(pages)
+        hiddenHint.visibility = if (showHidden) View.VISIBLE else View.GONE
+        hiddenButton.isSelected = showHidden
+    }
+
     private fun bindApp(view: ImageView, entry: AppEntry, fromHome: Boolean) {
         view.scaleType = ImageView.ScaleType.FIT_CENTER
         view.contentDescription = entry.label // for TalkBack only, never drawn
@@ -205,24 +287,28 @@ class MainActivity : Activity() {
             addState(intArrayOf(android.R.attr.state_pressed), BitmapDrawable(resources, entry.colour))
             addState(intArrayOf(), BitmapDrawable(resources, entry.white))
         })
-        view.setOnClickListener { launch(entry, it) }
+        val inHiddenView = !fromHome && showHidden
+        view.alpha = if (inHiddenView) 0.75f else 1f
+        view.setOnClickListener {
+            if (inHiddenView) setHidden(entry, false) else launch(entry, it)
+        }
         view.setOnLongClickListener {
             it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-            showMenu(it, entry, fromHome)
+            showAppMenu(it, entry, fromHome)
             true
         }
     }
 
-    private var drawerOpen = false
-
     private fun openDrawer() {
         drawerOpen = true
+        showHidden = false
+        renderDrawer()
+        pager.goTo(0, smooth = false)
         drawer.animate().cancel()
-        grid.setSelection(0)
         drawer.alpha = 0f
         drawer.translationY = dp(40).toFloat()
         drawer.visibility = View.VISIBLE
-        drawer.animate().alpha(1f).translationY(0f).setDuration(180).start()
+        drawer.animate().alpha(1f).translationY(0f).setStartDelay(0).setDuration(180).start()
         homeScroll.animate().cancel()
         homeScroll.animate().alpha(0f).setStartDelay(0).setDuration(120)
             .withEndAction { if (drawerOpen) homeScroll.visibility = View.INVISIBLE }.start()
@@ -239,8 +325,156 @@ class MainActivity : Activity() {
             return
         }
         homeScroll.animate().alpha(1f).setStartDelay(60).setDuration(180).start()
-        drawer.animate().alpha(0f).translationY(dp(40).toFloat()).setDuration(150)
+        drawer.animate().alpha(0f).translationY(dp(40).toFloat()).setStartDelay(0).setDuration(150)
             .withEndAction { if (!drawerOpen) drawer.visibility = View.GONE }.start()
+    }
+
+    private fun setShowHidden(on: Boolean) {
+        showHidden = on
+        pager.goTo(0, smooth = false)
+        renderDrawer()
+    }
+
+    // ---------------------------------------------------------------- organiser
+
+    private fun showOrganiser(anchor: View) {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+
+        val menuW = dp(220)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        listOf(
+            Triple(SORT_TYPE, "Type", R.drawable.ic_sort_type),
+            Triple(SORT_USED, "Most used", R.drawable.ic_sort_used),
+            Triple(SORT_NEW, "Newest", R.drawable.ic_sort_new)
+        ).forEach { (key, label, icon) ->
+            panel.addView(menuRow(icon, label, selected = sort == key) {
+                dialog.dismiss()
+                setSort(key)
+            }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(1); bottomMargin = dp(1) })
+        }
+        dialog.setContentView(panel, ViewGroup.LayoutParams(menuW, ViewGroup.LayoutParams.WRAP_CONTENT))
+        dialog.setCanceledOnTouchOutside(true)
+
+        panel.measure(
+            View.MeasureSpec.makeMeasureSpec(menuW, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val loc = IntArray(2).also { anchor.getLocationOnScreen(it) }
+
+        dialog.window?.let { w ->
+            w.setFormat(PixelFormat.TRANSLUCENT)
+            w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            w.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+            val blur = Build.VERSION.SDK_INT >= 31 && windowManager.isCrossWindowBlurEnabled
+            w.setBackgroundDrawable(GradientDrawable().apply {
+                cornerRadius = dp(22).toFloat()
+                setColor(if (blur) 0x8C121A2A.toInt() else 0xD9121A2A.toInt())
+                setStroke(dp(1), 0x38FFFFFF)
+            })
+            if (blur && Build.VERSION.SDK_INT >= 31) w.setBackgroundBlurRadius(dp(24))
+            w.attributes = w.attributes.apply {
+                gravity = Gravity.TOP or Gravity.START
+                width = menuW
+                height = WindowManager.LayoutParams.WRAP_CONTENT
+                x = (loc[0] + anchor.width / 2 - menuW / 2).coerceAtLeast(dp(8))
+                y = loc[1] - dp(12) - panel.measuredHeight
+            }
+        }
+        organiserButton.isSelected = true
+        dialog.setOnDismissListener { organiserButton.isSelected = false }
+        dialog.show()
+    }
+
+    private fun menuRow(icon: Int, label: String, selected: Boolean, onClick: () -> Unit): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            isClickable = true
+            val shape = { color: Int ->
+                GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(color) }
+            }
+            background = RippleDrawable(
+                ColorStateList.valueOf(0x33FFFFFF),
+                if (selected) shape(0x24FFFFFF) else null,
+                shape(Color.WHITE)
+            )
+            setOnClickListener { onClick() }
+        }
+        row.addView(ImageView(this).apply { setImageResource(icon) }, LinearLayout.LayoutParams(dp(20), dp(20)))
+        row.addView(TextView(this).apply {
+            text = label
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(14) })
+        if (selected) {
+            row.addView(ImageView(this).apply { setImageResource(R.drawable.ic_check) }, LinearLayout.LayoutParams(dp(18), dp(18)))
+        }
+        return row
+    }
+
+    private var sort: String
+        get() = prefs.getString("sort", SORT_TYPE) ?: SORT_TYPE
+        set(v) { prefs.edit().putString("sort", v).apply() }
+
+    private fun setSort(key: String) {
+        sort = key
+        pager.goTo(0, smooth = false)
+        if (key == SORT_USED && !hasUsageAccess()) {
+            renderDrawer()
+            // "Most used" needs the phone's usage data; Android asks for it once in Settings.
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.fromParts("package", packageName, null))
+                )
+            } catch (e: Exception) {
+                startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            }
+            return
+        }
+        if (key == SORT_USED) refreshUsage() else renderDrawer()
+    }
+
+    private fun hasUsageAccess(): Boolean {
+        val ops = getSystemService(AppOpsManager::class.java)
+        val mode = if (Build.VERSION.SDK_INT >= 29) {
+            ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
+        } else {
+            @Suppress("DEPRECATION")
+            ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
+        }
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    private fun refreshUsage() {
+        if (!hasUsageAccess()) return
+        io.execute {
+            val usm = getSystemService(UsageStatsManager::class.java)
+            val now = System.currentTimeMillis()
+            val map = try {
+                usm.queryAndAggregateUsageStats(now - 30L * 24 * 60 * 60 * 1000, now)
+                    .mapValues { it.value.totalTimeInForeground }
+            } catch (e: Exception) {
+                emptyMap()
+            }
+            main.post {
+                usage = map
+                if (drawerOpen) renderDrawer()
+            }
+        }
+    }
+
+    private fun typeRank(category: Int): Int {
+        val i = TYPE_ORDER.indexOf(category)
+        return when {
+            i >= 0 -> i
+            category == ApplicationInfo.CATEGORY_UNDEFINED -> TYPE_ORDER.size + 1
+            else -> TYPE_ORDER.size
+        }
     }
 
     // ---------------------------------------------------------------- actions
@@ -255,10 +489,11 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showMenu(anchor: View, entry: AppEntry, fromHome: Boolean) {
+    private fun showAppMenu(anchor: View, entry: AppEntry, fromHome: Boolean) {
         val keys = homeKeys().toMutableList()
         val onHome = entry.key in keys
         val idx = keys.indexOf(entry.key)
+        val isHidden = entry.key in hiddenKeys()
         PopupMenu(this, anchor, Gravity.END).apply {
             if (fromHome) {
                 if (idx > 0) menu.add(0, 1, 0, "Move up")
@@ -266,6 +501,7 @@ class MainActivity : Activity() {
                 menu.add(0, 3, 0, "Remove from home")
             } else {
                 if (onHome) menu.add(0, 3, 0, "Remove from home") else menu.add(0, 4, 0, "Add to home")
+                if (isHidden) menu.add(0, 8, 0, "Unhide") else menu.add(0, 7, 0, "Hide")
             }
             menu.add(0, 5, 0, "App info")
             if (entry.info.user == Process.myUserHandle()) menu.add(0, 6, 0, "Uninstall")
@@ -280,8 +516,10 @@ class MainActivity : Activity() {
                         entry.info.componentName, entry.info.user, null, null
                     )
                     6 -> startActivity(
-                        Intent(Intent.ACTION_DELETE, Uri.fromParts("package", entry.info.componentName.packageName, null))
+                        Intent(Intent.ACTION_DELETE, Uri.fromParts("package", entry.pkg, null))
                     )
+                    7 -> setHidden(entry, true)
+                    8 -> setHidden(entry, false)
                 }
                 true
             }
@@ -293,6 +531,15 @@ class MainActivity : Activity() {
 
     private fun homeKeys(): List<String> =
         prefs.getString("home", "").orEmpty().split("\n").filter { it.isNotEmpty() }
+
+    private fun hiddenKeys(): Set<String> = prefs.getStringSet("hidden", emptySet()) ?: emptySet()
+
+    private fun setHidden(entry: AppEntry, hide: Boolean) {
+        val set = hiddenKeys().toMutableSet()
+        if (hide) set.add(entry.key) else set.remove(entry.key)
+        prefs.edit().putStringSet("hidden", set).apply()
+        if (drawerOpen) renderDrawer()
+    }
 
     /** First run: put the phone's default Phone, Messages and Browser apps in the column. */
     private fun seedHome(list: List<AppEntry>) {
@@ -308,7 +555,7 @@ class MainActivity : Activity() {
 
     private fun defaultAppFor(intent: Intent, list: List<AppEntry>): AppEntry? {
         val mine = list.filter { it.info.user == Process.myUserHandle() }
-        fun appIn(pkg: String?) = mine.firstOrNull { it.info.componentName.packageName == pkg }
+        fun appIn(pkg: String?) = mine.firstOrNull { it.pkg == pkg }
         // The app the user picked as default for this action...
         @Suppress("DEPRECATION")
         val preferred = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
@@ -327,6 +574,13 @@ class MainActivity : Activity() {
     private fun keyOf(info: LauncherActivityInfo): String =
         info.componentName.flattenToString() + "#" + userManager.getSerialNumberForUser(info.user)
 
+    private fun installTime(pkg: String): Long = try {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(pkg, 0).firstInstallTime
+    } catch (e: Exception) {
+        0L
+    }
+
     private fun loadApps() {
         val size = iconSize
         val density = resources.displayMetrics.densityDpi
@@ -339,7 +593,10 @@ class MainActivity : Activity() {
                         val raw = info.getIcon(density) ?: return@mapNotNull null
                         val colour = IconFactory.colour(raw, size)
                         val white = IconFactory.white(raw, size)
-                        AppEntry(keyOf(info), info.label.toString(), info, white, colour)
+                        AppEntry(
+                            keyOf(info), info.label.toString(), info, white, colour,
+                            info.applicationInfo.category, installTime(info.componentName.packageName)
+                        )
                     } catch (e: Exception) {
                         null
                     }
@@ -348,8 +605,8 @@ class MainActivity : Activity() {
             main.post {
                 apps = list
                 if (!prefs.getBoolean("seeded", false) && list.isNotEmpty()) seedHome(list)
-                drawerAdapter.notifyDataSetChanged()
                 renderHome()
+                if (drawerOpen) renderDrawer()
             }
         }
     }
@@ -357,42 +614,6 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- helpers
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
-
-    private inner class DrawerAdapter : BaseAdapter() {
-        override fun getCount() = apps.size
-        override fun getItem(position: Int): Any = apps[position]
-        override fun getItemId(position: Int) = position.toLong()
-
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val cell = (convertView as? FrameLayout) ?: FrameLayout(this@MainActivity).apply {
-                layoutParams = AbsListView.LayoutParams(-1, dp(54))
-                addView(ImageView(context), FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER))
-            }
-            bindApp(cell.getChildAt(0) as ImageView, apps[position], fromHome = false)
-            return cell
-        }
-    }
-
-    /** Closes the drawer when the user taps (not scrolls) on empty space in the grid. */
-    private inner class EmptySpaceTap(private val onTap: () -> Unit) : View.OnTouchListener {
-        private val slop = ViewConfiguration.get(this@MainActivity).scaledTouchSlop
-        private var downX = 0f
-        private var downY = 0f
-        private var moved = false
-
-        override fun onTouch(v: View, e: MotionEvent): Boolean {
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downX = e.x; downY = e.y; moved = false }
-                MotionEvent.ACTION_MOVE ->
-                    if (abs(e.x - downX) > slop || abs(e.y - downY) > slop) moved = true
-                MotionEvent.ACTION_UP ->
-                    if (!moved && grid.pointToPosition(e.x.toInt(), e.y.toInt()) == AbsListView.INVALID_POSITION) {
-                        onTap()
-                    }
-            }
-            return false
-        }
-    }
 
     /** Simple 3x3 dot grid used for the app-drawer button. */
     private class DotsDrawable(color: Int) : Drawable() {
@@ -412,5 +633,25 @@ class MainActivity : Activity() {
         override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
         @Deprecated("Deprecated in Java")
         override fun getOpacity() = PixelFormat.TRANSLUCENT
+    }
+
+    private companion object {
+        const val COLUMNS = 6
+        const val ROWS = 8
+        const val SORT_TYPE = "type"
+        const val SORT_USED = "used"
+        const val SORT_NEW = "new"
+
+        // Order apps appear in when sorted by type; apps with no category go last.
+        val TYPE_ORDER = listOf(
+            ApplicationInfo.CATEGORY_SOCIAL,
+            ApplicationInfo.CATEGORY_IMAGE,
+            ApplicationInfo.CATEGORY_VIDEO,
+            ApplicationInfo.CATEGORY_AUDIO,
+            ApplicationInfo.CATEGORY_GAME,
+            ApplicationInfo.CATEGORY_NEWS,
+            ApplicationInfo.CATEGORY_MAPS,
+            ApplicationInfo.CATEGORY_PRODUCTIVITY
+        )
     }
 }

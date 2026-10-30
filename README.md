@@ -5,6 +5,7 @@ A minimal Android home screen, in the same spirit as the Tanjiro TV hub.
 - Apps sit in a single column on the right side of the screen
 - Icons are plain white with no labels or borders, and show the app's real colour while you press them
 - The last button in the column (the dot grid) opens the app drawer
+- Phone, Messages and Browser are added to the column the first time it starts
 - No dock, widgets, search or clock; the phone's own wallpaper shows behind it
 
 ## Install
@@ -17,6 +18,10 @@ New builds install straight over the old one; your home column is kept.
 
 ## Using it
 
-- **Add an app to the home column:** open the drawer, long-press the app, tap *Add to home*
+- **Drawer:** pages of 6 × 8 apps; swipe left and right
+- **Organiser** (slider icon at the bottom of the drawer): sort by Type, Most used or Newest.
+  Most used asks once for usage access in Settings.
+- **Hide an app:** long-press it in the drawer, tap *Hide*. The eye icon shows hidden apps; tap one to bring it back
+- **Add an app to the home column:** long-press it in the drawer, tap *Add to home*
 - **Reorder or remove:** long-press an icon in the column
 - **Close the drawer:** Back, Home, or tap empty space
