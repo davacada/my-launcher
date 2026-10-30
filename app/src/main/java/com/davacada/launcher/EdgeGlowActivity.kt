@@ -41,6 +41,7 @@ class EdgeGlowActivity : Activity() {
      * the lowest brightness (looks off on an OLED screen) and let the normal screen timeout turn it off.
      */
     private fun afterGlow() {
+        if (!intent.getBooleanExtra(EXTRA_REAL, false)) { finish(); return } // previews from the drawer just close
         if (EdgeOffService.screenOff()) { finish(); return }
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF }
@@ -64,5 +65,6 @@ class EdgeGlowActivity : Activity() {
 
     companion object {
         const val EXTRA_KIND = "kind"
+        const val EXTRA_REAL = "real"
     }
 }

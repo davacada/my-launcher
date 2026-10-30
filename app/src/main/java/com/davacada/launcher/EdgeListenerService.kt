@@ -92,6 +92,7 @@ class EdgeListenerService : NotificationListenerService() {
         try {
             startActivity(Intent(this, EdgeGlowActivity::class.java)
                 .putExtra(EdgeGlowActivity.EXTRA_KIND, kind.name)
+                .putExtra(EdgeGlowActivity.EXTRA_REAL, true)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS))
         } catch (e: Exception) { }
     }
