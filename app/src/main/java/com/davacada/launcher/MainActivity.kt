@@ -78,6 +78,7 @@ class MainActivity : Activity() {
     private lateinit var organiserButton: ImageView
     private lateinit var hiddenButton: ImageView
     private lateinit var drawerBg: ImageView
+    private lateinit var companion: CompanionView
     private var drawerPhoto: Bitmap? = null
 
     private val io = Executors.newSingleThreadExecutor()
@@ -123,6 +124,8 @@ class MainActivity : Activity() {
         super.onResume()
         // Picks up usage access granted in Settings, and keeps "Most used" fresh.
         if (sort == SORT_USED) refreshUsage()
+        // The companion walks in through his door each time you come back home.
+        if (::companion.isInitialized && !drawerOpen) companion.arrive()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -154,6 +157,10 @@ class MainActivity : Activity() {
 
     private fun buildUi(): View {
         val root = FrameLayout(this)
+
+        // Animated companion, behind the home icons so it never blocks a tap on them.
+        companion = CompanionView(this)
+        root.addView(companion, FrameLayout.LayoutParams(-1, -1))
 
         // Home: one column of icons on the right.
         homeColumn = LinearLayout(this).apply {
@@ -333,6 +340,9 @@ class MainActivity : Activity() {
         homeScroll.animate().cancel()
         homeScroll.animate().alpha(0f).setStartDelay(0).setDuration(120)
             .withEndAction { if (drawerOpen) homeScroll.visibility = View.INVISIBLE }.start()
+        companion.animate().cancel()
+        companion.animate().alpha(0f).setStartDelay(0).setDuration(120)
+            .withEndAction { if (drawerOpen) companion.visibility = View.INVISIBLE }.start()
     }
 
     private fun closeDrawer(animate: Boolean) {
@@ -340,13 +350,17 @@ class MainActivity : Activity() {
         drawer.animate().cancel()
         homeScroll.animate().cancel()
         homeScroll.visibility = View.VISIBLE
+        companion.animate().cancel()
+        companion.visibility = View.VISIBLE
         drawerBg.animate().cancel()
         if (!animate) {
             drawer.visibility = View.GONE
             drawerBg.visibility = View.GONE
             homeScroll.alpha = 1f
+            companion.alpha = 1f
             return
         }
+        companion.animate().alpha(1f).setStartDelay(60).setDuration(180).start()
         drawerBg.animate().alpha(0f).setDuration(150)
             .withEndAction { if (!drawerOpen) drawerBg.visibility = View.GONE }.start()
         homeScroll.animate().alpha(1f).setStartDelay(60).setDuration(180).start()

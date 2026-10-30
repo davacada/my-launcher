@@ -6,6 +6,8 @@ A minimal Android home screen, in the same spirit as the Tanjiro TV hub.
 - Icons are plain white with no labels or borders, and show the app's real colour while you press them
 - The last button in the column (the dot grid) opens the app drawer
 - Phone, Messages and Browser are added to the column the first time it starts
+- An animated companion lives on the home screen: he walks in through a door when you come home,
+  wanders, sits, games, snacks and naps. Tap near him and he walks over
 - No dock, widgets, search or clock; the phone's own wallpaper shows behind it
 
 ## Install
