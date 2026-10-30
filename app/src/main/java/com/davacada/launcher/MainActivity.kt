@@ -79,6 +79,11 @@ class MainActivity : Activity() {
     private lateinit var hiddenButton: ImageView
     private lateinit var drawerBg: ImageView
     private lateinit var companion: CompanionView
+    private lateinit var companionButton: ImageView
+
+    private var companionOn: Boolean
+        get() = prefs.getBoolean("companion", true)
+        set(v) { prefs.edit().putBoolean("companion", v).apply() }
     private var drawerPhoto: Bitmap? = null
 
     private val io = Executors.newSingleThreadExecutor()
@@ -125,7 +130,7 @@ class MainActivity : Activity() {
         // Picks up usage access granted in Settings, and keeps "Most used" fresh.
         if (sort == SORT_USED) refreshUsage()
         // The companion walks in through his door each time you come back home.
-        if (::companion.isInitialized && !drawerOpen) companion.arrive()
+        if (::companion.isInitialized && !drawerOpen && companionOn) companion.arrive()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -160,6 +165,7 @@ class MainActivity : Activity() {
 
         // Animated companion, behind the home icons so it never blocks a tap on them.
         companion = CompanionView(this)
+        if (!companionOn) companion.visibility = View.GONE
         root.addView(companion, FrameLayout.LayoutParams(-1, -1))
 
         // Home: one column of icons on the right.
@@ -211,12 +217,15 @@ class MainActivity : Activity() {
         organiserButton = barButton(R.drawable.ic_organiser, "Organiser") { showOrganiser(it) }
         hiddenButton = barButton(R.drawable.ic_hidden, "Hidden apps") { setShowHidden(!showHidden) }
         val backgroundButton = barButton(R.drawable.ic_photo, "Drawer background") { showBackgroundMenu(it) }
+        companionButton = barButton(R.drawable.ic_companion, "Companion on or off") { setCompanionOn(!companionOn) }
+        updateCompanionButton()
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             addView(organiserButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(14) })
             addView(hiddenButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14); marginEnd = dp(14) })
-            addView(backgroundButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14) })
+            addView(backgroundButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14); marginEnd = dp(14) })
+            addView(companionButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(14) })
         }
         drawer.addView(bottomBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
@@ -351,7 +360,7 @@ class MainActivity : Activity() {
         homeScroll.animate().cancel()
         homeScroll.visibility = View.VISIBLE
         companion.animate().cancel()
-        companion.visibility = View.VISIBLE
+        companion.visibility = if (companionOn) View.VISIBLE else View.GONE
         drawerBg.animate().cancel()
         if (!animate) {
             drawer.visibility = View.GONE
@@ -366,6 +375,25 @@ class MainActivity : Activity() {
         homeScroll.animate().alpha(1f).setStartDelay(60).setDuration(180).start()
         drawer.animate().alpha(0f).translationY(dp(40).toFloat()).setStartDelay(0).setDuration(150)
             .withEndAction { if (!drawerOpen) drawer.visibility = View.GONE }.start()
+    }
+
+    /** Turns the home-screen companion on or off; he walks in next time you close the drawer. */
+    private fun setCompanionOn(on: Boolean) {
+        companionOn = on
+        updateCompanionButton()
+        if (on) {
+            companion.alpha = 0f
+            companion.visibility = View.INVISIBLE // shown again when the drawer closes
+            companion.post { companion.arrive() }
+        } else {
+            companion.visibility = View.GONE
+        }
+    }
+
+    private fun updateCompanionButton() {
+        companionButton.setImageResource(if (companionOn) R.drawable.ic_companion else R.drawable.ic_companion_off)
+        companionButton.isSelected = companionOn
+        companionButton.contentDescription = if (companionOn) "Companion on" else "Companion off"
     }
 
     private fun setShowHidden(on: Boolean) {
