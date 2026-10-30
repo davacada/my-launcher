@@ -93,6 +93,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     override fun onResume() {
         super.onResume()
         immersive()
+        main.removeCallbacks(analyser)
+        main.postDelayed(analyser, 300)
         if (!hasPermissions()) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO), 1)
             return
@@ -101,7 +103,25 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         if (texture.isAvailable) openCamera()
     }
 
+    // Reads a small copy of the live picture ~10 times a second for the histogram, overlays and auto exposure.
+    private val analysis = Analysis()
+    private val analyser = object : Runnable {
+        override fun run() {
+            if (texture.isAvailable) {
+                try {
+                    texture.getBitmap(analysis.bitmap)
+                    val overlayPixels = analysis.run(engine.overlays)
+                    hist.setData(analysis.hist)
+                    overlay.setFrame(overlayPixels, analysis.w, analysis.h)
+                    engine.feedLuma(analysis.mean)
+                } catch (e: Exception) { }
+            }
+            main.postDelayed(this, 100)
+        }
+    }
+
     override fun onPause() {
+        main.removeCallbacks(analyser)
         saveSettings()
         engine.stop()
         main.removeCallbacks(ticker)
@@ -515,7 +535,6 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             "stab" -> { engine.settings.stab = !engine.settings.stab; engine.update() }
         }
         if (!o.peaking && !o.zebras && !o.falseColor) overlay.setFrame(null, 0, 0)
-        if ((o.peaking || o.zebras || o.falseColor) && highSpeedNow) say("Overlays aren't available while recording slow motion.")
         renderAll()
     }
 
@@ -727,7 +746,6 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     override fun onReady(highSpeed: Boolean, analysis: Boolean) {
         highSpeedNow = highSpeed
         updateTransform()
-        if (!analysis) overlay.setFrame(null, 0, 0)
         renderAll()
     }
 
@@ -741,8 +759,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     override fun onAnalysis(hist: IntArray, overlay: IntArray?, w: Int, h: Int) {
-        this.hist.setData(hist)
-        this.overlay.setFrame(overlay, w, h)
+        // Not used any more: the analyser above reads the on-screen picture instead.
     }
 
     override fun onRecording(recording: Boolean) {

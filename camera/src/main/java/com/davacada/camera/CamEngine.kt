@@ -300,7 +300,8 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             }
         }
 
-        val analysis = withAnalysis && !highSpeed && safeLevel < 1
+        // Histogram and overlays now come from the on-screen picture, so no extra camera stream is needed.
+        val analysis = false && withAnalysis
         if (analysis) c.analysisSize()?.let { size ->
             val ar = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 3)
             ar.setOnImageAvailableListener({ r -> r.acquireLatestImage()?.let { analyse(it) } }, bg)
@@ -533,6 +534,9 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
     }
 
     /** Keeps exposure right when the phone's own auto exposure can't be used. */
+    /** Average brightness of the picture (0–1), used to keep exposure right when the app runs it. */
+    fun feedLuma(mean: Float) { bg?.post { softAutoExposure(mean) } }
+
     private fun softAutoExposure(mean: Float) {
         if (!manualActive()) return
         val s = settings
@@ -769,7 +773,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         const val ERR_DISABLED = CameraDevice.StateCallback.ERROR_CAMERA_DISABLED
         val SAFE_TEXT = arrayOf(
             "",
-            "The camera hiccuped, so the live histogram and overlays are off for now.",
+            "The camera hiccuped, so it's restarting with a simpler setup.",
             "The camera hiccuped again, so it's using a simpler recording setup.",
             "Still having trouble, so it's using 1080p at 30 fps for now. Tap (i) to see details."
         )
