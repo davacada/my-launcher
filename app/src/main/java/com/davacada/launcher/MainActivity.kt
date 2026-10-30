@@ -131,6 +131,21 @@ class MainActivity : Activity() {
         if (sort == SORT_USED) refreshUsage()
         // The companion walks in through his door each time you come back home.
         if (::companion.isInitialized && !drawerOpen && companionOn) companion.arrive()
+        val filter = android.content.IntentFilter(EdgeListenerService.ACTION_COMPANION_NOTICE)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(noticeReceiver, filter, RECEIVER_NOT_EXPORTED)
+        else registerReceiver(noticeReceiver, filter)
+    }
+
+    override fun onPause() {
+        try { unregisterReceiver(noticeReceiver) } catch (e: Exception) { }
+        super.onPause()
+    }
+
+    /** A notification arrived while the home screen is showing: the companion notices it. */
+    private val noticeReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context, i: Intent) {
+            if (companionOn && !drawerOpen) companion.notice()
+        }
     }
 
     override fun onNewIntent(intent: Intent?) {

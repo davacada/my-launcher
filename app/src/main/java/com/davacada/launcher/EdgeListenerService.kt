@@ -61,6 +61,7 @@ class EdgeListenerService : NotificationListenerService() {
         val ranking = Ranking()
         if (currentRanking?.getRanking(sbn.key, ranking) == true && ranking.importance < android.app.NotificationManager.IMPORTANCE_DEFAULT) return
         if (!getSystemService(PowerManager::class.java).isInteractive) glow(EdgeGlowView.Kind.NOTIFICATION)
+        else sendBroadcast(Intent(ACTION_COMPANION_NOTICE).setPackage(packageName)) // the companion looks up
     }
 
     private fun onMedia(n: Notification) {
@@ -132,6 +133,10 @@ class EdgeListenerService : NotificationListenerService() {
             callOverlay?.let { v -> try { getSystemService(WindowManager::class.java).removeView(v) } catch (e: Exception) { } }
             callOverlay = null
         }
+    }
+
+    companion object {
+        const val ACTION_COMPANION_NOTICE = "com.davacada.launcher.COMPANION_NOTICE"
     }
 
     override fun onListenerDisconnected() { stopCall(); super.onListenerDisconnected() }
