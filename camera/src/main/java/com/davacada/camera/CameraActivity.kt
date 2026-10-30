@@ -38,9 +38,12 @@ import android.widget.TextView
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureListener {
+class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureListener, BmdRemote.Listener {
 
     private lateinit var engine: CamEngine
+    private lateinit var remote: BmdRemote
+    private lateinit var remoteButton: TextView
+    private var remoteDevices: List<android.bluetooth.BluetoothDevice> = emptyList()
     private lateinit var prefs: SharedPreferences
     private val main = Handler(Looper.getMainLooper())
 
@@ -84,6 +87,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("camera", MODE_PRIVATE)
         engine = CamEngine(this, this)
+        remote = BmdRemote(this, this)
         loadSettings()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         immersive()
@@ -120,7 +124,13 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         }
     }
 
+    override fun onDestroy() {
+        remote.disconnect()
+        super.onDestroy()
+    }
+
     override fun onPause() {
+        remote.stopScan()
         main.removeCallbacks(analyser)
         saveSettings()
         engine.stop()
@@ -130,6 +140,10 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 2) {
+            if (hasBtPermissions()) startRemoteScan() else say("Pro Camera needs Bluetooth access to talk to the camera.")
+            return
+        }
         if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             engine.start()
             if (texture.isAvailable) openCamera()
@@ -257,7 +271,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             background = glass()
             setPadding(dp(8), dp(4), dp(8), dp(4))
         }
-        resCell = Cell("RES") { if (engine.settings.video) showResPanel() else showFormatPanel() }
+        resCell = Cell("RES") { if (remote.connected) showRemoteMenu() else if (engine.settings.video) showResPanel() else showFormatPanel() }
         fpsCell = Cell("FPS") { showFpsPanel() }
         shutterCell = Cell("SHUTTER") { showShutterPanel() }
         isoCell = Cell("ISO") { showIsoPanel() }
@@ -320,7 +334,11 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         }
         afButton = TextView(this).apply {
             gravity = Gravity.CENTER; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setTypeface(Typeface.DEFAULT_BOLD)
-            setTextColor(Color.WHITE); setOnClickListener { engine.settings.af = !engine.settings.af; engine.update(); renderAll() }
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                if (remote.connected) { remote.autoFocus(); say("Autofocus on the camera."); return@setOnClickListener }
+                engine.settings.af = !engine.settings.af; engine.update(); renderAll()
+            }
         }
         focusRow.addView(afButton, LinearLayout.LayoutParams(dp(52), dp(40)))
         focusRow.addView(TextView(this).apply {
@@ -333,6 +351,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
                     if (!fromUser) return
+                    if (remote.connected) { remote.setFocus(p / 1000f); return }
                     engine.settings.focus = p / 1000f; engine.settings.af = false
                     engine.update(); renderFocus()
                 }
@@ -365,6 +384,13 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             setPadding(dp(12), 0, dp(12), 0)
             setOnClickListener { switchMode() }
         }
+        remoteButton = TextView(this).apply {
+            gravity = Gravity.CENTER; setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f); setTypeface(Typeface.DEFAULT_BOLD)
+            letterSpacing = 0.06f; setPadding(dp(10), 0, dp(10), 0)
+            contentDescription = "Blackmagic camera remote"
+            setOnClickListener { showRemoteMenu() }
+        }
+        right.addView(remoteButton, LinearLayout.LayoutParams(-2, dp(26)).apply { bottomMargin = dp(6) })
         right.addView(modeButton, LinearLayout.LayoutParams(-2, dp(30)).apply { bottomMargin = dp(8) })
         thumb = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -423,6 +449,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         }
         recordButton.photo = !s.video
         recordButton.recording = engine.recording
+        renderRemote()
         recordButton.contentDescription = if (!s.video) "Take photo" else if (engine.recording) "Stop recording" else "Start recording"
         modeButton.text = if (s.video) "VIDEO" else "PHOTO"
     }
@@ -494,6 +521,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     private fun shutter() {
+        if (remote.connected) { remote.toggleRecord(); return }
         val s = engine.settings
         if (!s.video) {
             engine.capturePhoto()
@@ -560,6 +588,122 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         main.postDelayed(hideToast, 3500)
     }
     private val hideToast = Runnable { toast.visibility = View.GONE }
+
+    // ------------------------------------------------------------------ Blackmagic remote
+
+    private fun hasBtPermissions(): Boolean =
+        if (android.os.Build.VERSION.SDK_INT >= 31)
+            checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        else checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun showRemoteMenu() {
+        if (!remote.available) { say("This phone has no Bluetooth."); return }
+        if (!hasBtPermissions()) {
+            val perms = if (android.os.Build.VERSION.SDK_INT >= 31)
+                arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+            else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+            requestPermissions(perms, 2)
+            return
+        }
+        if (remote.connected) { connectedRemotePanel(); return }
+        startRemoteScan()
+    }
+
+    private fun startRemoteScan() {
+        if (!remote.enabled) { say("Turn Bluetooth on, then tap REMOTE again."); return }
+        remoteDevices = emptyList()
+        remote.scan()
+        devicePanel()
+    }
+
+    private fun devicePanel() {
+        val opts = remoteDevices.map { d ->
+            @Suppress("MissingPermission") val name = d.name ?: d.address
+            Opt(name.takeLast(6), false) { remote.connect(d) }
+        }
+        showPanel(remoteButton, "BLACKMAGIC REMOTE", opts,
+            if (opts.isEmpty()) "Looking for your camera… On the Pocket 4K, turn Bluetooth on in Setup › Bluetooth, and keep it close."
+            else "Tap your camera. The first time, your phone asks for the 6-digit code shown on the camera's screen.",
+            columns = 2)
+    }
+
+    private fun connectedRemotePanel() {
+        val stops = listOf(1.8f, 2.8f, 4f, 5.6f, 8f, 11f, 16f)
+        val opts = ArrayList<Opt>()
+        stops.forEach { f -> opts.add(Opt("f/" + (if (f % 1f == 0f) f.toInt().toString() else f.toString()), kotlin.math.abs(remote.fStop - f) < 0.15f) { remote.setFStop(f) }) }
+        opts.add(Opt("AF", false) { remote.autoFocus() })
+        opts.add(Opt("OFF", false) { remote.disconnect(); say("Back to the phone's camera.") })
+        showPanel(remoteButton, "${remote.cameraName.uppercase()} · IRIS", opts,
+            "Record, ISO, shutter, white balance, frame rate and focus now control the camera. OFF switches back to the phone's camera.")
+    }
+
+    private fun remoteIsoPanel() {
+        val isos = listOf(100, 200, 400, 640, 800, 1250, 1600, 3200, 6400, 12800, 25600)
+        showPanel(isoCell, "ISO · CAMERA", isos.map { v -> Opt(v.toString(), remote.iso == v) { remote.setIso(v) } },
+            "The Pocket 4K has two native ISOs, 400 and 3200, where it's cleanest.")
+    }
+
+    private fun remoteShutterPanel() {
+        val angles = listOf(45f, 90f, 172.8f, 180f, 270f, 360f)
+        showPanel(shutterCell, "SHUTTER · CAMERA", angles.map { a ->
+            Opt(if (a % 1f == 0f) "${a.toInt()}°" else "$a°", kotlin.math.abs(remote.shutterAngle - a) < 0.5f) { remote.setShutterAngle(a) }
+        }, "172.8° avoids flicker from 50 Hz lights at 24 fps. 180° gives natural motion blur.", columns = 3)
+    }
+
+    private fun remoteWbPanel() {
+        val ks = listOf(0, 3200, 4000, 4500, 5600, 6500, 7500)
+        showPanel(wbCell, "WHITE BALANCE · CAMERA", ks.map { k ->
+            Opt(if (k == 0) "AUTO" else "${k}K", k != 0 && remote.whiteBalance == k) { if (k == 0) remote.autoWhiteBalance() else remote.setWhiteBalance(k, remote.tint) }
+        }, "AUTO sets the white balance once from what the camera sees.", columns = 4)
+    }
+
+    private fun remoteFpsPanel() {
+        val rates = listOf(24, 25, 30, 50, 60)
+        showPanel(fpsCell, "FRAME RATE · CAMERA", rates.map { f ->
+            Opt(f.toString(), remote.fps == f) {
+                if (!remote.setFps(f)) say("Change the frame rate once on the camera so the app learns its resolution, then try again.")
+            }
+        }, "Keeps the camera's current resolution and codec.")
+    }
+
+    private fun renderRemote() {
+        val on = remote.connected
+        remoteButton.text = when { on -> "POCKET"; remote.connecting -> "…"; else -> "REMOTE" }
+        remoteButton.setTextColor(if (on) 0xFF0D1117.toInt() else Color.WHITE)
+        remoteButton.background = pill(if (on) 0xFF33E07A.toInt() else 0x1FFFFFFF, dpf(13f))
+        if (!on) return
+        resCell.labelView.text = "CAMERA"; resCell.set(remote.cameraName.take(10))
+        fpsCell.visibility = View.VISIBLE
+        fpsCell.set(if (remote.fps > 0) remote.fps.toString() else "—")
+        shutterCell.set(if (remote.shutterAngle > 0) (if (remote.shutterAngle % 1f == 0f) "${remote.shutterAngle.toInt()}°" else "${remote.shutterAngle}°") else "—")
+        isoCell.set(if (remote.iso > 0) remote.iso.toString() else "—")
+        wbCell.set(if (remote.whiteBalance > 0) "${remote.whiteBalance}K" else "—")
+        remainingCell.labelView.text = "LINK"; remainingCell.set("BLUETOOTH")
+        if (remote.timecode.isNotEmpty()) timecode.text = remote.timecode
+        timecode.setTextColor(if (remote.recording) 0xFFFF6B61.toInt() else Color.WHITE)
+        recDot.visibility = if (remote.recording) View.VISIBLE else View.INVISIBLE
+        recordButton.photo = false
+        recordButton.recording = remote.recording
+        recordButton.contentDescription = if (remote.recording) "Stop recording on the camera" else "Start recording on the camera"
+        afButton.text = "AF"
+        focusText.text = "camera"
+    }
+
+    override fun onRemoteChanged() {
+        if (!remote.connected) resCell.labelView.text = "RES"
+        renderAll()
+    }
+
+    override fun onRemoteFound(devices: List<android.bluetooth.BluetoothDevice>) {
+        remoteDevices = devices
+        if (panel != null && !remote.connected && !remote.connecting) devicePanel()
+    }
+
+    override fun onRemoteMessage(msg: String) {
+        say(msg)
+        if (remote.connected) closePanel()
+    }
 
     // ------------------------------------------------------------------ panels
 
@@ -668,6 +812,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     private fun showFpsPanel() {
+        if (remote.connected) { remoteFpsPanel(); return }
         if (busy()) return
         val c = engine.caps ?: return
         val s = engine.settings
@@ -686,6 +831,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     private fun showShutterPanel() {
+        if (remote.connected) { remoteShutterPanel(); return }
         val c = engine.caps ?: return
         val s = engine.settings
         if (highSpeedNow) { say("Shutter is automatic in slow-motion mode."); return }
@@ -706,6 +852,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     private fun showIsoPanel() {
+        if (remote.connected) { remoteIsoPanel(); return }
         val c = engine.caps ?: return
         val s = engine.settings
         if (highSpeedNow) { say("ISO is automatic in slow-motion mode."); return }
@@ -719,6 +866,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     private fun showWbPanel() {
+        if (remote.connected) { remoteWbPanel(); return }
         val s = engine.settings
         if (highSpeedNow) { say("White balance is automatic in slow-motion mode."); return }
         val presets = listOf(0, 3000, 4000, 5500, 6500, 7500)

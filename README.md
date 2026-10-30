@@ -44,5 +44,8 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
 - Focal-length buttons: 16, 25, 35, 50 and 78 mm (full-frame equivalent). Each uses the widest real lens
   that reaches it and zooms in; longer ones are crops of the main sensor
 - Photos as JPG or RAW (DNG) + JPG; videos as H.265 where supported
+- **Blackmagic remote:** the REMOTE button pairs over Bluetooth with a Pocket Cinema Camera 4K (enter the code shown
+  on the camera). Record, ISO, shutter, white balance, frame rate, focus/autofocus and iris then control the camera,
+  and its timecode and recording light show in the top bar. Bluetooth carries settings only, not the picture
 - Volume buttons work as the shutter; the (i) button shows exactly what each lens supports
 - Files go to Movies/ProCamera and Pictures/ProCamera
