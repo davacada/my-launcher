@@ -353,7 +353,7 @@ class MainActivity : Activity() {
         ).forEach { (key, label, icon) ->
             panel.addView(menuRow(icon, label, selected = sort == key) {
                 dialog.dismiss()
-                setSort(key)
+                chooseSort(key)
             }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(1); bottomMargin = dp(1) })
         }
         dialog.setContentView(panel, ViewGroup.LayoutParams(menuW, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -421,7 +421,7 @@ class MainActivity : Activity() {
         get() = prefs.getString("sort", SORT_TYPE) ?: SORT_TYPE
         set(v) { prefs.edit().putString("sort", v).apply() }
 
-    private fun setSort(key: String) {
+    private fun chooseSort(key: String) {
         sort = key
         pager.goTo(0, smooth = false)
         if (key == SORT_USED && !hasUsageAccess()) {
