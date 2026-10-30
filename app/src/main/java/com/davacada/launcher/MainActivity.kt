@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -59,6 +60,7 @@ class MainActivity : Activity() {
     private lateinit var homeColumn: LinearLayout
     private lateinit var drawer: FrameLayout
     private lateinit var grid: GridView
+    private lateinit var homeScroll: ScrollView
 
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -125,7 +127,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
         }
-        val homeScroll = ScrollView(this).apply {
+        homeScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             addView(homeColumn)
@@ -151,7 +153,7 @@ class MainActivity : Activity() {
             setOnTouchListener(EmptySpaceTap { closeDrawer(animate = true) })
         }
         drawer = FrameLayout(this).apply {
-            setBackgroundColor(0xE0000000.toInt())
+            setBackgroundColor(Color.TRANSPARENT)
             visibility = View.GONE
             isClickable = true
             setOnClickListener { closeDrawer(animate = true) }
@@ -221,15 +223,22 @@ class MainActivity : Activity() {
         drawer.translationY = dp(40).toFloat()
         drawer.visibility = View.VISIBLE
         drawer.animate().alpha(1f).translationY(0f).setDuration(180).start()
+        homeScroll.animate().cancel()
+        homeScroll.animate().alpha(0f).setStartDelay(0).setDuration(120)
+            .withEndAction { if (drawerOpen) homeScroll.visibility = View.INVISIBLE }.start()
     }
 
     private fun closeDrawer(animate: Boolean) {
         drawerOpen = false
         drawer.animate().cancel()
+        homeScroll.animate().cancel()
+        homeScroll.visibility = View.VISIBLE
         if (!animate) {
             drawer.visibility = View.GONE
+            homeScroll.alpha = 1f
             return
         }
+        homeScroll.animate().alpha(1f).setStartDelay(60).setDuration(180).start()
         drawer.animate().alpha(0f).translationY(dp(40).toFloat()).setDuration(150)
             .withEndAction { if (!drawerOpen) drawer.visibility = View.GONE }.start()
     }
@@ -285,6 +294,31 @@ class MainActivity : Activity() {
     private fun homeKeys(): List<String> =
         prefs.getString("home", "").orEmpty().split("\n").filter { it.isNotEmpty() }
 
+    /** First run: put the phone's default Phone, Messages and Browser apps in the column. */
+    private fun seedHome(list: List<AppEntry>) {
+        val intents = listOf(
+            Intent(Intent.ACTION_DIAL),
+            Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:")),
+            Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com"))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+        )
+        val keys = (intents.mapNotNull { defaultAppFor(it, list)?.key } + homeKeys()).distinct()
+        prefs.edit().putString("home", keys.joinToString("\n")).putBoolean("seeded", true).apply()
+    }
+
+    private fun defaultAppFor(intent: Intent, list: List<AppEntry>): AppEntry? {
+        val mine = list.filter { it.info.user == Process.myUserHandle() }
+        fun appIn(pkg: String?) = mine.firstOrNull { it.info.componentName.packageName == pkg }
+        // The app the user picked as default for this action...
+        @Suppress("DEPRECATION")
+        val preferred = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        appIn(preferred?.activityInfo?.packageName)?.let { return it }
+        // ...or, if no default is set yet, the first installed app that can handle it.
+        @Suppress("DEPRECATION")
+        return packageManager.queryIntentActivities(intent, 0)
+            .firstNotNullOfOrNull { appIn(it.activityInfo.packageName) }
+    }
+
     private fun saveHome(keys: List<String>) {
         prefs.edit().putString("home", keys.joinToString("\n")).apply()
         renderHome()
@@ -313,6 +347,7 @@ class MainActivity : Activity() {
                 .sortedBy { it.label.lowercase() }
             main.post {
                 apps = list
+                if (!prefs.getBoolean("seeded", false) && list.isNotEmpty()) seedHome(list)
                 drawerAdapter.notifyDataSetChanged()
                 renderHome()
             }
