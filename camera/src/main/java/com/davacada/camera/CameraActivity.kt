@@ -390,7 +390,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             contentDescription = "Blackmagic camera remote"
             setOnClickListener { showRemoteMenu() }
         }
-        right.addView(remoteButton, LinearLayout.LayoutParams(-2, dp(26)).apply { bottomMargin = dp(6) })
+        // Remote lives at the top right of the top bar, after REMAINING.
+        top.addView(remoteButton, LinearLayout.LayoutParams(-2, dp(30)).apply { marginStart = dp(10); marginEnd = dp(4) })
         right.addView(modeButton, LinearLayout.LayoutParams(-2, dp(30)).apply { bottomMargin = dp(8) })
         thumb = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
