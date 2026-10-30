@@ -87,7 +87,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("camera", MODE_PRIVATE)
         engine = CamEngine(this, this)
-        remote = BmdRemote(this, this)
+        remote = sharedRemote?.also { it.listener = this } ?: BmdRemote(applicationContext, this).also { sharedRemote = it }
         loadSettings()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         immersive()
@@ -108,7 +108,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     // Reads a small copy of the live picture ~10 times a second for the histogram, overlays and auto exposure.
-    private val analysis = Analysis()
+    private var analysis = Analysis()
     private val analyser = object : Runnable {
         override fun run() {
             if (texture.isAvailable) {
@@ -125,7 +125,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     override fun onDestroy() {
-        remote.disconnect()
+        // Turning the phone rebuilds the screen; keep the Bluetooth link to the camera through that.
+        if (!isChangingConfigurations) { remote.disconnect(); sharedRemote = null }
         super.onDestroy()
     }
 
@@ -209,8 +210,15 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             m.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
             m.postScale(scale, scale, cx, cy)
             m.postRotate(90f * (rotation - 2), cx, cy)
-        } else if (rotation == Surface.ROTATION_180) {
-            m.postRotate(180f, cx, cy)
+        } else {
+            // Upright: the picture arrives already turned; fit 9:16 inside the view without stretching.
+            val s2 = min(vw / ph, vh / pw)
+            m.setScale(ph * s2 / vw, pw * s2 / vh, cx, cy)
+            if (rotation == Surface.ROTATION_180) m.postRotate(180f, cx, cy)
+            texture.setTransform(m)
+            val dw2 = ph * s2; val dh2 = pw * s2
+            overlay.previewRect = RectF(cx - dw2 / 2, cy - dh2 / 2, cx + dw2 / 2, cy + dh2 / 2)
+            return
         }
         texture.setTransform(m)
         val dw = pw * scale; val dh = ph * scale
@@ -257,7 +265,12 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         fun set(v: String, enabled: Boolean = true) { valueView.text = v; alpha = if (enabled) 1f else 0.4f }
     }
 
+    private var portraitUi = false
+
     private fun buildUi(): View {
+        portraitUi = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        val portrait = portraitUi
+        analysis = if (portrait) Analysis(90, 160) else Analysis(160, 90)
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         texture = TextureView(this).also { it.surfaceTextureListener = this }
         root.addView(texture, FrameLayout.LayoutParams(-1, -1))
@@ -276,7 +289,17 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         shutterCell = Cell("SHUTTER") { showShutterPanel() }
         isoCell = Cell("ISO") { showIsoPanel() }
         wbCell = Cell("WB") { showWbPanel() }
-        listOf(resCell, fpsCell, shutterCell, isoCell, wbCell).forEach { top.addView(it, LinearLayout.LayoutParams(-2, dp(44))) }
+        // Upright: settings fill the first row; timecode, remaining and remote go on a second row.
+        val topWrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = glass() }
+        val top2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), 0, dp(8), dp(4))
+        }
+        if (portrait) { top.background = null; topWrap.addView(top, LinearLayout.LayoutParams(-1, dp(52))); topWrap.addView(top2, LinearLayout.LayoutParams(-1, dp(40))) }
+        val row2 = if (portrait) top2 else top
+        listOf(resCell, fpsCell, shutterCell, isoCell, wbCell).forEach {
+            if (portrait) { it.setPadding(dp(4), 0, dp(4), 0); top.addView(it, LinearLayout.LayoutParams(0, dp(44), 1f)) }
+            else top.addView(it, LinearLayout.LayoutParams(-2, dp(44)))
+        }
         val tcBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         recDot = View(this).apply { background = pill(0xFFFF3B30.toInt(), dpf(5f)); visibility = View.INVISIBLE }
         tcBox.addView(recDot, LinearLayout.LayoutParams(dp(10), dp(10)).apply { marginEnd = dp(8) })
@@ -285,11 +308,12 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             fontFeatureSettings = "tnum"; letterSpacing = 0.04f; setTextColor(Color.WHITE); text = "00:00:00:00"
         }
         tcBox.addView(timecode)
-        top.addView(tcBox, LinearLayout.LayoutParams(0, dp(44), 1f))
+        row2.addView(tcBox, LinearLayout.LayoutParams(0, dp(if (portrait) 36 else 44), 1f))
         remainingCell = Cell("REMAINING", null).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.END }
         remainingCell.labelView.gravity = Gravity.END; remainingCell.valueView.gravity = Gravity.END
-        top.addView(remainingCell, LinearLayout.LayoutParams(-2, dp(44)))
-        root.addView(top, FrameLayout.LayoutParams(-1, dp(52), Gravity.TOP))
+        row2.addView(remainingCell, LinearLayout.LayoutParams(-2, dp(if (portrait) 36 else 44)))
+        if (portrait) root.addView(topWrap, FrameLayout.LayoutParams(-1, dp(92), Gravity.TOP))
+        else root.addView(top, FrameLayout.LayoutParams(-1, dp(52), Gravity.TOP))
 
         // left rail: overlay toggles + info
         val left = LinearLayout(this).apply {
@@ -317,15 +341,19 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             setPadding(dp(11), dp(11), dp(11), dp(11)); alpha = 0.8f
             setOnClickListener { showInfoPanel() }
         }, LinearLayout.LayoutParams(dp(44), dp(44)))
-        root.addView(left, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { topMargin = dp(62); leftMargin = dp(10) })
+        root.addView(left, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { topMargin = dp(if (portrait) 102 else 62); leftMargin = dp(10) })
 
         // histogram + meter
         hist = HistogramView(this).apply { background = glass(0x80, dpf(12f)); setPadding(dp(6), dp(6), dp(6), dp(6)) }
-        root.addView(hist, FrameLayout.LayoutParams(dp(150), dp(60), Gravity.BOTTOM or Gravity.START).apply { leftMargin = dp(72); bottomMargin = dp(12) })
+        root.addView(hist, FrameLayout.LayoutParams(dp(150), dp(60), Gravity.BOTTOM or Gravity.START).apply {
+            leftMargin = dp(if (portrait) 10 else 72); bottomMargin = dp(if (portrait) 222 else 12)
+        })
         val meterBox = FrameLayout(this).apply { background = glass(0x80, dpf(12f)); setPadding(0, dp(8), 0, dp(8)) }
         meter = AudioMeterView(this)
         meterBox.addView(meter, FrameLayout.LayoutParams(-1, -1))
-        root.addView(meterBox, FrameLayout.LayoutParams(dp(34), dp(60), Gravity.BOTTOM or Gravity.START).apply { leftMargin = dp(232); bottomMargin = dp(12) })
+        root.addView(meterBox, FrameLayout.LayoutParams(dp(34), dp(60), Gravity.BOTTOM or Gravity.START).apply {
+            leftMargin = dp(if (portrait) 168 else 232); bottomMargin = dp(if (portrait) 222 else 12)
+        })
 
         // focus bar
         val focusRow = LinearLayout(this).apply {
@@ -362,7 +390,10 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         focusRow.addView(focusBar, LinearLayout.LayoutParams(0, -2, 1f))
         focusText = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setTextColor(Color.WHITE); gravity = Gravity.END }
         focusRow.addView(focusText, LinearLayout.LayoutParams(dp(48), -2))
-        root.addView(focusRow, FrameLayout.LayoutParams(-1, dp(52), Gravity.BOTTOM).apply { leftMargin = dp(280); rightMargin = dp(110); bottomMargin = dp(16) })
+        root.addView(focusRow, FrameLayout.LayoutParams(-1, dp(52), Gravity.BOTTOM).apply {
+            if (portrait) { leftMargin = dp(10); rightMargin = dp(10); bottomMargin = dp(162) }
+            else { leftMargin = dp(280); rightMargin = dp(110); bottomMargin = dp(16) }
+        })
 
         // right rail
         val right = LinearLayout(this).apply {
@@ -391,8 +422,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             setOnClickListener { showRemoteMenu() }
         }
         // Remote lives at the top right of the top bar, after REMAINING.
-        top.addView(remoteButton, LinearLayout.LayoutParams(-2, dp(30)).apply { marginStart = dp(10); marginEnd = dp(4) })
-        right.addView(modeButton, LinearLayout.LayoutParams(-2, dp(30)).apply { bottomMargin = dp(8) })
+        row2.addView(remoteButton, LinearLayout.LayoutParams(-2, dp(30)).apply { marginStart = dp(10); marginEnd = dp(4) })
+        if (!portrait) right.addView(modeButton, LinearLayout.LayoutParams(-2, dp(30)).apply { bottomMargin = dp(8) })
         thumb = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = GradientDrawable().apply { setColor(0xFF2C3440.toInt()); cornerRadius = dpf(10f); setStroke(dp(2), 0xB3FFFFFF.toInt()) }
@@ -400,8 +431,28 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             contentDescription = "Open last capture"
             setOnClickListener { openLast() }
         }
-        right.addView(thumb, LinearLayout.LayoutParams(dp(40), dp(40)))
-        root.addView(right, FrameLayout.LayoutParams(dp(98), -1, Gravity.END).apply { topMargin = dp(52) })
+        if (!portrait) {
+            right.addView(thumb, LinearLayout.LayoutParams(dp(40), dp(40)))
+            root.addView(right, FrameLayout.LayoutParams(dp(98), -1, Gravity.END).apply { topMargin = dp(52) })
+        } else {
+            // Upright: focal lengths in a row, then thumbnail · record · mode, all within thumb reach.
+            (lensColumn.parent as? ViewGroup)?.removeView(lensColumn)
+            (recordButton.parent as? ViewGroup)?.removeView(recordButton)
+            lensColumn.orientation = LinearLayout.HORIZONTAL
+            val bottom = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                background = glass(0x73); setPadding(dp(16), dp(10), dp(16), dp(14))
+            }
+            bottom.addView(lensColumn, LinearLayout.LayoutParams(-2, dp(34)))
+            val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            controls.addView(thumb, LinearLayout.LayoutParams(dp(44), dp(44)))
+            controls.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+            controls.addView(recordButton, LinearLayout.LayoutParams(dp(76), dp(76)))
+            controls.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+            controls.addView(modeButton, LinearLayout.LayoutParams(-2, dp(32)))
+            bottom.addView(controls, LinearLayout.LayoutParams(-1, dp(84)).apply { topMargin = dp(6) })
+            root.addView(bottom, FrameLayout.LayoutParams(-1, dp(152), Gravity.BOTTOM))
+        }
 
         // little message strip
         toast = TextView(this).apply {
@@ -409,7 +460,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             background = glass(0xD0, dpf(14f)); setPadding(dp(14), dp(10), dp(14), dp(10)); visibility = View.GONE
             maxWidth = dp(420)
         }
-        root.addView(toast, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL or Gravity.TOP).apply { topMargin = dp(64) })
+        root.addView(toast, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL or Gravity.TOP).apply { topMargin = dp(if (portrait) 104 else 64) })
 
         renderAll()
         return root
@@ -494,7 +545,9 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         lensColumn.addView(TextView(this).apply {
             text = "MM"; gravity = Gravity.CENTER; setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
             letterSpacing = 0.08f; setTextColor(0xFFB9C2CF.toInt())
-        }, LinearLayout.LayoutParams(dp(50), -2).apply { bottomMargin = dp(3) })
+        }, LinearLayout.LayoutParams(if (portraitUi) -2 else dp(50), -2).apply {
+            if (portraitUi) { marginEnd = dp(8); gravity = Gravity.CENTER_VERTICAL } else bottomMargin = dp(3)
+        })
         lenses.forEachIndexed { i, l ->
             val on = i == lensIdx
             lensColumn.addView(TextView(this).apply {
@@ -505,7 +558,9 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
                 alpha = if (l.available) 1f else 0.3f
                 contentDescription = "${l.label} millimetre lens"
                 setOnClickListener { pickLens(i) }
-            }, LinearLayout.LayoutParams(dp(50), dp(28)).apply { bottomMargin = dp(4) })
+            }, LinearLayout.LayoutParams(dp(if (portraitUi) 52 else 50), dp(28)).apply {
+                if (portraitUi) { marginStart = dp(3); marginEnd = dp(3) } else bottomMargin = dp(4)
+            })
         }
     }
 
@@ -916,6 +971,9 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         recDot.visibility = if (recording) View.VISIBLE else View.INVISIBLE
         timecode.setTextColor(if (recording) 0xFFFF6B61.toInt() else Color.WHITE)
         if (recording) { recStart = System.nanoTime(); main.post(ticker) } else { main.removeCallbacks(ticker); meter.level = 0f }
+        // Don't let the screen turn mid-clip: that would restart the camera.
+        requestedOrientation = if (recording) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LOCKED
+            else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR
         renderAll()
     }
 
@@ -1002,6 +1060,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     }
 
     companion object {
+        private var sharedRemote: BmdRemote? = null
         val ISO_STOPS = listOf(50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000, 10000, 12800)
     }
 }

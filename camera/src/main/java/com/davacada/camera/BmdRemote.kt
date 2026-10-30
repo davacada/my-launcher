@@ -34,7 +34,7 @@ import kotlin.math.sqrt
  * never the picture.
  */
 @SuppressLint("MissingPermission")
-class BmdRemote(private val ctx: Context, private val listener: Listener) {
+class BmdRemote(private val ctx: Context, var listener: Listener) {
 
     interface Listener {
         fun onRemoteChanged()
