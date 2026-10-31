@@ -237,12 +237,15 @@ class MainActivity : Activity() {
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            val slot = { LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(8); marginEnd = dp(8) } }
+            val slot = { LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginStart = dp(4); marginEnd = dp(4) } }
             addView(organiserButton, slot())
             addView(hiddenButton, slot())
             addView(backgroundButton, slot())
             addView(companionButton, slot())
             addView(barButton(R.drawable.ic_edge, "Edge lighting") { showEdgeMenu(it) }, slot())
+            addView(barButton(R.drawable.ic_trash, "Trash") {
+                startActivity(Intent(this@MainActivity, TrashActivity::class.java))
+            }, slot())
         }
         drawer.addView(bottomBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 

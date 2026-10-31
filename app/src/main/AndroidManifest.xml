@@ -3,6 +3,16 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- Trash: see what's in Android's trash. All files access shows everything; the media ones are the fallback. -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <!-- Edge lighting: wake into the glow when the screen is off, and draw the call border. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Only used for "Most used" sorting; Android asks the user to allow it in Settings. -->
@@ -64,6 +74,36 @@
             android:taskAffinity="com.davacada.launcher.edge"
             android:screenOrientation="portrait"
             android:theme="@style/EdgeTheme" />
+
+        <activity
+            android:name=".TrashActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.davacada.launcher.trash"
+            android:theme="@style/TrashTheme" />
+
+        <!-- Share any photo, video or file to "Move to trash". -->
+        <activity
+            android:name=".TrashShareActivity"
+            android:exported="true"
+            android:label="Move to trash"
+            android:icon="@drawable/ic_trash_share"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="com.davacada.launcher.trashshare"
+            android:theme="@style/InvisibleTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
 
         <service
             android:name=".EdgeOffService"

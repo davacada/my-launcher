@@ -33,6 +33,10 @@ New builds install straight over the old one; your home column is kept.
   black with a soft orange glow that breathes round the edges until you wake the phone, a new song gives a purple one, and an incoming call gets a cyan pulse
   round the call screen. Needs notification access and "display over other apps"; the menu has previews.
   The glow stops when you tap the screen or press power (or after 30 minutes)
+- **Trash** (bin icon at the bottom of the drawer): everything in Android's trash, with thumbnails and days left
+  (Android deletes items for good after 30 days). Tap items to select, then *Restore* or *Delete forever*, or *Empty*.
+  Shows everything with "all files access", or just photos, videos and music without it. From any app's share menu,
+  *Move to trash* sends a photo, video or file there
 - **Add an app to the home column:** long-press it in the drawer, tap *Add to home*
 - **Reorder or remove:** long-press an icon in the column
 - **Close the drawer:** Back, Home, or tap empty space
