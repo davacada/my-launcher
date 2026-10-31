@@ -50,6 +50,7 @@ class Caps(val chars: CameraCharacteristics) {
     private val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
     private val capabilities = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
 
+    val hasFlash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
     val isFront = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
     val manualSensor = REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in capabilities
     val manualPost = REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities

@@ -47,7 +47,9 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
 - **Slow motion** (in the frame-rate menu): shoot at 120 or 240 fps and play back at 24, 30 or 60 fps (e.g. 240→24 is 10x slower, 120→60 is 2x and extra smooth), no sound
 - White balance slider from 2500K to 6500K, with 4000K as neutral daylight (lower is cooler, higher warmer), or AUTO
 - Shutter angle (video) or speed (photo), ISO, manual focus with distance readout
-- Focus peaking, zebras, false colour, grid, stabilisation, live histogram, audio meter, timecode
+- Focus peaking, zebras and false colour (grouped behind one button on the left), grid, stabilisation, live histogram, audio meter, timecode
+- Flash (above the front-camera button): photos off / on / auto, video a steady light. On the front camera the screen flashes
+  white for photos and becomes a white ring light for video
 - Focal-length buttons: 16, 25, 35, 50 and 78 mm (full-frame equivalent), plus the front (selfie) camera button under the (i) button on the left. Each uses the widest real lens
   that reaches it and zooms in; longer ones are crops of the main sensor
 - Photos as JPG or RAW (DNG) + JPG; videos as H.265 where supported

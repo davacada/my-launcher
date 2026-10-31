@@ -53,6 +53,7 @@ class Settings {
     var wb = 0            // 0 = auto, otherwise kelvin on the app's scale (4000K = daylight neutral)
     var slowMo = false    // recorded at fps (120 or more), saved to play back at slowPlay fps
     var slowPlay = 24     // 24, 30 or 60
+    var flash = 0         // 0 off, 1 on, 2 auto (auto is for photos only)
     var af = true
     var focus = 1f        // 0 = closest, 1 = infinity (manual focus)
     var stab = true
@@ -395,6 +396,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         val b = dev.createCaptureRequest(template)
         targets.forEach { b.addTarget(it) }
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        if ((torch || flashing) && c.hasFlash && !c.isFront) b.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
 
         if (manualActive()) {
             b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
@@ -740,6 +742,24 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
 
     private var pendingRawResult: TotalCaptureResult? = null
     private var pendingRawImage: Image? = null
+
+    /** The back camera's light kept on (video "flash"). */
+    private var torch = false
+    /** Light on just for a photo. */
+    private var flashing = false
+
+    fun setTorch(on: Boolean) { bg?.post { if (torch != on) { torch = on; repeat() } } }
+
+    /**
+     * Photo with the back flash: the light comes on, auto exposure gets ~half a second to adjust to it,
+     * the photo is taken with the light still on, then it goes off. Works with manual ISO/shutter too.
+     */
+    fun capturePhotoWithFlash() {
+        val h = bg ?: return
+        h.post { flashing = true; repeat() }
+        h.postDelayed({ capturePhoto() }, 550)
+        h.postDelayed({ flashing = false; repeat() }, 1100)
+    }
 
     fun capturePhoto() {
         bg?.post {

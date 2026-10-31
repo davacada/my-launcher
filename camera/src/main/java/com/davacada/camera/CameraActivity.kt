@@ -51,6 +51,11 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
     private var lensIdx = 0
     private var lastBackIdx = -1
     private var frontButton: ImageView? = null
+    private var flashButton: ImageView? = null
+    private var assistButton: ImageView? = null
+    private var assistRow: LinearLayout? = null
+    private var ringLight: View? = null
+    private var screenFlash: View? = null
 
     // views
     private lateinit var root: FrameLayout
@@ -323,34 +328,55 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             background = glass(0x73, dpf(28f))
             setPadding(dp(6), dp(6), dp(6), dp(6))
         }
+        fun toggleButton(key: String, icon: Int, desc: String) = ImageView(this).apply {
+            setImageResource(icon); contentDescription = desc
+            setPadding(dp(11), dp(11), dp(11), dp(11))
+            setOnClickListener { flipToggle(key) }
+        }.also { toggles[key] = it }
+
+        // Exposure assists (peaking, zebras, false colour) live together behind one button; it opens a row beside the rail.
+        val leftTop = dp(if (portrait) 102 else 62)
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = glass(0x8C, dpf(28f)); setPadding(dp(6), dp(6), dp(6), dp(6)); visibility = View.GONE
+        }
         listOf(
             Triple("peaking", R.drawable.ic_peaking, "Focus peaking"),
             Triple("zebras", R.drawable.ic_zebras, "Zebras"),
             Triple("falseColor", R.drawable.ic_falsecolor, "False colour"),
-            Triple("grid", R.drawable.ic_grid, "Grid"),
-            Triple("stab", R.drawable.ic_stab, "Stabilisation")
         ).forEach { (key, icon, desc) ->
-            val b = ImageView(this).apply {
-                setImageResource(icon); contentDescription = desc
-                setPadding(dp(11), dp(11), dp(11), dp(11))
-                setOnClickListener { flipToggle(key) }
-            }
-            toggles[key] = b
-            left.addView(b, LinearLayout.LayoutParams(dp(44), dp(44)).apply { bottomMargin = dp(4) })
+            row.addView(toggleButton(key, icon, desc), LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(4) })
         }
+        assistRow = row
+        assistButton = ImageView(this).apply {
+            setImageResource(R.drawable.ic_assist); contentDescription = "Peaking, zebras and false colour"
+            setPadding(dp(11), dp(11), dp(11), dp(11))
+            setOnClickListener { row.visibility = if (row.visibility == View.VISIBLE) View.GONE else View.VISIBLE; renderAll() }
+        }
+        left.addView(assistButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply { bottomMargin = dp(4) })
+        left.addView(toggleButton("grid", R.drawable.ic_grid, "Grid"), LinearLayout.LayoutParams(dp(44), dp(44)).apply { bottomMargin = dp(4) })
+        left.addView(toggleButton("stab", R.drawable.ic_stab, "Stabilisation"), LinearLayout.LayoutParams(dp(44), dp(44)).apply { bottomMargin = dp(4) })
         left.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_info); contentDescription = "What this camera can do"
             setPadding(dp(11), dp(11), dp(11), dp(11)); alpha = 0.8f
             setOnClickListener { showInfoPanel() }
         }, LinearLayout.LayoutParams(dp(44), dp(44)))
-        // Front (selfie) camera on/off, under the info button.
+        // Flash: the back camera's light, or a white screen on the front camera. Above the front-camera button.
+        flashButton = ImageView(this).apply {
+            setImageResource(R.drawable.ic_flash_off); contentDescription = "Flash"
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setOnClickListener { cycleFlash() }
+        }
+        left.addView(flashButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(4) })
+        // Front (selfie) camera on/off, under the flash button.
         frontButton = ImageView(this).apply {
             setImageResource(R.drawable.ic_front); contentDescription = "Switch to the front camera"
             setPadding(dp(10), dp(10), dp(10), dp(10))
             setOnClickListener { toggleFront() }
         }
         left.addView(frontButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(4) })
-        root.addView(left, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { topMargin = dp(if (portrait) 102 else 62); leftMargin = dp(10) })
+        root.addView(left, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { topMargin = leftTop; leftMargin = dp(10) })
+        root.addView(row, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { topMargin = leftTop; leftMargin = dp(74) })
 
         // histogram + meter
         hist = HistogramView(this).apply { background = glass(0x80, dpf(12f)); setPadding(dp(6), dp(6), dp(6), dp(6)) }
@@ -470,6 +496,16 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         }
         root.addView(toast, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL or Gravity.TOP).apply { topMargin = dp(if (portrait) 104 else 64) })
 
+        // Front-camera lights: a white ring round the picture for video (under the controls),
+        // and a full white screen for a photo flash (over everything).
+        ringLight = View(this).apply {
+            background = GradientDrawable().apply { setColor(Color.TRANSPARENT); setStroke(dp(34), Color.WHITE) }
+            visibility = View.GONE
+        }
+        root.addView(ringLight, (root.indexOfChild(texture) + 1).coerceAtMost(root.childCount), FrameLayout.LayoutParams(-1, -1))
+        screenFlash = View(this).apply { setBackgroundColor(Color.WHITE); visibility = View.GONE }
+        root.addView(screenFlash, FrameLayout.LayoutParams(-1, -1))
+
         renderAll()
         return root
     }
@@ -507,6 +543,13 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             v.background = if (active) pill(on, dpf(22f)) else null
             v.setColorFilter(if (active) 0xFF0D1117.toInt() else Color.WHITE)
         }
+        assistButton?.let { b ->
+            val any = engine.overlays.peaking || engine.overlays.zebras || engine.overlays.falseColor
+            val open = assistRow?.visibility == View.VISIBLE
+            b.background = if (any) pill(on, dpf(22f)) else if (open) pill(0x33FFFFFF, dpf(22f)) else null
+            b.setColorFilter(if (any) 0xFF0D1117.toInt() else Color.WHITE)
+        }
+        renderFlash()
         recordButton.photo = !s.video
         recordButton.recording = engine.recording
         renderRemote()
@@ -596,7 +639,10 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         if (remote.connected) { remote.toggleRecord(); return }
         val s = engine.settings
         if (!s.video) {
-            engine.capturePhoto()
+            val useFlash = s.flash == 1 || (s.flash == 2 && analysis.mean < 0.22f)
+            val front = lenses.getOrNull(lensIdx)?.front == true
+            if (useFlash && front) { screenFlashPhoto(); return }
+            if (useFlash && engine.caps?.hasFlash == true) engine.capturePhotoWithFlash() else engine.capturePhoto()
             root.foreground = ColorDrawable(0x66FFFFFF)
             main.postDelayed({ root.foreground = null }, 90)
             return
@@ -609,6 +655,51 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         engine.settings.video = !engine.settings.video
         engine.reconfigure()
         renderAll()
+    }
+
+    // ------------------------------------------------------------------ flash
+
+    /** Photo: off → on → auto. Video: off ↔ on (a steady light; a white ring on the front camera). */
+    private fun cycleFlash() {
+        val s = engine.settings
+        val front = lenses.getOrNull(lensIdx)?.front == true
+        if (!front && engine.caps?.hasFlash == false) { say("This lens has no flash."); return }
+        s.flash = if (s.video) (if (s.flash == 0) 1 else 0) else (s.flash + 1) % 3
+        say(when (s.flash) { 1 -> if (s.video) (if (front) "Ring light on" else "Light on") else "Flash on"; 2 -> "Flash auto"; else -> "Flash off" })
+        renderAll()
+    }
+
+    /** Keeps the flash icon, the back light and the front ring light in step with mode, lens and setting. */
+    private fun renderFlash() {
+        val s = engine.settings
+        if (s.video && s.flash == 2) s.flash = 0
+        val front = lenses.getOrNull(lensIdx)?.front == true
+        flashButton?.let { b ->
+            b.setImageResource(when (s.flash) { 1 -> R.drawable.ic_flash_on; 2 -> R.drawable.ic_flash_auto; else -> R.drawable.ic_flash_off })
+            val lit = s.flash != 0
+            b.background = if (lit) pill(0xE6FFFFFF.toInt(), dpf(22f)) else null
+            b.setColorFilter(if (lit) 0xFF0D1117.toInt() else Color.WHITE)
+            b.alpha = if (!front && engine.caps?.hasFlash == false) 0.35f else 1f
+            b.contentDescription = when (s.flash) { 1 -> "Flash on"; 2 -> "Flash auto"; else -> "Flash off" }
+        }
+        engine.setTorch(s.video && s.flash == 1 && !front)
+        val ring = s.video && s.flash == 1 && front
+        ringLight?.visibility = if (ring) View.VISIBLE else View.GONE
+        setFullBrightness(ring || screenFlash?.visibility == View.VISIBLE)
+    }
+
+    private fun setFullBrightness(on: Boolean) {
+        val want = if (on) 1f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        if (window.attributes.screenBrightness != want) window.attributes = window.attributes.apply { screenBrightness = want }
+    }
+
+    /** Front-camera photo flash: the whole screen goes bright white, the camera adjusts, the photo is taken. */
+    private fun screenFlashPhoto() {
+        val f = screenFlash ?: return
+        f.visibility = View.VISIBLE
+        setFullBrightness(true)
+        main.postDelayed({ engine.capturePhoto() }, 600)
+        main.postDelayed({ f.visibility = View.GONE; renderFlash() }, 1000)
     }
 
     /** Front camera on, or back to the back lens you were using. */
@@ -1079,6 +1170,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         s.shutterAngle = prefs.getInt("angle", 180).takeIf { it > 0 }
         s.iso = prefs.getInt("iso", -1).takeIf { it > 0 }
         s.photoShutterNs = prefs.getLong("photoShutter", -1L).takeIf { it > 0 }
+        s.flash = prefs.getInt("flash", 0).coerceIn(0, 2)
         s.wb = prefs.getInt("wb", 0).let { if (it == 0) 0 else it.coerceIn(WhiteBalance.MIN, WhiteBalance.MAX) }
         s.slowMo = prefs.getBoolean("slowMo", false)
         s.slowPlay = prefs.getInt("slowPlay", 24).let { if (it in listOf(24, 30, 60)) it else 24 }
@@ -1098,7 +1190,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         prefs.edit()
             .putBoolean("video", s.video).putInt("fps", s.fps)
             .putInt("angle", s.shutterAngle ?: -1).putInt("iso", s.iso ?: -1)
-            .putLong("photoShutter", s.photoShutterNs ?: -1L).putInt("wb", s.wb).putBoolean("slowMo", s.slowMo).putInt("slowPlay", s.slowPlay)
+            .putInt("flash", s.flash).putLong("photoShutter", s.photoShutterNs ?: -1L).putInt("wb", s.wb).putBoolean("slowMo", s.slowMo).putInt("slowPlay", s.slowPlay)
             .putBoolean("af", s.af).putFloat("focus", s.focus).putBoolean("stab", s.stab).putBoolean("raw", s.raw)
             .putString("res", s.res?.label ?: "4K")
             .putBoolean("zebras", engine.overlays.zebras).putBoolean("peaking", engine.overlays.peaking)
