@@ -49,6 +49,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
 
     private var lenses: List<Lens> = emptyList()
     private var lensIdx = 0
+    private var lastBackIdx = -1
+    private var frontButton: ImageView? = null
 
     // views
     private lateinit var root: FrameLayout
@@ -341,6 +343,13 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             setPadding(dp(11), dp(11), dp(11), dp(11)); alpha = 0.8f
             setOnClickListener { showInfoPanel() }
         }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        // Front (selfie) camera on/off, under the info button.
+        frontButton = ImageView(this).apply {
+            setImageResource(R.drawable.ic_front); contentDescription = "Switch to the front camera"
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setOnClickListener { toggleFront() }
+        }
+        left.addView(frontButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(4) })
         root.addView(left, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { topMargin = dp(if (portrait) 102 else 62); leftMargin = dp(10) })
 
         // histogram + meter
@@ -547,7 +556,15 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         }, LinearLayout.LayoutParams(dp(50), -2).apply {
             bottomMargin = dp(3)
         })
+        val onFront = lenses.getOrNull(lensIdx)?.front == true
+        frontButton?.let { b ->
+            b.visibility = if (lenses.any { it.front }) View.VISIBLE else View.GONE
+            b.background = if (onFront) pill(0xE6FFFFFF.toInt(), dpf(22f)) else null
+            b.setColorFilter(if (onFront) 0xFF0D1117.toInt() else Color.WHITE)
+            b.contentDescription = if (onFront) "Switch to the back camera" else "Switch to the front camera"
+        }
         lenses.forEachIndexed { i, l ->
+            if (l.front) return@forEachIndexed
             val on = i == lensIdx
             lensColumn.addView(TextView(this).apply {
                 text = l.label; gravity = Gravity.CENTER
@@ -592,6 +609,19 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         engine.settings.video = !engine.settings.video
         engine.reconfigure()
         renderAll()
+    }
+
+    /** Front camera on, or back to the back lens you were using. */
+    private fun toggleFront() {
+        val cur = lenses.getOrNull(lensIdx) ?: return
+        if (cur.front) {
+            val back = lastBackIdx.takeIf { lenses.getOrNull(it)?.let { l -> !l.front && l.available } == true }
+                ?: lenses.indexOfFirst { it.isMain }.coerceAtLeast(0)
+            pickLens(back)
+        } else {
+            val f = lenses.indexOfFirst { it.front }
+            if (f >= 0) { lastBackIdx = lensIdx; pickLens(f) }
+        }
     }
 
     private fun pickLens(i: Int) {

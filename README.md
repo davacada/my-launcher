@@ -48,7 +48,7 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
 - White balance slider from 2500K to 6500K, with 4000K as neutral daylight (lower is cooler, higher warmer), or AUTO
 - Shutter angle (video) or speed (photo), ISO, manual focus with distance readout
 - Focus peaking, zebras, false colour, grid, stabilisation, live histogram, audio meter, timecode
-- Focal-length buttons: 16, 25, 35, 50 and 78 mm (full-frame equivalent), plus FRONT for the selfie camera. Each uses the widest real lens
+- Focal-length buttons: 16, 25, 35, 50 and 78 mm (full-frame equivalent), plus the front (selfie) camera button under the (i) button on the left. Each uses the widest real lens
   that reaches it and zooms in; longer ones are crops of the main sensor
 - Photos as JPG or RAW (DNG) + JPG; videos as H.265 where supported
 - **Blackmagic remote:** the REMOTE button (top right) pairs over Bluetooth with a Pocket Cinema Camera 4K (enter the code shown
