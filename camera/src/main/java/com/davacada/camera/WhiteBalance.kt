@@ -50,54 +50,71 @@ object WhiteBalance {
     }
 }
 
-/** Slow motion: a clip shot at a high frame rate is re-timed so it plays back at [playFps]. */
+/**
+ * Slow motion: a clip shot at a high frame rate is re-timed so every frame is shown for exactly 1/[playFps]
+ * of a second. Spacing the frames perfectly evenly (instead of stretching the camera's slightly uneven
+ * timestamps) is what makes playback smooth. Returns the saved clip and the frame rate the camera really shot.
+ */
 object SlowMo {
-    fun save(ctx: Context, src: File, shotFps: Int, playFps: Int): Uri? {
-        val factor = shotFps.toDouble() / playFps
+    fun save(ctx: Context, src: File, playFps: Int): Pair<Uri, Int>? {
         val ex = MediaExtractor().apply { setDataSource(src.absolutePath) }
-        val track = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
-            ?: run { ex.release(); return null }
-        val fmt = ex.getTrackFormat(track)
-        fmt.setInteger(MediaFormat.KEY_FRAME_RATE, playFps)
-        ex.selectTrack(track)
-        val rotation = try {
-            MediaMetadataRetriever().run { setDataSource(src.absolutePath); val r = extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION); release(); r?.toIntOrNull() ?: 0 }
-        } catch (e: Exception) { 0 }
-
-        val name = "PRO_SLOMO_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
-        val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, name)
-            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/ProCamera")
-            put(MediaStore.Video.Media.IS_PENDING, 1)
-        }
-        val uri = ctx.contentResolver.insert(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values) ?: run { ex.release(); return null }
         try {
-            ctx.contentResolver.openFileDescriptor(uri, "rw")!!.use { pfd ->
-                val mux = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-                mux.setOrientationHint(rotation)
-                val out = mux.addTrack(fmt)
-                mux.start()
-                val cap = if (fmt.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) fmt.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE) else 8 * 1024 * 1024
-                val buf = ByteBuffer.allocateDirect(cap.coerceAtLeast(2 * 1024 * 1024))
-                val info = MediaCodec.BufferInfo()
-                var first = -1L
-                while (true) {
-                    val n = ex.readSampleData(buf, 0)
-                    if (n < 0) break
-                    val t = ex.sampleTime
-                    if (first < 0) first = t
-                    info.set(0, n, ((t - first) * factor).toLong(), if ((ex.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
-                    mux.writeSampleData(out, buf, info)
-                    ex.advance()
-                }
-                mux.stop(); mux.release()
+            val track = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
+                ?: return null
+            val fmt = ex.getTrackFormat(track)
+            ex.selectTrack(track)
+
+            // pass 1: every frame's presentation time, to put the frames in display order
+            val times = ArrayList<Long>()
+            while (true) { val t = ex.sampleTime; if (t < 0) break; times.add(t); ex.advance() }
+            if (times.size < 2) return null
+            val sorted = times.sorted()
+            val rank = HashMap<Long, Int>(sorted.size * 2)
+            sorted.forEachIndexed { i, t -> rank.putIfAbsent(t, i) }
+            val shotFps = ((sorted.size - 1) * 1_000_000.0 / (sorted.last() - sorted.first()).coerceAtLeast(1)).let { Math.round(it).toInt() }
+            val step = 1_000_000.0 / playFps
+
+            fmt.setInteger(MediaFormat.KEY_FRAME_RATE, playFps)
+            val rotation = try {
+                MediaMetadataRetriever().run { setDataSource(src.absolutePath); val r = extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION); release(); r?.toIntOrNull() ?: 0 }
+            } catch (e: Exception) { 0 }
+
+            val name = "PRO_SLOMO_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
+            val values = ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, name)
+                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/ProCamera")
+                put(MediaStore.Video.Media.IS_PENDING, 1)
             }
-            ctx.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
-            return uri
-        } catch (e: Exception) {
-            ctx.contentResolver.delete(uri, null, null)
-            throw e
+            val uri = ctx.contentResolver.insert(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values) ?: return null
+            try {
+                ctx.contentResolver.openFileDescriptor(uri, "rw")!!.use { pfd ->
+                    val mux = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                    mux.setOrientationHint(rotation)
+                    val out = mux.addTrack(fmt)
+                    mux.start()
+                    val cap = if (fmt.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) fmt.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE) else 0
+                    val buf = ByteBuffer.allocateDirect(cap.coerceAtLeast(8 * 1024 * 1024))
+                    val info = MediaCodec.BufferInfo()
+                    // pass 2: copy the frames untouched, each at its evenly spaced new time
+                    ex.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                    while (true) {
+                        val n = ex.readSampleData(buf, 0)
+                        if (n < 0) break
+                        val i = rank[ex.sampleTime] ?: break
+                        val key = (ex.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+                        info.set(0, n, Math.round(i * step), if (key) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
+                        mux.writeSampleData(out, buf, info)
+                        ex.advance()
+                    }
+                    mux.stop(); mux.release()
+                }
+                ctx.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                return uri to shotFps
+            } catch (e: Exception) {
+                ctx.contentResolver.delete(uri, null, null)
+                throw e
+            }
         } finally { ex.release() }
     }
 }

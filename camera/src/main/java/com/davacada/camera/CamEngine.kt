@@ -255,7 +255,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
 
         val s = settings
         val res = s.res
-        val plan = if (s.video && res != null) c.plan(res.size, s.fps) else null
+        val plan = if (s.video && res != null) planFor(c, res.size) else null
         highSpeed = plan?.highSpeed == true
         aeLocked = plan?.aeLocked ?: true
 
@@ -711,8 +711,12 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             val tmp = recTmp; recTmp = null
             if (tmp != null) {
                 if (ok) {
-                    val saved = try { SlowMo.save(ctx, tmp, settings.fps, 24) } catch (e: Exception) { log("slow-motion save failed: ${e.message}"); null }
-                    if (saved != null) main.post { listener.onSaved(saved, true) } else problem("The slow-motion clip couldn't be saved.")
+                    val saved = try { SlowMo.save(ctx, tmp, 24) } catch (e: Exception) { log("slow-motion save failed: ${e.message}"); null }
+                    if (saved != null) {
+                        log("slow motion: camera delivered ${saved.second} fps")
+                        main.post { listener.onSaved(saved.first, true) }
+                        if (saved.second < 90) problem("The camera only delivered ${saved.second} fps, so this clip is less slow than 5x.")
+                    } else problem("The slow-motion clip couldn't be saved.")
                 }
                 tmp.delete()
             }
@@ -814,7 +818,13 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
     fun currentPlan(): Plan? {
         val c = caps ?: return null
         val r = settings.res ?: return null
-        return c.plan(r.size, settings.fps)
+        return planFor(c, r.size)
+    }
+
+    /** Slow motion always uses the camera's real 120 fps high-speed mode when it has one, so every frame is a new one. */
+    private fun planFor(c: Caps, size: Size): Plan? {
+        if (settings.slowMo && settings.fps in c.highSpeedFps(size)) return Plan(highSpeed = true, aeLocked = true)
+        return c.plan(size, settings.fps)
     }
 
     fun previewBufferSize(): Size {
