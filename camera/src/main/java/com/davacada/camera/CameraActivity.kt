@@ -473,7 +473,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         if (s.video) {
             resCell.set(s.res?.label ?: "—")
             fpsCell.visibility = View.VISIBLE
-            fpsCell.set(if (s.slowMo) "120→24" else s.fps.toString() + if (engine.currentPlan()?.highSpeed == true) " S" else "")
+            fpsCell.set(if (s.slowMo) "${s.fps}→24" else s.fps.toString() + if (engine.currentPlan()?.highSpeed == true) " S" else "")
             val angle = s.shutterAngle
             val den = if (angle != null) (s.fps * 360f / angle).roundToInt() else 0
             shutterCell.set(if (angle != null && !highSpeedNow) "$angle° · 1/$den" else "A " + expText(meterExp), c?.manualSensor != false && !highSpeedNow)
@@ -852,7 +852,6 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         val s = engine.settings
         showPanel(resCell, "RESOLUTION", c.resolutions.map { r ->
             Opt(r.label, r.size == s.res?.size) {
-                if (r.size != s.res?.size) s.slowMo = false
                 s.res = r; engine.pickDefaults(); engine.reconfigure()
             }
         }, "8K and 4K record as H.265 where the phone allows it, otherwise H.264. Only resolutions this lens can record are listed.")
@@ -879,14 +878,18 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
                 s.fps = f; s.slowMo = false; engine.reconfigure()
             }
         }.toMutableList()
-        // Slow motion: 1080p shot at 120 fps, saved to play at 24 fps (5x slower, no sound).
-        val hd = c.resolutions.firstOrNull { it.label == "1080p" }
-        opts.add(Opt("SLO-MO", s.slowMo, hd != null && c.plan(hd.size, 120) != null) {
-            s.res = hd; s.fps = 120; s.slowMo = true; engine.reconfigure()
-        })
+        // Slow motion: shot at a high speed, saved to play at 24 fps (no sound). Uses this resolution if it can,
+        // otherwise 1080p, otherwise 720p.
+        listOf(120, 240, 480, 960).forEach { f ->
+            val res = listOf(r) + c.resolutions.filter { it.label == "1080p" } + c.resolutions.filter { it.label == "720p" }
+            val pick = res.firstOrNull { c.plan(it.size, f) != null }
+            opts.add(Opt("SLO $f", s.slowMo && s.fps == f, pick != null) {
+                s.res = pick; s.fps = f; s.slowMo = true; engine.reconfigure()
+            })
+        }
         val hs = Caps.FPS.filter { c.plan(r.size, it)?.highSpeed == true }
         val note = StringBuilder("Speeds your phone can't record at ${r.label} are greyed out.")
-        note.append(" SLO-MO records 1080p at 120 fps and saves it to play at 24 fps: 5x slower, without sound.")
+        note.append(" SLO speeds save the clip to play at 24 fps without sound: SLO 120 is 5x slower, 240 is 10x, 480 is 20x, 960 is 40x. They switch to 1080p or 720p if this resolution can't go that fast.")
         if (hs.isNotEmpty()) note.append(" \"S\" speeds use slow-motion mode, where ISO, shutter and white balance are automatic.")
         if (c.plan(r.size, s.fps)?.aeLocked == false) note.append(" At ${s.fps} fps the app runs exposure itself; set ISO or shutter for full control.")
         showPanel(fpsCell, "FRAME RATE · ${r.label}", opts, note.toString())

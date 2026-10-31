@@ -51,7 +51,7 @@ class Settings {
     var photoShutterNs: Long? = null
     var iso: Int? = null
     var wb = 0            // 0 = auto, otherwise kelvin on the app's scale (4000K = daylight neutral)
-    var slowMo = false    // 1080p recorded at 120 fps, saved to play back at 24 fps (5x slower)
+    var slowMo = false    // recorded at fps (120 or more), saved to play back at 24 fps
     var af = true
     var focus = 1f        // 0 = closest, 1 = infinity (manual focus)
     var stab = true
@@ -235,7 +235,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             s.res = c.resolutions.firstOrNull { it.label == "4K" } ?: c.resolutions.firstOrNull()
         }
         val r = s.res ?: return
-        if (s.slowMo && (r.label != "1080p" || s.fps != 120 || c.plan(r.size, 120) == null)) s.slowMo = false
+        if (s.slowMo && (s.fps < 100 || c.plan(r.size, s.fps) == null)) s.slowMo = false
         if (c.plan(r.size, s.fps) == null) {
             s.fps = Caps.FPS.firstOrNull { it in 24..30 && c.plan(r.size, it) != null }
                 ?: Caps.FPS.firstOrNull { c.plan(r.size, it) != null } ?: 30
@@ -639,7 +639,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             val res = settings.res ?: return@post
             val deferred = safeLevel >= 2
             val surface = if (deferred) null else (recSurface ?: return@post)
-            val mime = Encoders.best(res.size, settings.fps) ?: return@post
+            val mime = Encoders.best(res.size, settings.fps) ?: Encoders.best(res.size, 30) ?: return@post
             val slow = settings.slowMo
             try {
                 if (slow) {
@@ -715,7 +715,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
                     if (saved != null) {
                         log("slow motion: camera delivered ${saved.second} fps")
                         main.post { listener.onSaved(saved.first, true) }
-                        if (saved.second < 90) problem("The camera only delivered ${saved.second} fps, so this clip is less slow than 5x.")
+                        if (saved.second < settings.fps * 3 / 4) problem("Asked for ${settings.fps} fps but the camera delivered ${saved.second} fps, so this clip is ${"%.1f".format(saved.second / 24f)}x slower instead of ${settings.fps / 24}x.")
                     } else problem("The slow-motion clip couldn't be saved.")
                 }
                 tmp.delete()

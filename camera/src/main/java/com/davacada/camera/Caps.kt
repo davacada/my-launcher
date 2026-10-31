@@ -91,10 +91,10 @@ class Caps(val chars: CameraCharacteristics) {
 
     /** How a given resolution + frame rate would be recorded, or null if it can't be. */
     fun plan(size: Size, fps: Int): Plan? {
-        if (Encoders.best(size, fps) == null) return null
-        val normalOk = fps <= maxNormalFps(size) && (aeSupports(fps) || manualSensor)
+        val normalOk = fps <= maxNormalFps(size) && (aeSupports(fps) || manualSensor) && Encoders.best(size, fps) != null
         if (normalOk) return Plan(highSpeed = false, aeLocked = aeSupports(fps))
-        if (fps > 30 && highSpeedFps(size).contains(fps)) return Plan(highSpeed = true, aeLocked = true)
+        // The camera's own slow-motion mode: encoders often under-report what they manage here, so only require the size.
+        if (fps > 30 && highSpeedFps(size).contains(fps) && Encoders.best(size, 30) != null) return Plan(highSpeed = true, aeLocked = true)
         return null
     }
 
@@ -139,7 +139,7 @@ class Caps(val chars: CameraCharacteristics) {
     }
 
     companion object {
-        val FPS = listOf(24, 25, 30, 50, 60, 100, 120)
+        val FPS = listOf(24, 25, 30, 50, 60, 100, 120, 240, 480, 960)
         val CANDIDATES = listOf(
             "8K" to Size(7680, 4320),
             "4K" to Size(3840, 2160),
