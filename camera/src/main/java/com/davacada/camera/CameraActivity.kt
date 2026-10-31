@@ -551,11 +551,11 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
             val on = i == lensIdx
             lensColumn.addView(TextView(this).apply {
                 text = l.label; gravity = Gravity.CENTER
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setTypeface(Typeface.DEFAULT_BOLD)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, if (l.front) 10f else 13f); setTypeface(Typeface.DEFAULT_BOLD)
                 setTextColor(if (on) 0xFF0D1117.toInt() else Color.WHITE)
                 background = pill(if (on) Color.WHITE else 0x1FFFFFFF, dpf(14f))
                 alpha = if (l.available) 1f else 0.3f
-                contentDescription = "${l.label} millimetre lens"
+                contentDescription = if (l.front) "Front camera" else "${l.label} millimetre lens"
                 setOnClickListener { pickLens(i) }
             }, LinearLayout.LayoutParams(dp(50), dp(28)).apply {
                 bottomMargin = dp(4)

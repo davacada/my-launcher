@@ -36,10 +36,11 @@ class Lens(
     val available: Boolean = true,
     val main: Boolean = false,
     val hidden: Boolean = false,
-    val reason: String = ""
+    val reason: String = "",
+    val front: Boolean = false
 ) {
     val isMain: Boolean get() = main
-    val label: String get() = mm.toString()
+    val label: String get() = if (front) "FRONT" else mm.toString()
     /** True when this focal length is a crop beyond the lens's optical view (some softness). */
     val digital: Boolean get() = ratio > 1.05f
 }
@@ -49,6 +50,7 @@ class Caps(val chars: CameraCharacteristics) {
     private val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
     private val capabilities = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
 
+    val isFront = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
     val manualSensor = REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in capabilities
     val manualPost = REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities
     val raw = REQUEST_AVAILABLE_CAPABILITIES_RAW in capabilities
@@ -214,6 +216,18 @@ class Caps(val chars: CameraCharacteristics) {
                     out.add(Lens(mainId, mainChars, mm, 1f, available = false,
                         reason = "$mm mm is wider than this phone lets apps go (≈ ${widest.toInt()} mm)."))
                 }
+            }
+            // The front (selfie) camera, as its own button after the focal lengths.
+            listed.firstNotNullOfOrNull { id ->
+                try {
+                    val c = mgr.getCameraCharacteristics(id)
+                    if (c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT &&
+                        Caps(c).resolutions.isNotEmpty()) id to c else null
+                } catch (e: Exception) { null }
+            }?.let { (id, c) ->
+                val mm = Caps(c).equivFocal().takeIf { it > 5f }?.toInt() ?: 24
+                out.add(Lens(id, c, mm, 1f, front = true))
+                nativeSummary += ", front camera ≈ $mm mm"
             }
             return out
         }

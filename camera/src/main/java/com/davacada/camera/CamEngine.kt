@@ -612,7 +612,8 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
     private fun orientationHint(): Int {
         val c = caps ?: return 0
         val deg = when (displayRotation) { Surface.ROTATION_90 -> 90; Surface.ROTATION_270 -> 270; Surface.ROTATION_180 -> 180; else -> 0 }
-        return (c.sensorOrientation - deg + 360) % 360
+        // The front camera faces the other way, so its rotation adds instead of subtracting.
+        return if (c.isFront) (c.sensorOrientation + deg) % 360 else (c.sensorOrientation - deg + 360) % 360
     }
 
     private fun setupRecorder(r: MediaRecorder, surface: Surface?, size: Size, fps: Int, mime: String, withAudio: Boolean, output: MediaRecorder.() -> Unit) {
