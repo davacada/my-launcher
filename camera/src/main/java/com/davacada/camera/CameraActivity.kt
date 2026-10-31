@@ -473,7 +473,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         if (s.video) {
             resCell.set(s.res?.label ?: "—")
             fpsCell.visibility = View.VISIBLE
-            fpsCell.set(s.fps.toString() + if (engine.currentPlan()?.highSpeed == true) " S" else "")
+            fpsCell.set(if (s.slowMo) "120→24" else s.fps.toString() + if (engine.currentPlan()?.highSpeed == true) " S" else "")
             val angle = s.shutterAngle
             val den = if (angle != null) (s.fps * 360f / angle).roundToInt() else 0
             shutterCell.set(if (angle != null && !highSpeedNow) "$angle° · 1/$den" else "A " + expText(meterExp), c?.manualSensor != false && !highSpeedNow)
@@ -852,6 +852,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         val s = engine.settings
         showPanel(resCell, "RESOLUTION", c.resolutions.map { r ->
             Opt(r.label, r.size == s.res?.size) {
+                if (r.size != s.res?.size) s.slowMo = false
                 s.res = r; engine.pickDefaults(); engine.reconfigure()
             }
         }, "8K and 4K record as H.265 where the phone allows it, otherwise H.264. Only resolutions this lens can record are listed.")
@@ -874,12 +875,18 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         val r = s.res ?: return
         val opts = Caps.FPS.map { f ->
             val plan = c.plan(r.size, f)
-            Opt(if (plan?.highSpeed == true) "$f S" else f.toString(), f == s.fps, plan != null) {
-                s.fps = f; engine.reconfigure()
+            Opt(if (plan?.highSpeed == true) "$f S" else f.toString(), f == s.fps && !s.slowMo, plan != null) {
+                s.fps = f; s.slowMo = false; engine.reconfigure()
             }
-        }
+        }.toMutableList()
+        // Slow motion: 1080p shot at 120 fps, saved to play at 24 fps (5x slower, no sound).
+        val hd = c.resolutions.firstOrNull { it.label == "1080p" }
+        opts.add(Opt("SLO-MO", s.slowMo, hd != null && c.plan(hd.size, 120) != null) {
+            s.res = hd; s.fps = 120; s.slowMo = true; engine.reconfigure()
+        })
         val hs = Caps.FPS.filter { c.plan(r.size, it)?.highSpeed == true }
         val note = StringBuilder("Speeds your phone can't record at ${r.label} are greyed out.")
+        note.append(" SLO-MO records 1080p at 120 fps and saves it to play at 24 fps: 5x slower, without sound.")
         if (hs.isNotEmpty()) note.append(" \"S\" speeds use slow-motion mode, where ISO, shutter and white balance are automatic.")
         if (c.plan(r.size, s.fps)?.aeLocked == false) note.append(" At ${s.fps} fps the app runs exposure itself; set ISO or shutter for full control.")
         showPanel(fpsCell, "FRAME RATE · ${r.label}", opts, note.toString())
@@ -924,10 +931,15 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         if (remote.connected) { remoteWbPanel(); return }
         val s = engine.settings
         if (highSpeedNow) { say("White balance is automatic in slow-motion mode."); return }
-        val presets = listOf(0, 3000, 4000, 5500, 6500, 7500)
-        showPanel(wbCell, "WHITE BALANCE", presets.map { k ->
-            Opt(if (k == 0) "AUTO" else "${k}K", s.wb == k) { s.wb = k; engine.update() }
-        }, "3000K for indoor bulbs, 4000K for office light, 5500K for daylight, 6500K for clouds, 7500K for shade.", columns = 3)
+        val steps = (WhiteBalance.MAX - WhiteBalance.MIN) / WhiteBalance.STEP
+        val start = if (s.wb == 0) WhiteBalance.NEUTRAL else s.wb
+        fun k(i: Int) = WhiteBalance.MIN + i * WhiteBalance.STEP
+        showPanel(wbCell, "WHITE BALANCE", listOf(
+            Opt("AUTO", s.wb == 0) { s.wb = 0; engine.update() },
+            Opt("4000K", s.wb == WhiteBalance.NEUTRAL) { s.wb = WhiteBalance.NEUTRAL; engine.update() },
+        ), "4000K is neutral daylight. Slide left for a cooler picture (or to correct warm indoor light), right for warmer.",
+            slider = Triple(steps, (start - WhiteBalance.MIN) / WhiteBalance.STEP, { i: Int -> if (k(i) == WhiteBalance.NEUTRAL) "4000K ☀" else "${k(i)}K" }),
+            onSlide = { i -> s.wb = k(i); engine.update() }, columns = 2)
     }
 
     private fun showInfoPanel() {
@@ -1032,7 +1044,8 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         s.shutterAngle = prefs.getInt("angle", 180).takeIf { it > 0 }
         s.iso = prefs.getInt("iso", -1).takeIf { it > 0 }
         s.photoShutterNs = prefs.getLong("photoShutter", -1L).takeIf { it > 0 }
-        s.wb = prefs.getInt("wb", 0)
+        s.wb = prefs.getInt("wb", 0).let { if (it == 0) 0 else it.coerceIn(WhiteBalance.MIN, WhiteBalance.MAX) }
+        s.slowMo = prefs.getBoolean("slowMo", false)
         s.af = prefs.getBoolean("af", true)
         s.focus = prefs.getFloat("focus", 1f)
         s.stab = prefs.getBoolean("stab", true)
@@ -1049,7 +1062,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         prefs.edit()
             .putBoolean("video", s.video).putInt("fps", s.fps)
             .putInt("angle", s.shutterAngle ?: -1).putInt("iso", s.iso ?: -1)
-            .putLong("photoShutter", s.photoShutterNs ?: -1L).putInt("wb", s.wb)
+            .putLong("photoShutter", s.photoShutterNs ?: -1L).putInt("wb", s.wb).putBoolean("slowMo", s.slowMo)
             .putBoolean("af", s.af).putFloat("focus", s.focus).putBoolean("stab", s.stab).putBoolean("raw", s.raw)
             .putString("res", s.res?.label ?: "4K")
             .putBoolean("zebras", engine.overlays.zebras).putBoolean("peaking", engine.overlays.peaking)

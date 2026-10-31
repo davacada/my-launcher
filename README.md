@@ -43,7 +43,9 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
 
 - Resolution (8K, 4K, 1080p, 720p) and frame rate (24, 25, 30, 50, 60, 100, 120): only what your phone can
   actually record is offered; "S" speeds use the phone's slow-motion mode
-- Shutter angle (video) or speed (photo), ISO, white balance presets, manual focus with distance readout
+- **SLO-MO** (in the frame-rate menu): 1080p shot at 120 fps and saved to play back at 24 fps, 5x slower (no sound)
+- White balance slider from 2500K to 6500K, with 4000K as neutral daylight (lower is cooler, higher warmer), or AUTO
+- Shutter angle (video) or speed (photo), ISO, manual focus with distance readout
 - Focus peaking, zebras, false colour, grid, stabilisation, live histogram, audio meter, timecode
 - Focal-length buttons: 16, 25, 35, 50 and 78 mm (full-frame equivalent). Each uses the widest real lens
   that reaches it and zooms in; longer ones are crops of the main sensor

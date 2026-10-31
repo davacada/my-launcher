@@ -7,6 +7,8 @@ import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession
 import android.hardware.camera2.CameraDevice
@@ -48,7 +50,8 @@ class Settings {
     var shutterAngle: Int? = 180
     var photoShutterNs: Long? = null
     var iso: Int? = null
-    var wb = 0            // 0 = auto, otherwise a preset in kelvin
+    var wb = 0            // 0 = auto, otherwise kelvin on the app's scale (4000K = daylight neutral)
+    var slowMo = false    // 1080p recorded at 120 fps, saved to play back at 24 fps (5x slower)
     var af = true
     var focus = 1f        // 0 = closest, 1 = infinity (manual focus)
     var stab = true
@@ -91,6 +94,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
     private var recorder: MediaRecorder? = null
     private var recPfd: ParcelFileDescriptor? = null
     private var recUri: Uri? = null
+    private var recTmp: java.io.File? = null   // slow motion records here first, then gets retimed
     private var highSpeed = false
     private var aeLocked = true
     private var configToken = 0
@@ -231,6 +235,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             s.res = c.resolutions.firstOrNull { it.label == "4K" } ?: c.resolutions.firstOrNull()
         }
         val r = s.res ?: return
+        if (s.slowMo && (r.label != "1080p" || s.fps != 120 || c.plan(r.size, 120) == null)) s.slowMo = false
         if (c.plan(r.size, s.fps) == null) {
             s.fps = Caps.FPS.firstOrNull { it in 24..30 && c.plan(r.size, it) != null }
                 ?: Caps.FPS.firstOrNull { c.plan(r.size, it) != null } ?: 30
@@ -406,15 +411,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         }
 
         if (!highSpeed) {
-            val awb = when (s.wb) {
-                0 -> CameraMetadata.CONTROL_AWB_MODE_AUTO
-                in 1..3400 -> CameraMetadata.CONTROL_AWB_MODE_INCANDESCENT
-                in 3401..4600 -> CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT
-                in 4601..6000 -> CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT
-                in 6001..7000 -> CameraMetadata.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT
-                else -> CameraMetadata.CONTROL_AWB_MODE_SHADE
-            }
-            b.set(CaptureRequest.CONTROL_AWB_MODE, awb)
+            applyWhiteBalance(b, c)
 
             if (s.af || c.minFocus <= 0f) {
                 b.set(CaptureRequest.CONTROL_AF_MODE,
@@ -441,8 +438,53 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         return b
     }
 
+    // ------------------------------------------------------------------ white balance (slider in kelvin)
+
+    /** The camera's own daylight colour gains and matrix, learned from a frame shot in daylight mode. */
+    private var dayGains: RggbChannelVector? = null
+    private var dayMatrix: ColorSpaceTransform? = null
+    private var wbCaps: Caps? = null
+
+    private fun manualWbOk(c: Caps): Boolean = c.manualPost
+
+    private fun applyWhiteBalance(b: CaptureRequest.Builder, c: Caps) {
+        val k = settings.wb
+        if (k == 0) { b.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO); return }
+        val real = WhiteBalance.realKelvin(k)
+        val g = dayGains; val m = dayMatrix
+        if (manualWbOk(c) && g != null && m != null && wbCaps === c) {
+            val (fr, fb) = WhiteBalance.factors(real)
+            b.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_OFF)
+            b.set(CaptureRequest.COLOR_CORRECTION_MODE, CameraMetadata.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            b.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, m)
+            b.set(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector(g.red * fr, g.greenEven, g.greenOdd, g.blue * fb))
+            return
+        }
+        // Not learned yet (or the lens can't take exact values): use the nearest built-in mode.
+        // Daylight mode is also what teaches us the daylight gains on the next frame.
+        val mode = if (manualWbOk(c)) CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT else when {
+            real < 3500 -> CameraMetadata.CONTROL_AWB_MODE_INCANDESCENT
+            real < 4600 -> CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT
+            real < 6200 -> CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT
+            real < 7500 -> CameraMetadata.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT
+            else -> CameraMetadata.CONTROL_AWB_MODE_SHADE
+        }
+        b.set(CaptureRequest.CONTROL_AWB_MODE, mode)
+    }
+
+    private fun learnDaylight(result: TotalCaptureResult) {
+        if (result.get(CaptureResult.CONTROL_AWB_MODE) != CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT) return
+        val c = caps ?: return
+        val g = result.get(CaptureResult.COLOR_CORRECTION_GAINS) ?: return
+        val m = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM) ?: return
+        val first = dayGains == null || wbCaps !== c
+        dayGains = g; dayMatrix = m; wbCaps = c
+        if (first && settings.wb != 0 && manualWbOk(c)) bg?.post { repeat() }
+    }
+
     private val resultCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+            learnDaylight(result)
             val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: return
             val exp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: return
             if (!manualActive()) { meteredIso = iso; meteredExp = exp }
@@ -598,7 +640,19 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             val deferred = safeLevel >= 2
             val surface = if (deferred) null else (recSurface ?: return@post)
             val mime = Encoders.best(res.size, settings.fps) ?: return@post
+            val slow = settings.slowMo
             try {
+                if (slow) {
+                    val tmp = java.io.File(ctx.cacheDir, "slowmo_${System.currentTimeMillis()}.mp4")
+                    val r = newRecorder()
+                    setupRecorder(r, surface, res.size, settings.fps, mime, withAudio = false) { setOutputFile(tmp.absolutePath) }
+                    r.prepare()
+                    recorder = r; recTmp = tmp; recUri = null; recPfd = null
+                    recording = true
+                    if (deferred) { pendingStart = r; configure() }
+                    else { repeat(); r.start(); log("slow-motion recording started"); main.post { listener.onRecording(true) } }
+                    return@post
+                }
                 val name = "PRO_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
                 val values = ContentValues().apply {
                     put(MediaStore.Video.Media.DISPLAY_NAME, name)
@@ -637,6 +691,7 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
         recorder = null
         recPfd?.close(); recPfd = null
         recUri?.let { ctx.contentResolver.delete(it, null, null) }; recUri = null
+        recTmp?.delete(); recTmp = null
         if (safeLevel >= 2) configure() else repeat()
         problem(msg)
         main.post { listener.onRecording(false) }
@@ -653,6 +708,14 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             if (safeLevel >= 2 && device != null) configure()
             recPfd?.close(); recPfd = null
             val uri = recUri; recUri = null
+            val tmp = recTmp; recTmp = null
+            if (tmp != null) {
+                if (ok) {
+                    val saved = try { SlowMo.save(ctx, tmp, settings.fps, 24) } catch (e: Exception) { log("slow-motion save failed: ${e.message}"); null }
+                    if (saved != null) main.post { listener.onSaved(saved, true) } else problem("The slow-motion clip couldn't be saved.")
+                }
+                tmp.delete()
+            }
             if (uri != null) {
                 if (ok) {
                     ctx.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
