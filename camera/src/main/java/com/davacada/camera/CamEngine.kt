@@ -51,7 +51,8 @@ class Settings {
     var photoShutterNs: Long? = null
     var iso: Int? = null
     var wb = 0            // 0 = auto, otherwise kelvin on the app's scale (4000K = daylight neutral)
-    var slowMo = false    // recorded at fps (120 or more), saved to play back at 24 fps
+    var slowMo = false    // recorded at fps (120 or more), saved to play back at slowPlay fps
+    var slowPlay = 24     // 24, 30 or 60
     var af = true
     var focus = 1f        // 0 = closest, 1 = infinity (manual focus)
     var stab = true
@@ -711,11 +712,11 @@ class CamEngine(private val ctx: Context, private val listener: EngineListener) 
             val tmp = recTmp; recTmp = null
             if (tmp != null) {
                 if (ok) {
-                    val saved = try { SlowMo.save(ctx, tmp, 24) } catch (e: Exception) { log("slow-motion save failed: ${e.message}"); null }
+                    val saved = try { SlowMo.save(ctx, tmp, settings.slowPlay) } catch (e: Exception) { log("slow-motion save failed: ${e.message}"); null }
                     if (saved != null) {
                         log("slow motion: camera delivered ${saved.second} fps")
                         main.post { listener.onSaved(saved.first, true) }
-                        if (saved.second < settings.fps * 3 / 4) problem("Asked for ${settings.fps} fps but the camera delivered ${saved.second} fps, so this clip is ${"%.1f".format(saved.second / 24f)}x slower instead of ${settings.fps / 24}x.")
+                        if (saved.second < settings.fps * 3 / 4) problem("Asked for ${settings.fps} fps but the camera delivered ${saved.second} fps, so this clip is ${"%.1f".format(saved.second.toFloat() / settings.slowPlay)}x slower instead of ${"%.0f".format(settings.fps.toFloat() / settings.slowPlay)}x.")
                     } else problem("The slow-motion clip couldn't be saved.")
                 }
                 tmp.delete()

@@ -473,7 +473,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         if (s.video) {
             resCell.set(s.res?.label ?: "—")
             fpsCell.visibility = View.VISIBLE
-            fpsCell.set(if (s.slowMo) "${s.fps}→24" else s.fps.toString() + if (engine.currentPlan()?.highSpeed == true) " S" else "")
+            fpsCell.set(if (s.slowMo) "${s.fps}→${s.slowPlay}" else s.fps.toString() + if (engine.currentPlan()?.highSpeed == true) " S" else "")
             val angle = s.shutterAngle
             val den = if (angle != null) (s.fps * 360f / angle).roundToInt() else 0
             shutterCell.set(if (angle != null && !highSpeedNow) "$angle° · 1/$den" else "A " + expText(meterExp), c?.manualSensor != false && !highSpeedNow)
@@ -883,13 +883,15 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         listOf(120, 240).forEach { f ->
             val res = listOf(r) + c.resolutions.filter { it.label == "1080p" } + c.resolutions.filter { it.label == "720p" }
             val pick = res.firstOrNull { c.plan(it.size, f) != null }
-            opts.add(Opt("SLO $f", s.slowMo && s.fps == f, pick != null) {
-                s.res = pick; s.fps = f; s.slowMo = true; engine.reconfigure()
-            })
+            listOf(24, 30, 60).forEach { p ->
+                opts.add(Opt("$f→$p", s.slowMo && s.fps == f && s.slowPlay == p, pick != null) {
+                    s.res = pick; s.fps = f; s.slowPlay = p; s.slowMo = true; engine.reconfigure()
+                })
+            }
         }
         val hs = Caps.FPS.filter { c.plan(r.size, it)?.highSpeed == true }
         val note = StringBuilder("Speeds your phone can't record at ${r.label} are greyed out.")
-        note.append(" SLO speeds save the clip to play at 24 fps without sound: SLO 120 is 5x slower, SLO 240 is 10x. They switch to 1080p or 720p if this resolution can't go that fast.")
+        note.append(" Slow motion (shot → played, no sound): 120→24 is 5x slower, 120→30 4x, 120→60 2x; 240→24 is 10x, 240→30 8x, 240→60 4x. Playing at 30 or 60 looks smoother. They switch to 1080p or 720p if this resolution can't go that fast.")
         if (hs.isNotEmpty()) note.append(" \"S\" speeds use slow-motion mode, where ISO, shutter and white balance are automatic.")
         if (c.plan(r.size, s.fps)?.aeLocked == false) note.append(" At ${s.fps} fps the app runs exposure itself; set ISO or shutter for full control.")
         showPanel(fpsCell, "FRAME RATE · ${r.label}", opts, note.toString())
@@ -1049,6 +1051,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         s.photoShutterNs = prefs.getLong("photoShutter", -1L).takeIf { it > 0 }
         s.wb = prefs.getInt("wb", 0).let { if (it == 0) 0 else it.coerceIn(WhiteBalance.MIN, WhiteBalance.MAX) }
         s.slowMo = prefs.getBoolean("slowMo", false)
+        s.slowPlay = prefs.getInt("slowPlay", 24).let { if (it in listOf(24, 30, 60)) it else 24 }
         s.af = prefs.getBoolean("af", true)
         s.focus = prefs.getFloat("focus", 1f)
         s.stab = prefs.getBoolean("stab", true)
@@ -1065,7 +1068,7 @@ class CameraActivity : Activity(), EngineListener, TextureView.SurfaceTextureLis
         prefs.edit()
             .putBoolean("video", s.video).putInt("fps", s.fps)
             .putInt("angle", s.shutterAngle ?: -1).putInt("iso", s.iso ?: -1)
-            .putLong("photoShutter", s.photoShutterNs ?: -1L).putInt("wb", s.wb).putBoolean("slowMo", s.slowMo)
+            .putLong("photoShutter", s.photoShutterNs ?: -1L).putInt("wb", s.wb).putBoolean("slowMo", s.slowMo).putInt("slowPlay", s.slowPlay)
             .putBoolean("af", s.af).putFloat("focus", s.focus).putBoolean("stab", s.stab).putBoolean("raw", s.raw)
             .putString("res", s.res?.label ?: "4K")
             .putBoolean("zebras", engine.overlays.zebras).putBoolean("peaking", engine.overlays.peaking)
