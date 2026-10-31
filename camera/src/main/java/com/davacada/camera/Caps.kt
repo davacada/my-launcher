@@ -139,7 +139,7 @@ class Caps(val chars: CameraCharacteristics) {
     }
 
     companion object {
-        val FPS = listOf(24, 25, 30, 50, 60, 100, 120, 240, 480, 960)
+        val FPS = listOf(24, 25, 30, 50, 60, 100, 120, 240)
         val CANDIDATES = listOf(
             "8K" to Size(7680, 4320),
             "4K" to Size(3840, 2160),
