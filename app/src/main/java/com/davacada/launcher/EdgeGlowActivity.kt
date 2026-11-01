@@ -31,7 +31,10 @@ class EdgeGlowActivity : Activity() {
         val kind = runCatching { EdgeGlowView.Kind.valueOf(intent.getStringExtra(EXTRA_KIND) ?: "") }.getOrDefault(EdgeGlowView.Kind.NOTIFICATION)
         // Real notifications keep breathing until you tap the screen or press power; previews breathe once.
         val real = intent.getBooleanExtra(EXTRA_REAL, false)
-        val glow = EdgeGlowView(this, kind, loop = real).apply { onFinished = { afterGlow() } }
+        // After a few breaths the screen switches off so the phone's own RGB lights take over
+        // (they only run while the screen is off). 0 = keep the border until the screen is turned on.
+        val breaths = if (real) getSharedPreferences("launcher", MODE_PRIVATE).getInt("edgeBreaths", 2) else 0
+        val glow = EdgeGlowView(this, kind, loop = real, cycles = breaths).apply { onFinished = { afterGlow() } }
         if (real) window.decorView.postDelayed({ afterGlow() }, 30 * 60 * 1000L) // safety stop after 30 minutes
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)

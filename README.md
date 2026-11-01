@@ -32,7 +32,10 @@ New builds install straight over the old one; your home column is kept.
 - **Edge lighting** (screen icon at the bottom of the drawer): while the screen is off, a notification wakes it into
   black with a soft orange glow that breathes round the edges until you wake the phone, a new song gives a purple one, and an incoming call gets a cyan pulse
   round the call screen. Needs notification access and "display over other apps"; the menu has previews.
-  The glow stops when you tap the screen or press power (or after 30 minutes)
+  The glow stops when you tap the screen or press power (or after 30 minutes).
+  The phone's RGB lights only run while the screen is off, so by default the border breathes twice and then the
+  screen switches off and the RGB lights take over (needs "Screen off when glow stops"). The menu sets 1, 2 or 3
+  breaths, or keeps the border until you wake the phone
 - **Trash** (bin icon at the bottom of the drawer): everything in Android's trash, with thumbnails and days left
   (Android deletes items for good after 30 days). Tap items to select, then *Restore* or *Delete forever*, or *Empty*.
   Shows everything with "all files access", or just photos, videos and music without it. From any app's share menu,

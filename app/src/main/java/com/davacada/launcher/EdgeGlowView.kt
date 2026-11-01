@@ -15,7 +15,7 @@ import kotlin.math.max
 import kotlin.math.sin
 
 /** The glowing border: a sweep for notifications, a breath for music, a fast pulse for calls. */
-class EdgeGlowView(context: Context, val kind: Kind, private val loop: Boolean = false) : View(context) {
+class EdgeGlowView(context: Context, val kind: Kind, private val loop: Boolean = false, private val cycles: Int = 0) : View(context) {
 
     enum class Kind(val colors: IntArray, val durationMs: Long) {
         NOTIFICATION(intArrayOf(0xFFFFB347.toInt(), 0xFFFF8C3A.toInt()), 4200),
@@ -51,7 +51,13 @@ class EdgeGlowView(context: Context, val kind: Kind, private val loop: Boolean =
     override fun onDraw(canvas: Canvas) {
         val t = (SystemClock.uptimeMillis() - start).toFloat()
         val dur = kind.durationMs.toFloat()
-        val progress = if (loop || kind.durationMs == Long.MAX_VALUE) 0f else (t / dur).coerceIn(0f, 1f)
+        // loop: breathe [cycles] times (0 = until the screen is turned on); otherwise once.
+        val progress = when {
+            kind.durationMs == Long.MAX_VALUE -> 0f
+            loop && cycles > 0 -> (t / (cycles * CYCLE)).coerceIn(0f, 1f)
+            loop -> 0f
+            else -> (t / dur).coerceIn(0f, 1f)
+        }
 
         when (kind) {
             Kind.NOTIFICATION, Kind.MUSIC -> {

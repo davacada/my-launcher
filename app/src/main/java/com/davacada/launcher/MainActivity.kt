@@ -49,6 +49,7 @@ import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
@@ -457,6 +458,14 @@ class MainActivity : Activity() {
         })
         items.add(MenuItem(R.drawable.ic_layers, "Display over apps", Settings.canDrawOverlays(this)) {
             openSafely(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        })
+        val breaths = prefs.getInt("edgeBreaths", 2)
+        items.add(MenuItem(R.drawable.ic_bell,
+            if (breaths == 0) "Border until you wake the phone" else "Border ×$breaths, then RGB lights", breaths > 0) {
+            val next = when (breaths) { 1 -> 2; 2 -> 3; 3 -> 0; else -> 1 }
+            prefs.edit().putInt("edgeBreaths", next).apply()
+            if (next > 0 && !EdgeOffService.isEnabled(this))
+                Toast.makeText(this, "Turn on \"Screen off when glow stops\" so the RGB lights can take over", Toast.LENGTH_LONG).show()
         })
         items.add(MenuItem(R.drawable.ic_edge, "Screen off when glow stops", EdgeOffService.isEnabled(this)) {
             openSafely(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
