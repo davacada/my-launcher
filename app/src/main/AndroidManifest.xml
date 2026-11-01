@@ -21,6 +21,12 @@
         tools:ignore="ProtectedPermissions" />
 
     <queries>
+        <!-- Trash shortcuts: Google Photos and the phone's own gallery. -->
+        <package android:name="com.google.android.apps.photos" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_GALLERY" />
+        </intent>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

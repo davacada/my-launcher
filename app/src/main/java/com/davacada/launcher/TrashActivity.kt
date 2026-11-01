@@ -103,6 +103,16 @@ class TrashActivity : Activity() {
         header.addView(emptyButton, LinearLayout.LayoutParams(-2, dp(36)))
         col.addView(header)
 
+        // Shortcuts to the other trashes, which other apps can't read: Google Photos (in your Google account)
+        // and the phone's gallery ("Recently deleted", kept in the gallery's private storage).
+        val shortcuts = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(4), dp(16), dp(6))
+        }
+        shortcuts.addView(shortcut("Google Photos trash") { openPhotosTrash() }, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(4) })
+        shortcuts.addView(shortcut("Gallery · Recently deleted") { openGalleryTrash() }, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4) })
+        col.addView(shortcuts)
+
         val body = FrameLayout(this)
         grid = GridView(this).apply {
             numColumns = 3
@@ -143,6 +153,40 @@ class TrashActivity : Activity() {
             insets
         }
         return root
+    }
+
+    private fun shortcut(label: String, onClick: () -> Unit) = TextView(this).apply {
+        text = "$label  ›"; gravity = Gravity.CENTER; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+        setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f); typeface = Typeface.DEFAULT_BOLD
+        setPadding(dp(10), 0, dp(10), 0); background = pill(0x1FFFFFFF, dp(20).toFloat())
+        setOnClickListener { onClick() }
+    }
+
+    private fun tryStart(i: Intent): Boolean = try { startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } catch (e: Exception) { false }
+
+    /** Google Photos' trash: its own app if installed (straight to Trash where it supports the link), otherwise the website. */
+    private fun openPhotosTrash() {
+        val link = Uri.parse("https://photos.google.com/trash")
+        if (tryStart(Intent(Intent.ACTION_VIEW, link).setPackage(PHOTOS))) return
+        packageManager.getLaunchIntentForPackage(PHOTOS)?.let {
+            if (tryStart(it)) { Toast.makeText(this, "Open Library → Trash", Toast.LENGTH_LONG).show(); return }
+        }
+        tryStart(Intent(Intent.ACTION_VIEW, link))
+    }
+
+    /** The phone's own gallery (RedMagic's, not Google Photos); Android doesn't let apps open its Recently deleted album directly. */
+    private fun openGalleryTrash() {
+        val galleries = packageManager.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_GALLERY), 0).map { it.activityInfo.packageName }.distinct()
+        val pkg = galleries.firstOrNull { it != PHOTOS }
+            ?: packageManager.getInstalledApplications(0).map { it.packageName }
+                .firstOrNull { (it.contains("gallery", true) || it.contains("album", true)) && packageManager.getLaunchIntentForPackage(it) != null }
+        val launch = pkg?.let { packageManager.getLaunchIntentForPackage(it) }
+        if (launch != null && tryStart(launch)) {
+            Toast.makeText(this, "Open Albums → Recently deleted", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, "Couldn't find the phone's gallery app.", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun actionButton(icon: Int, label: String, color: Int = Color.WHITE, onClick: () -> Unit) = LinearLayout(this).apply {
@@ -365,5 +409,6 @@ class TrashActivity : Activity() {
     companion object {
         private const val REQ_RESTORE = 41
         private const val REQ_DELETE = 42
+        private const val PHOTOS = "com.google.android.apps.photos"
     }
 }
