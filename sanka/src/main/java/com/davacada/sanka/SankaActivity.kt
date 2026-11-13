@@ -120,6 +120,10 @@ class SankaActivity : Activity() {
             Intent.ACTION_SEND -> (i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris.add(it) }
             Intent.ACTION_SEND_MULTIPLE -> i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
         }
+        // Some apps also (or only) list the files in the clip data; take those too.
+        if (i.action == Intent.ACTION_SEND || i.action == Intent.ACTION_SEND_MULTIPLE) i.clipData?.let { clip ->
+            for (k in 0 until clip.itemCount) clip.getItemAt(k).uri?.let { uris.add(it) }
+        }
         if (uris.isEmpty()) return false
         incoming.clear(); incoming.addAll(uris.distinct()); incomingType = i.type
         i.action = Intent.ACTION_MAIN // don't bring them in twice
@@ -131,24 +135,7 @@ class SankaActivity : Activity() {
         val v = vault ?: return
         if (incoming.isEmpty()) return
         val uris = ArrayList(incoming.distinct()); incoming.clear()
-        val go = { folder: String ->
-            importing = true; v.duplicatesSkipped = 0
-            busy("Bringing in 0 of ${uris.size}…")
-            importer.execute {
-                var ok = 0
-                uris.forEachIndexed { i, u ->
-                    main.post { progress?.text = "Bringing in ${i + 1} of ${uris.size}…" }
-                    try { if (v.add(Gallery.describe(this, u, incomingType), folder) != null) ok++ } catch (e: Exception) { }
-                }
-                main.post {
-                    busy(null); importing = false
-                    if (folder.isNotEmpty()) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
-                    val dup = v.duplicatesSkipped
-                    Toast.makeText(this, (if (ok == uris.size) "$ok added to Sanka. Once you've checked them, you can delete them in the other app."
-                        else "$ok of ${uris.size} added. The rest couldn't be read.") + if (dup > 0) " ($dup were already in Sanka.)" else "", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
+        val go = { folder: String -> bringIn(uris, folder) }
         val choices = mutableListOf<Pair<String, () -> Unit>>(
             "New folder…" to { newFolderDialog { f -> go(f.id) } },
             "Not in a folder" to { go("") })
@@ -156,6 +143,46 @@ class SankaActivity : Activity() {
         dialog().setTitle("Add ${uris.size} to").setItems(choices.map { it.first }.toTypedArray()) { _, which -> choices[which].second() }
             .setOnCancelListener { incoming.addAll(uris) }
             .show()
+    }
+
+    /** Copies shared files in one by one (each gets a second try), then says exactly what happened. */
+    private fun bringIn(uris: List<Uri>, folder: String) {
+        val v = vault ?: return
+        importing = true
+        busy("Bringing in 0 of ${uris.size}…")
+        importer.execute {
+            val before = v.items.size
+            val failed = ArrayList<Uri>()
+            val reasons = ArrayList<String>()
+            var already = 0
+            uris.forEachIndexed { i, u ->
+                main.post { progress?.text = "Bringing in ${i + 1} of ${uris.size}…" }
+                var ok = false
+                for (attempt in 0..1) {
+                    try {
+                        v.duplicatesSkipped = 0
+                        if (v.add(Gallery.describe(this, u, incomingType), folder) != null) { ok = true; already += v.duplicatesSkipped; break }
+                    } catch (e: SecurityException) { reasons.add("no permission to read"); break }
+                    catch (e: Exception) { if (attempt == 1) reasons.add(e.javaClass.simpleName + (e.message?.let { ": $it" } ?: "")) }
+                    if (attempt == 0) Thread.sleep(400)
+                }
+                if (!ok) failed.add(u)
+            }
+            val added = v.items.size - before
+            main.post {
+                busy(null); importing = false
+                if (folder.isNotEmpty() && v.folders.any { it.id == folder }) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
+                val msg = StringBuilder("Received ${uris.size} from the other app.\n\n")
+                msg.append("• $added new in Sanka\n")
+                if (already > 0) msg.append("• $already were already in Sanka (identical files), so they weren't copied twice\n")
+                if (failed.isNotEmpty()) msg.append("• ${failed.size} couldn't be read" + (reasons.distinct().firstOrNull()?.let { " ($it)" } ?: "") + "\n")
+                if (failed.isEmpty()) msg.append("\nOnce you've checked them, you can delete them in the other app.")
+                val d = dialog().setTitle(if (failed.isEmpty()) "Done" else "Some didn't come through").setMessage(msg.toString())
+                    .setPositiveButton("OK", null)
+                if (failed.isNotEmpty()) d.setNeutralButton("Try those again") { _, _ -> bringIn(failed, folder) }
+                d.show()
+            }
+        }
     }
 
     override fun onResume() {
