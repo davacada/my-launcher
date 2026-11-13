@@ -333,7 +333,45 @@ class SankaActivity : Activity() {
     }
 
     /** Photos and videos as a collage that keeps each one's shape. */
+    // ------------------------------------------------------------------ order: by date taken (with months) or newest added
+
+    private val prefs get() = getSharedPreferences("sanka", MODE_PRIVATE)
+    private var byDate: Boolean
+        get() = prefs.getString("sort", "date") == "date"
+        set(v) { prefs.edit().putString("sort", if (v) "date" else "newest").apply() }
+
+    private fun whenOf(it: Item) = if (it.taken > 0) it.taken else it.added
+
+    private fun ordered(list: List<Item>) = if (byDate) list.sortedByDescending { whenOf(it) } else list.sortedByDescending { it.added }
+
+    private fun sortMenu() {
+        val labels = arrayOf((if (byDate) "✓  " else "     ") + "By date taken (grouped by month)", (if (!byDate) "✓  " else "     ") + "Newest added first")
+        dialog().setTitle("Order").setItems(labels) { _, which -> byDate = which == 0; rerender() }.show()
+    }
+
+    /** The collage, in the chosen order; by date it's split into months with a heading each. */
     private fun collage(list: List<Item>, targetDp: Int): View {
+        val all = ordered(list)
+        if (!byDate) return collageRows(all, all, 0, targetDp)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val fmt = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
+        var start = 0
+        all.groupBy { fmt.format(Date(whenOf(it))) }.forEach { (month, group) ->
+            col.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM
+                setPadding(dp(14), dp(if (start == 0) 4 else 18), dp(14), dp(8))
+                addView(label(month.replaceFirstChar { it.uppercase() }, 15f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(label("${group.size}", 12.5f, 0xFFA9B2C0.toInt()))
+            })
+            col.addView(collageRows(group, all, start, targetDp))
+            start += group.size
+        }
+        return col
+    }
+
+    /** One justified block of [part]; [all] and [offset] let the viewer swipe through everything in order. */
+    private fun collageRows(part: List<Item>, all: List<Item>, offset: Int, targetDp: Int): View {
+        val list = part
         val j = JustifiedLayout(this, targetDp).apply { aspects = list.map { it.aspect }; setPadding(dp(8), 0, dp(8), 0) }
         list.forEachIndexed { i, item ->
             val cell = Cell(this, square = false, radius = 6f)
@@ -348,7 +386,7 @@ class SankaActivity : Activity() {
                         show(Screen.FOLDER)
                     }
                     selected.isNotEmpty() -> { if (!selected.remove(item.id)) selected.add(item.id); rerender() }
-                    else -> { viewList = list; viewIndex = i; show(Screen.VIEWER) }
+                    else -> { viewList = all; viewIndex = offset + i; show(Screen.VIEWER) }
                 }
             }
             cell.setOnLongClickListener {
@@ -395,11 +433,14 @@ class SankaActivity : Activity() {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, insetBottom + dp(110)) }
         sv.addView(col)
         val loose = v.inFolder("")
-        val folders = v.folders
+        // Folders follow the same order: the one with the latest picture (taken or added) first.
+        val folders = v.folders.sortedByDescending { f ->
+            v.inFolder(f.id).maxOfOrNull { if (byDate) whenOf(it) else it.added } ?: f.created
+        }
         val sub = "${folders.size} folder${if (folders.size == 1) "" else "s"} · ${v.items.size} item${if (v.items.size == 1) "" else "s"}"
         col.addView(header(if (selected.isEmpty()) "Sanka" else "${selected.size} selected", sub,
             if (selected.isEmpty()) null else iconButton(R.drawable.ic_close, "Cancel selection") { selected.clear(); rerender() },
-            listOf(iconButton(R.drawable.ic_lock, "Lock now") { lock() }, iconButton(R.drawable.ic_more, "Settings") { settingsMenu(it) })))
+            listOf(iconButton(R.drawable.ic_sort, "Order") { sortMenu() }, iconButton(R.drawable.ic_lock, "Lock now") { lock() }, iconButton(R.drawable.ic_more, "Settings") { settingsMenu(it) })))
 
         if (v.items.isEmpty() && folders.isEmpty()) {
             col.addView(LinearLayout(this).apply {
@@ -480,6 +521,7 @@ class SankaActivity : Activity() {
                 if (selected.isNotEmpty() || pickingCover) { selected.clear(); pickingCover = false; rerender() } else { folderId = null; show(Screen.VAULT) }
             }, LinearLayout.LayoutParams(dp(44), dp(44)))
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(iconButton(R.drawable.ic_sort, "Order") { sortMenu() }, LinearLayout.LayoutParams(dp(44), dp(44)))
             addView(iconButton(R.drawable.ic_more, "Folder options") { folderMenu(f) }, LinearLayout.LayoutParams(dp(44), dp(44)))
         }
         hero.addView(topRow, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))

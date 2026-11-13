@@ -84,6 +84,8 @@ Each release also has `sanka.apk`, a locked place for hidden photos and videos:
 - **Folders:** + New folder on the main screen; each folder's tile shows a cover picture from inside it (the first
   thing you added, or pick one with *Change cover*). Long-press a folder to rename, change its cover or delete it
   (deleting a folder keeps what's in it)
+- **Order** (lines icon at the top): *By date taken*, split into months with a heading each, or *Newest added
+  first*. Folders follow the same order
 - Pictures show as a collage that keeps each one's shape: tall ones narrow, wide ones wide, every row the same height
 - When you hide new pictures you choose the folder (or none); *Add* inside a folder hides straight into it
 - **Share into Sanka:** in any app (another vault, Files, the gallery) select photos or videos, tap Share and choose
