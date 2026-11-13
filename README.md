@@ -96,6 +96,8 @@ Each release also has `sanka.apk`, a locked place for hidden photos and videos:
   (each set side by side with name, size, folder and date; tap to choose which to keep, hold to view), *Keep one of
   each*, or *Keep everything*. ⋯ › Find duplicates checks the whole vault any time
 - Lock screen: a slow, moving violet/blue glow, or one of your own pictures blurred (⋯ › Lock screen background)
-- Long-press to select several, then *Move*, *Unhide* or *Delete* (or *Cover* for one picture in a folder).
+- **Share:** from a picture or a selection, send to any app (WhatsApp, mail, …). Sanka unlocks a temporary copy only
+  that app can read and clears it within the hour; what you send is no longer protected by Sanka
+- Long-press to select several, then *Share*, *Move*, *Unhide* or *Delete* (or *Cover* for one picture in a folder).
   ⋯ menu: change PIN, fingerprint on/off
 - Hidden files live only on this phone: uninstalling Sanka deletes them, so unhide anything you want to keep first

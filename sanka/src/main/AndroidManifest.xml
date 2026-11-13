@@ -43,5 +43,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Temporary copies of pictures you share from Sanka; only the app you share with can read them. -->
+        <provider
+            android:name=".ShareProvider"
+            android:authorities="com.davacada.sanka.share"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

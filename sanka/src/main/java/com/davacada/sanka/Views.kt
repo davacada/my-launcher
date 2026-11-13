@@ -55,6 +55,16 @@ fun Context.glassButton(icon: Int?, text: String, color: Int = Color.WHITE, fill
         setOnClickListener { onClick() }
     }
 
+/** A small icon-over-word button, so four fit in the bottom bar. */
+fun Context.compactButton(icon: Int, text: String, color: Int = Color.WHITE, onClick: () -> Unit) = LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+    setPadding(dp(12), 0, dp(12), 0); minimumWidth = dp(64)
+    background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33FFFFFF), null, pill(Color.WHITE, dpf(24f)))
+    addView(ImageView(context).apply { setImageResource(icon); setColorFilter(color) }, LinearLayout.LayoutParams(dp(22), dp(22)))
+    addView(context.label(text, 11.5f, color, bold = true), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2) })
+    setOnClickListener { onClick() }
+}
+
 /** PIN dots and a number pad. */
 class PinPad(ctx: Context, private val showFingerprint: Boolean, private val onFingerprint: () -> Unit, private val onEntered: (String) -> Unit) :
     LinearLayout(ctx) {

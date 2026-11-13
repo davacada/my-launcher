@@ -97,6 +97,7 @@ class SankaActivity : Activity() {
         }
         setContentView(root)
         takeShared(intent)
+        io.execute { ShareProvider.clean(this, 60 * 60_000L) } // old temporary share copies
         show(if (pin.isSet) Screen.LOCK else Screen.SETUP)
     }
 
@@ -497,10 +498,11 @@ class SankaActivity : Activity() {
     private fun selectionButtons(items: List<Item>, inFolder: Boolean): List<View> {
         val sel = items.filter { it.id in selected }
         val list = mutableListOf<View>(
-            glassButton(R.drawable.ic_folder_move, "Move") { moveTo(sel) },
-            glassButton(R.drawable.ic_unhide, "Unhide") { unhide(sel) },
-            glassButton(R.drawable.ic_trash, "Delete", 0xFFFF6B6B.toInt()) { confirmDelete(sel) })
-        if (inFolder && sel.size == 1) list.add(0, glassButton(R.drawable.ic_image, "Cover") {
+            compactButton(R.drawable.ic_share, "Share") { share(sel) },
+            compactButton(R.drawable.ic_folder_move, "Move") { moveTo(sel) },
+            compactButton(R.drawable.ic_unhide, "Unhide") { unhide(sel) },
+            compactButton(R.drawable.ic_trash, "Delete", 0xFFFF6B6B.toInt()) { confirmDelete(sel) })
+        if (inFolder && sel.size == 1) list.add(1, compactButton(R.drawable.ic_image, "Cover") {
             folderId?.let { f -> vault?.setCover(f, sel[0].id) }; selected.clear(); show(Screen.FOLDER)
         })
         return list
@@ -1059,6 +1061,52 @@ class SankaActivity : Activity() {
         }
     }
 
+    // ------------------------------------------------------------------ share
+
+    /**
+     * Unlocks temporary copies into Sanka's private cache and opens Android's share sheet. Only the app you pick
+     * can read them; the copies are cleared again within the hour. What you send leaves Sanka unencrypted.
+     */
+    private fun share(list: List<Item>) {
+        val v = vault ?: return
+        if (list.isEmpty()) return
+        busy(if (list.size == 1) "Getting it ready…" else "Getting ${list.size} ready…")
+        io.execute {
+            val uris = ArrayList<Uri>()
+            val base = java.io.File(cacheDir, "share").apply { mkdirs() }
+            for (it in list) {
+                try {
+                    val dir = java.io.File(base, it.id).apply { mkdirs() }
+                    val safe = it.name.replace(Regex("[^A-Za-z0-9._ -]"), "_").ifBlank { "picture" }
+                        .let { n -> if (n.contains('.')) n else n + if (it.isVideo) ".mp4" else ".jpg" }
+                    val out = java.io.File(dir, safe)
+                    if (!out.exists() || out.length() != it.size) {
+                        java.io.FileOutputStream(out).use { o -> EncFile(this, v.dataFile(it)).use { e -> e.stream().copyTo(o, 256 * 1024) } }
+                    }
+                    uris.add(Uri.Builder().scheme("content").authority(ShareProvider.AUTHORITY).appendPath(it.id).appendPath(safe).build())
+                } catch (e: Exception) { }
+            }
+            main.post {
+                busy(null)
+                if (uris.isEmpty()) { Toast.makeText(this, "Couldn't get that ready to share.", Toast.LENGTH_LONG).show(); return@post }
+                val types = list.map { it.mime }.distinct()
+                val type = when {
+                    types.size == 1 -> types[0]
+                    types.all { it.startsWith("image/") } -> "image/*"
+                    types.all { it.startsWith("video/") } -> "video/*"
+                    else -> "*/*"
+                }
+                val send = if (uris.size == 1) Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+                           else Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                send.type = type
+                send.clipData = android.content.ClipData.newRawUri(null, uris[0]).apply { uris.drop(1).forEach { u -> addItem(android.content.ClipData.Item(u)) } }
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try { startActivity(Intent.createChooser(send, if (uris.size == 1) "Share" else "Share ${uris.size}")) }
+                catch (e: Exception) { Toast.makeText(this, "No app to share with.", Toast.LENGTH_LONG).show() }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ unhide / delete
 
     private fun unhide(list: List<Item>) {
@@ -1143,8 +1191,9 @@ class SankaActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
             background = pill(0xCC151A22.toInt(), dpf(32f)); setPadding(dp(8), dp(8), dp(8), dp(8))
             val lp = { LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4); marginEnd = dp(4) } }
-            addView(glassButton(R.drawable.ic_unhide, "Unhide") { unhide(listOf(item)) }, lp())
-            addView(glassButton(R.drawable.ic_trash, "Delete", 0xFFFF6B6B.toInt()) { confirmDelete(listOf(item)) }, lp())
+            addView(compactButton(R.drawable.ic_share, "Share") { share(listOf(item)) }, lp())
+            addView(compactButton(R.drawable.ic_unhide, "Unhide") { unhide(listOf(item)) }, lp())
+            addView(compactButton(R.drawable.ic_trash, "Delete", 0xFFFF6B6B.toInt()) { confirmDelete(listOf(item)) }, lp())
         }
         frame.addView(bar, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = insetBottom + dp(20) })
         chrome.add(bar)
