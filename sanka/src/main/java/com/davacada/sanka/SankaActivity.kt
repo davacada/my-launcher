@@ -436,28 +436,14 @@ class SankaActivity : Activity() {
     private fun ordered(list: List<Item>) = if (byDate) list.sortedByDescending { whenOf(it) } else list.sortedByDescending { it.added }
 
     private fun sortMenu() {
-        val labels = arrayOf((if (byDate) "✓  " else "     ") + "By date taken (grouped by month)", (if (!byDate) "✓  " else "     ") + "Newest added first")
+        val labels = arrayOf((if (byDate) "✓  " else "     ") + "By date created (newest first)", (if (!byDate) "✓  " else "     ") + "Newest added first")
         dialog().setTitle("Order").setItems(labels) { _, which -> byDate = which == 0; rerender() }.show()
     }
 
     /** The collage, in the chosen order; by date it's split into months with a heading each. */
     private fun collage(list: List<Item>, targetDp: Int): View {
         val all = ordered(list)
-        if (!byDate) return collageRows(all, all, 0, targetDp)
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val fmt = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
-        var start = 0
-        all.groupBy { fmt.format(Date(whenOf(it))) }.forEach { (month, group) ->
-            col.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM
-                setPadding(dp(14), dp(if (start == 0) 4 else 18), dp(14), dp(8))
-                addView(label(month.replaceFirstChar { it.uppercase() }, 15f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
-                addView(label("${group.size}", 12.5f, 0xFFA9B2C0.toInt()))
-            })
-            col.addView(collageRows(group, all, start, targetDp))
-            start += group.size
-        }
-        return col
+        return collageRows(all, all, 0, targetDp) // one continuous collage, no month headings
     }
 
     /** One justified block of [part]; [all] and [offset] let the viewer swipe through everything in order. */

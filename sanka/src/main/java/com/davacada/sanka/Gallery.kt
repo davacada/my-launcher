@@ -56,10 +56,15 @@ object Dates {
     /** Video headers store e.g. "20240312T101530.000Z" (UTC); 1904/1970 placeholders mean "unknown". */
     fun video(v: String?): Long {
         if (v.isNullOrBlank()) return 0L
+        // Formats vary ("20240312T101530.000Z", "2024-03-12T10:15:30Z", "2024 03 12 10:15:30"): use the digits.
+        val d = v.filter { it.isDigit() }
+        if (d.length < 8) return 0L
         val t = try {
-            java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.parse(v.take(15))?.time
+            java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+                .parse(d.take(14).padEnd(14, '0'))?.time
         } catch (e: Exception) { null } ?: return 0L
-        return if (t > 86_400_000L * 365 * 2) t else 0L
+        // 1904 / 1970 placeholders (and anything in the future) mean "unknown"
+        return if (t > 86_400_000L * 365 * 2 && t < System.currentTimeMillis() + 86_400_000L) t else 0L
     }
 }
 
@@ -78,7 +83,21 @@ object Gallery {
             ?: "image/jpeg"
         // Nothing is read from the file here: some apps only let it be read once, and Sanka needs that read
         // for the copy. Length, size, shape and date all come from Sanka's own copy afterwards.
-        val taken = 0L; val duration = 0L; val w = 0; val h = 0
+        // As a last resort for the date, the other app may tell us when the file was taken or last changed.
+        var taken = 0L
+        for (col in listOf(MediaStore.MediaColumns.DATE_TAKEN, android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED, MediaStore.MediaColumns.DATE_MODIFIED)) {
+            if (taken > 0) break
+            try {
+                ctx.contentResolver.query(uri, arrayOf(col), null, null, null)?.use { c ->
+                    if (c.moveToFirst() && !c.isNull(0)) {
+                        val v = c.getLong(0)
+                        taken = if (col == MediaStore.MediaColumns.DATE_MODIFIED && v < 100_000_000_000L) v * 1000 else v
+                    }
+                }
+            } catch (e: Exception) { }
+        }
+        if (taken > System.currentTimeMillis() - 10 * 60_000L) taken = 0L // "just now" means a fresh temporary copy, not the real date
+        val duration = 0L; val w = 0; val h = 0
         return Media(uri, name, mime, size, taken, duration, "", w, h)
     }
 

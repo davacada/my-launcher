@@ -178,7 +178,7 @@ data class Folder(val id: String, val name: String, val cover: String = "", val 
 
 /** What's hidden: encrypted files in the app's private storage plus an encrypted list. */
 class Vault(private val ctx: Context) {
-    private companion object { const val DATED = 2 }
+    private companion object { const val DATED = 3 // 3: better video dates }
 
     private val dir = File(ctx.filesDir, "vault").apply { mkdirs() }
     private val indexFile = File(dir, "index.bin")
