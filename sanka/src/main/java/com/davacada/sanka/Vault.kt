@@ -347,7 +347,7 @@ class Vault(private val ctx: Context) {
             // Already hidden? Don't keep a second copy (it can still be removed from the gallery).
             synchronized(this) { items.firstOrNull { it.hash == hash } }?.let { existing ->
                 tmp.delete(); duplicatesSkipped++
-                if (folder.isNotEmpty() && existing.folder.isEmpty()) move(listOf(existing.id), folder)
+                if (folder.isNotEmpty() && existing.folder != folder) move(listOf(existing.id), folder) // goes where you asked
                 return existing
             }
             if (!tmp.renameTo(dataFile(item))) return null

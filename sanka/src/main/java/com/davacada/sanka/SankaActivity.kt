@@ -48,7 +48,7 @@ import java.util.concurrent.Executors
  */
 class SankaActivity : Activity() {
 
-    private enum class Screen { SETUP, LOCK, VAULT, FOLDER, ADD, VIEWER }
+    private enum class Screen { SETUP, LOCK, VAULT, FOLDER, ADD, VIEWER, RESULT }
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(3)
@@ -152,6 +152,7 @@ class SankaActivity : Activity() {
         busy("Bringing in 0 of ${uris.size}…")
         importer.execute {
             val before = v.items.size
+            val brought = ArrayList<String>()
             val failed = ArrayList<Uri>()
             val reasons = ArrayList<String>()
             var already = 0
@@ -161,7 +162,8 @@ class SankaActivity : Activity() {
                 for (attempt in 0..1) {
                     try {
                         v.duplicatesSkipped = 0
-                        if (v.add(Gallery.describe(this, u, incomingType), folder) != null) { ok = true; already += v.duplicatesSkipped; break }
+                        val got = v.add(Gallery.describe(this, u, incomingType), folder)
+                        if (got != null) { ok = true; brought.add(got.id); already += v.duplicatesSkipped; break }
                     } catch (e: SecurityException) { reasons.add("no permission to read"); break }
                     catch (e: Exception) { if (attempt == 1) reasons.add(e.javaClass.simpleName + (e.message?.let { ": $it" } ?: "")) }
                     if (attempt == 0) Thread.sleep(400)
@@ -171,15 +173,17 @@ class SankaActivity : Activity() {
             val added = v.items.size - before
             main.post {
                 busy(null); importing = false
+                lastBrought = brought.distinct()
                 if (folder.isNotEmpty() && v.folders.any { it.id == folder }) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
                 val msg = StringBuilder("Received ${uris.size} from the other app.\n\n")
                 msg.append("• $added new in Sanka\n")
-                if (already > 0) msg.append("• $already were already in Sanka (identical files), so they weren't copied twice\n")
+                if (already > 0) msg.append("• $already were already in Sanka (identical files), so they weren't copied twice. They're now in the folder you chose; tap Show them to see all of them together\n")
                 if (failed.isNotEmpty()) msg.append("• ${failed.size} couldn't be read" + (reasons.distinct().firstOrNull()?.let { " ($it)" } ?: "") + "\n")
                 if (failed.isEmpty()) msg.append("\nOnce you've checked them, you can delete them in the other app.")
                 val d = dialog().setTitle(if (failed.isEmpty()) "Done" else "Some didn't come through").setMessage(msg.toString())
                     .setPositiveButton("OK", null)
                 if (failed.isNotEmpty()) d.setNeutralButton("Try those again") { _, _ -> bringIn(failed, folder) }
+                else if (lastBrought.isNotEmpty()) d.setNeutralButton("Show them") { _, _ -> resultOpen = true; selected.clear(); show(Screen.RESULT) }
                 d.show()
             }
         }
@@ -203,7 +207,7 @@ class SankaActivity : Activity() {
         unlocked = false
         releasePlayer()
         thumbs.evictAll()
-        selected.clear(); picked.clear(); pickingLockBg = false; pickingCover = false
+        selected.clear(); picked.clear(); pickingLockBg = false; pickingCover = false; resultOpen = false
         if (pin.isSet) show(Screen.LOCK)
     }
 
@@ -212,6 +216,7 @@ class SankaActivity : Activity() {
         when (screen) {
             Screen.VIEWER -> { releasePlayer(); show(back()) }
             Screen.ADD -> { picked.clear(); show(back()) }
+            Screen.RESULT -> { resultOpen = false; selected.clear(); show(if (folderId != null && vault?.folders?.any { it.id == folderId } == true) Screen.FOLDER else Screen.VAULT) }
             Screen.FOLDER -> if (selected.isNotEmpty() || pickingCover) { selected.clear(); pickingCover = false; rerender() } else { folderId = null; show(Screen.VAULT) }
             Screen.VAULT -> if (selected.isNotEmpty()) { selected.clear(); rerender() } else { lock(); moveTaskToBack(true) }
             else -> moveTaskToBack(true)
@@ -221,7 +226,10 @@ class SankaActivity : Activity() {
     // ------------------------------------------------------------------ screens
 
     /** Where Back from a viewer or the picker goes. */
-    private fun back() = if (folderId != null && vault?.folders?.any { it.id == folderId } == true) Screen.FOLDER else Screen.VAULT
+    private var lastBrought: List<String> = emptyList() // what the last import brought in (new + already there)
+    private var resultOpen = false
+
+    private fun back() = if (resultOpen) Screen.RESULT else if (folderId != null && vault?.folders?.any { it.id == folderId } == true) Screen.FOLDER else Screen.VAULT
 
     /** Redraws the current screen and keeps the scroll position (after selecting, moving, …). */
     private fun rerender() {
@@ -241,6 +249,7 @@ class SankaActivity : Activity() {
             Screen.LOCK -> lockScreen()
             Screen.VAULT -> homeScreen()
             Screen.FOLDER -> folderScreen()
+            Screen.RESULT -> resultScreen()
             Screen.ADD -> addScreen()
             Screen.VIEWER -> viewerScreen()
         }, FrameLayout.LayoutParams(-1, -1))
@@ -622,6 +631,29 @@ class SankaActivity : Activity() {
                     pickingCover = true; selected.clear(); rerender()
                 } else null)
         })
+        return frame
+    }
+
+    // ------------------------------------------------------------------ what the last import brought in
+
+    private fun resultScreen(): View {
+        val v = vault ?: return View(this)
+        val ids = lastBrought.toSet()
+        val items = v.items.filter { it.id in ids }
+        val frame = FrameLayout(this)
+        val sv = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        scroll = sv
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, insetBottom + dp(110)) }
+        sv.addView(col)
+        col.addView(header(if (selected.isEmpty()) "Just brought in" else "${selected.size} selected",
+            count(items) + " · new and already here",
+            iconButton(if (selected.isEmpty()) R.drawable.ic_back else R.drawable.ic_close, "Back") {
+                if (selected.isNotEmpty()) { selected.clear(); rerender() } else onBackPressed()
+            }, listOf(iconButton(R.drawable.ic_sort, "Order") { sortMenu() })))
+        if (items.isEmpty()) col.addView(label("Nothing to show.", 14f, 0x99FFFFFF.toInt()).apply { setPadding(dp(24), dp(24), dp(24), 0) })
+        else col.addView(collage(items, 150))
+        frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
+        if (selected.isNotEmpty()) bottomBar(frame, selectionButtons(items, false))
         return frame
     }
 
