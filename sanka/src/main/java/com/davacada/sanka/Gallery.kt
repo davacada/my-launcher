@@ -17,6 +17,29 @@ data class Media(
     val isVideo get() = mime.startsWith("video/")
 }
 
+/** Reading "when was this made" from inside photo and video files. */
+object Dates {
+    fun exif(input: java.io.InputStream): Long {
+        val ex = android.media.ExifInterface(input)
+        for (tag in listOf(android.media.ExifInterface.TAG_DATETIME_ORIGINAL, android.media.ExifInterface.TAG_DATETIME_DIGITIZED, android.media.ExifInterface.TAG_DATETIME)) {
+            val v = ex.getAttribute(tag) ?: continue
+            if (v.startsWith("0000")) continue
+            val t = try { java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US).parse(v)?.time } catch (e: Exception) { null }
+            if (t != null && t > 0) return t
+        }
+        return 0L
+    }
+
+    /** Video headers store e.g. "20240312T101530.000Z" (UTC); 1904/1970 placeholders mean "unknown". */
+    fun video(v: String?): Long {
+        if (v.isNullOrBlank()) return 0L
+        val t = try {
+            java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.parse(v.take(15))?.time
+        } catch (e: Exception) { null } ?: return 0L
+        return if (t > 86_400_000L * 365 * 2) t else 0L
+    }
+}
+
 object Gallery {
     /** Details of a file another app shared with Sanka (name, type, size, length and, for photos, when it was taken). */
     fun describe(ctx: Context, uri: Uri, typeHint: String?): Media {
@@ -70,7 +93,7 @@ object Gallery {
         )
         for ((coll, video) in sets) {
             val cols = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE,
-                MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_TAKEN, MediaStore.MediaColumns.DATE_ADDED,
+                MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_TAKEN, MediaStore.MediaColumns.DATE_MODIFIED,
                 MediaStore.MediaColumns.DURATION, MediaStore.MediaColumns.RELATIVE_PATH,
                 MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT, MediaStore.MediaColumns.ORIENTATION,
                 MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)

@@ -83,15 +83,18 @@ Each release also has `sanka.apk`, a locked place for hidden photos and videos:
 - **Unhide** puts items back in the gallery in their original folder; **Delete** removes them for good
 - **Folders:** + New folder on the main screen; each folder's tile shows a cover picture from inside it (the first
   thing you added, or pick one with *Change cover*). Long-press a folder to rename, change its cover or delete it
-  (deleting a folder keeps what's in it)
-- **Order** (lines icon at the top): *By date taken*, split into months with a heading each, or *Newest added
-  first*. Folders follow the same order
+  (deleting a folder deletes everything in it, for good)
+- **Order** (lines icon at the top): *By date*, meaning when each photo or video was actually created (read from
+  inside the file), split into months with a heading each, or *Newest added first*. Folders follow the same order
 - Pictures show as a collage that keeps each one's shape: tall ones narrow, wide ones wide, every row the same height
 - When you hide new pictures you choose the folder (or none); *Add* inside a folder hides straight into it
 - **Share into Sanka:** in any app (another vault, Files, the gallery) select photos or videos, tap Share and choose
   *Hide in Sanka*. After unlocking you pick the folder; the other app keeps its copies until you delete them there
 - The hide screen has album chips and *Select all*, and can keep the albums pictures came from as Sanka folders
   (handy for moving a whole collection over from another vault app after exporting it to the gallery)
+- Hiding the same file twice is caught: Sanka recognises identical files and keeps one copy (older duplicates are
+  cleaned up automatically)
+- Lock screen: a slow, moving violet/blue glow, or one of your own pictures blurred (⋯ › Lock screen background)
 - Long-press to select several, then *Move*, *Unhide* or *Delete* (or *Cover* for one picture in a folder).
   ⋯ menu: change PIN, fingerprint on/off
 - Hidden files live only on this phone: uninstalling Sanka deletes them, so unhide anything you want to keep first

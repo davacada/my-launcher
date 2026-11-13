@@ -52,6 +52,9 @@ class SankaActivity : Activity() {
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(3)
+    private val importer = Executors.newSingleThreadExecutor() // imports one at a time, so nothing is copied twice
+    private var importing = false
+    private var pickingLockBg = false
     private lateinit var pin: Pin
     private var vault: Vault? = null
     private var screen = Screen.LOCK
@@ -118,7 +121,7 @@ class SankaActivity : Activity() {
             Intent.ACTION_SEND_MULTIPLE -> i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
         }
         if (uris.isEmpty()) return false
-        incoming.clear(); incoming.addAll(uris); incomingType = i.type
+        incoming.clear(); incoming.addAll(uris.distinct()); incomingType = i.type
         i.action = Intent.ACTION_MAIN // don't bring them in twice
         return true
     }
@@ -127,20 +130,22 @@ class SankaActivity : Activity() {
     private fun importShared() {
         val v = vault ?: return
         if (incoming.isEmpty()) return
-        val uris = ArrayList(incoming); incoming.clear()
+        val uris = ArrayList(incoming.distinct()); incoming.clear()
         val go = { folder: String ->
+            importing = true; v.duplicatesSkipped = 0
             busy("Bringing in 0 of ${uris.size}…")
-            io.execute {
+            importer.execute {
                 var ok = 0
                 uris.forEachIndexed { i, u ->
                     main.post { progress?.text = "Bringing in ${i + 1} of ${uris.size}…" }
                     try { if (v.add(Gallery.describe(this, u, incomingType), folder) != null) ok++ } catch (e: Exception) { }
                 }
                 main.post {
-                    busy(null)
+                    busy(null); importing = false
                     if (folder.isNotEmpty()) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
-                    Toast.makeText(this, if (ok == uris.size) "$ok added to Sanka. Once you've checked them, you can delete them in the other app."
-                        else "$ok of ${uris.size} added. The rest couldn't be read.", Toast.LENGTH_LONG).show()
+                    val dup = v.duplicatesSkipped
+                    Toast.makeText(this, (if (ok == uris.size) "$ok added to Sanka. Once you've checked them, you can delete them in the other app."
+                        else "$ok of ${uris.size} added. The rest couldn't be read.") + if (dup > 0) " ($dup were already in Sanka.)" else "", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -171,7 +176,7 @@ class SankaActivity : Activity() {
         unlocked = false
         releasePlayer()
         thumbs.evictAll()
-        selected.clear(); picked.clear()
+        selected.clear(); picked.clear(); pickingLockBg = false; pickingCover = false
         if (pin.isSet) show(Screen.LOCK)
     }
 
@@ -203,6 +208,7 @@ class SankaActivity : Activity() {
         val r = root ?: return
         scroll = null
         r.removeAllViews()
+        if (s == Screen.SETUP || s == Screen.LOCK) r.addView(lockBackground(), FrameLayout.LayoutParams(-1, -1))
         r.addView(when (s) {
             Screen.SETUP -> setupScreen()
             Screen.LOCK -> lockScreen()
@@ -211,6 +217,31 @@ class SankaActivity : Activity() {
             Screen.ADD -> addScreen()
             Screen.VIEWER -> viewerScreen()
         }, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    /** Behind the PIN pad: the moving aurora, or a picture you chose, heavily blurred and dimmed. */
+    private fun lockBackground(): View {
+        val id = prefs.getString("lockBg", null) ?: return AuroraView(this)
+        val frame = FrameLayout(this).apply { setBackgroundColor(BG) }
+        val img = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f
+            setRenderEffect(android.graphics.RenderEffect.createBlurEffect(dpf(28f), dpf(28f), android.graphics.Shader.TileMode.CLAMP))
+        }
+        frame.addView(img, FrameLayout.LayoutParams(-1, -1))
+        frame.addView(View(this).apply {
+            background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0x660B0F16, 0x8C0B0F16.toInt(), 0xE60B0F16.toInt()))
+        }, FrameLayout.LayoutParams(-1, -1))
+        io.execute {
+            val v = vault ?: try { Vault(this).also { vault = it } } catch (e: Exception) { null }
+            val item = v?.items?.firstOrNull { it.id == id }
+            val b = item?.let { v.thumb(it) }
+            main.post {
+                if (b != null) { img.setImageBitmap(b); img.animate().alpha(1f).setDuration(400).start() }
+                else { prefs.edit().remove("lockBg").apply() } // picture no longer in Sanka: back to the aurora next time
+            }
+        }
+        return frame
     }
 
     private fun brand(sub: String): View = LinearLayout(this).apply {
@@ -293,7 +324,15 @@ class SankaActivity : Activity() {
         show(Screen.VAULT)
         if (incoming.isNotEmpty()) main.post { importShared() }
         // Items hidden before folders existed don't know their shape yet; work it out once.
-        io.execute { if (vault?.fillInSizes() == true) main.post { if (screen == Screen.VAULT || screen == Screen.FOLDER) rerender() } }
+        importer.execute {
+            val v = vault ?: return@execute
+            val sized = v.fillInSizes()
+            val removed = v.checkUp() // real creation dates, fingerprints, and exact duplicates removed
+            if (sized || removed >= 0) main.post {
+                if (screen == Screen.VAULT || screen == Screen.FOLDER) rerender()
+                if (removed > 0) Toast.makeText(this, "Removed $removed duplicate${if (removed == 1) "" else "s"}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     // ------------------------------------------------------------------ vault grid
@@ -379,6 +418,12 @@ class SankaActivity : Activity() {
             thumbInto(cell, item.id) { vault?.thumb(item) }
             cell.setOnClickListener {
                 when {
+                    pickingLockBg -> {
+                        prefs.edit().putString("lockBg", item.id).apply()
+                        pickingLockBg = false
+                        Toast.makeText(this, "Lock screen background set", Toast.LENGTH_SHORT).show()
+                        rerender()
+                    }
                     pickingCover -> {
                         folderId?.let { f -> vault?.setCover(f, item.id) }
                         pickingCover = false
@@ -467,7 +512,8 @@ class SankaActivity : Activity() {
             }
         }
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
-        bottomBar(frame, if (selected.isEmpty()) listOf(glassButton(R.drawable.ic_add, "Hide photos & videos", filled = true) { addTarget = null; openAdd() })
+        bottomBar(frame, if (pickingLockBg) listOf(glassButton(R.drawable.ic_close, "Cancel choosing background") { pickingLockBg = false; rerender() })
+            else if (selected.isEmpty()) listOf(glassButton(R.drawable.ic_add, "Hide photos & videos", filled = true) { addTarget = null; openAdd() })
             else selectionButtons(loose, false))
         return frame
     }
@@ -540,6 +586,7 @@ class SankaActivity : Activity() {
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
 
         bottomBar(frame, when {
+            pickingLockBg -> listOf(glassButton(R.drawable.ic_close, "Cancel choosing background") { pickingLockBg = false; rerender() })
             selected.isNotEmpty() -> selectionButtons(items, true)
             pickingCover -> listOf(glassButton(R.drawable.ic_close, "Cancel") { pickingCover = false; rerender() })
             else -> listOfNotNull(
@@ -579,9 +626,9 @@ class SankaActivity : Activity() {
                 0 -> nameDialog("Rename folder", f.name, "Save") { n -> vault?.renameFolder(f.id, n); rerender() }
                 1 -> { folderId = f.id; selected.clear(); pickingCover = vault?.inFolder(f.id)?.isNotEmpty() == true; show(Screen.FOLDER) }
                 2 -> dialog().setTitle("Delete \"${f.name}\"?")
-                    .setMessage("The folder goes; everything in it stays hidden in Sanka, just not in a folder.")
+                    .setMessage(vault?.inFolder(f.id)?.size.let { n -> if (n == null || n == 0) "The folder is empty." else "The folder and the $n item${if (n == 1) "" else "s"} in it will be deleted for good. They can't be recovered; unhide anything you want to keep first." })
                     .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete folder") { _, _ -> vault?.deleteFolder(f.id); folderId = null; selected.clear(); show(Screen.VAULT) }
+                    .setPositiveButton("Delete folder") { _, _ -> thumbs.evictAll(); vault?.deleteFolder(f.id); folderId = null; selected.clear(); show(Screen.VAULT) }
                     .show()
             }
         }.show()
@@ -613,13 +660,17 @@ class SankaActivity : Activity() {
     private fun settingsMenu(anchor: View) {
         val fpOk = getSystemService(BiometricManager::class.java)
             ?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
-        val labels = mutableListOf("Change PIN")
+        val labels = mutableListOf("Change PIN", "Lock screen background")
         if (fpOk) labels.add(if (pin.fingerprint) "Fingerprint unlock: on" else "Fingerprint unlock: off")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> { unlocked = true; show(Screen.SETUP) }
-                    1 -> { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
+                    1 -> dialog().setTitle("Lock screen background").setItems(arrayOf("Aurora (moving glow)", "One of my pictures, blurred")) { _, w ->
+                        if (w == 0) { prefs.edit().remove("lockBg").apply(); Toast.makeText(this, "Aurora it is", Toast.LENGTH_SHORT).show() }
+                        else { pickingLockBg = true; selected.clear(); rerender(); Toast.makeText(this, "Tap the picture you want behind the lock screen", Toast.LENGTH_LONG).show() }
+                    }.show()
+                    2 -> { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
                 }
             }.show()
     }
@@ -783,6 +834,7 @@ class SankaActivity : Activity() {
 
     /** Copies the chosen items in (encrypted), then asks Android to remove the originals from the gallery. */
     private fun hidePicked() {
+        if (importing) return
         val target = addTarget
         if (target != null) { hideInto(target); return }
         val v = vault ?: return
@@ -805,16 +857,19 @@ class SankaActivity : Activity() {
         if (folder == null) chosen.map { it.album }.filter { it.isNotEmpty() }.distinct().forEach { name ->
             byAlbum[name] = (v.folders.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: v.newFolder(name)).id
         }
-        if (chosen.isEmpty()) return
+        if (chosen.isEmpty() || importing) return
+        importing = true
+        v.duplicatesSkipped = 0
         busy("Hiding 0 of ${chosen.size}…")
-        io.execute {
+        importer.execute {
             val done = ArrayList<Uri>()
             chosen.forEachIndexed { i, m ->
                 main.post { progress?.text = "Hiding ${i + 1} of ${chosen.size}…" }
                 if (v.add(m, folder ?: byAlbum[m.album] ?: "") != null) done.add(m.uri)
             }
             main.post {
-                busy(null)
+                busy(null); importing = false
+                if (v.duplicatesSkipped > 0) Toast.makeText(this, "${v.duplicatesSkipped} were already in Sanka, so they weren't copied again.", Toast.LENGTH_LONG).show()
                 picked.clear(); album = null
                 if (!folder.isNullOrEmpty() && v.folders.any { it.id == folder }) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
                 if (done.size < chosen.size) Toast.makeText(this, "${chosen.size - done.size} couldn't be read and stayed in the gallery.", Toast.LENGTH_LONG).show()

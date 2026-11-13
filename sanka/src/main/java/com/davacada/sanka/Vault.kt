@@ -151,18 +151,20 @@ class EncDataSource(ctx: Context, file: File) : MediaDataSource() {
 data class Item(
     val id: String, val name: String, val mime: String, val size: Long,
     val taken: Long, val added: Long, val duration: Long, val path: String,
-    val folder: String = "", val w: Int = 0, val h: Int = 0
+    val folder: String = "", val w: Int = 0, val h: Int = 0,
+    val hash: String = "",          // fingerprint of the file's contents, to spot duplicates
+    val dated: Boolean = false      // true once the creation date has been read from inside the file
 ) {
     val isVideo get() = mime.startsWith("video/")
     /** Width / height as shown (1 when unknown). */
     val aspect: Float get() = if (w > 0 && h > 0) (w.toFloat() / h).coerceIn(0.3f, 3.5f) else 1f
     fun json() = JSONObject().put("id", id).put("name", name).put("mime", mime).put("size", size)
         .put("taken", taken).put("added", added).put("duration", duration).put("path", path)
-        .put("folder", folder).put("w", w).put("h", h)
+        .put("folder", folder).put("w", w).put("h", h).put("hash", hash).put("dated", dated)
     companion object {
         fun from(o: JSONObject) = Item(o.getString("id"), o.optString("name"), o.optString("mime"), o.optLong("size"),
             o.optLong("taken"), o.optLong("added"), o.optLong("duration"), o.optString("path"),
-            o.optString("folder"), o.optInt("w"), o.optInt("h"))
+            o.optString("folder"), o.optInt("w"), o.optInt("h"), o.optString("hash"), o.optBoolean("dated"))
     }
 }
 
@@ -226,10 +228,12 @@ class Vault(private val ctx: Context) {
         folders = folders.map { if (it.id == id) it.copy(name = name.trim().ifEmpty { it.name }) else it }.toMutableList(); save()
     }
 
-    /** Removes the folder; what was in it stays hidden, just not in a folder. */
+    /** Removes the folder and everything in it, for good. */
     @Synchronized fun deleteFolder(id: String) {
+        items.filter { it.folder == id }.forEach { dataFile(it).delete(); thumbFile(it).delete() }
+        items = items.filter { it.folder != id }.toMutableList()
         folders.removeAll { it.id == id }
-        items = items.map { if (it.folder == id) it.copy(folder = "") else it }.toMutableList(); save()
+        save()
     }
 
     @Synchronized fun move(ids: Collection<String>, folder: String) {
@@ -238,6 +242,52 @@ class Vault(private val ctx: Context) {
 
     @Synchronized fun setCover(folder: String, item: String) {
         folders = folders.map { if (it.id == folder) it.copy(cover = item) else it }.toMutableList(); save()
+    }
+
+    /**
+     * One-off tidy-up for items hidden by older versions: reads each file's own creation date and fingerprint,
+     * then removes exact duplicates (same contents), keeping the copy that's in a folder or was added first.
+     * Returns how many duplicates were removed, or -1 if nothing changed.
+     */
+    fun checkUp(): Int {
+        val todo = items.filter { it.hash.isEmpty() || !it.dated }
+        var changed = false
+        for (m in todo) {
+            val hash = if (m.hash.isEmpty()) try { EncFile(ctx, dataFile(m)).use { e -> fingerprint(e.stream()) } } catch (e: Exception) { "" } else m.hash
+            val made = if (!m.dated) createdAt(m) else 0L
+            synchronized(this) {
+                items = items.map { x -> if (x.id != m.id) x else x.copy(hash = hash.ifEmpty { x.hash }, dated = true,
+                    taken = if (made > 0) made else x.taken) }.toMutableList()
+            }
+            changed = true
+        }
+        var removed = 0
+        synchronized(this) {
+            items.filter { it.hash.isNotEmpty() }.groupBy { it.hash }.values.filter { it.size > 1 }.forEach { copies ->
+                val keep = copies.sortedWith(compareBy<Item> { it.folder.isEmpty() }.thenBy { it.added }).first()
+                copies.filter { it.id != keep.id }.forEach { d -> dataFile(d).delete(); thumbFile(d).delete(); items.removeAll { it.id == d.id }; removed++ }
+            }
+            if (changed || removed > 0) save()
+        }
+        return if (changed || removed > 0) removed else -1
+    }
+
+    /** When the photo or video was made, from inside the file itself (EXIF / video header); 0 if it doesn't say. */
+    private fun createdAt(m: Item): Long = try {
+        if (m.isVideo) {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                EncDataSource(ctx, dataFile(m)).use { src -> r.setDataSource(src); Dates.video(r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DATE)) }
+            } finally { r.release() }
+        } else EncFile(ctx, dataFile(m)).use { e -> Dates.exif(e.stream()) }
+    } catch (e: Exception) { 0L }
+
+    /** SHA-256 of a whole stream, as hex. */
+    private fun fingerprint(input: java.io.InputStream): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val buf = ByteArray(256 * 1024)
+        while (true) { val n = input.read(buf); if (n <= 0) break; md.update(buf, 0, n) }
+        return md.digest().joinToString("") { "%02x".format(it) }
     }
 
     /** Older items were saved without their size: work it out from the thumbnail so the collage gets their shape. */
@@ -278,15 +328,29 @@ class Vault(private val ctx: Context) {
     } catch (e: Exception) { null }
 
     /** Copies a gallery item in, encrypted. Returns the new item, or null if it couldn't be read. */
+    /** How many of the last adds were already in Sanka (same contents) and so weren't copied again. */
+    var duplicatesSkipped = 0
+
     fun add(m: Media, folder: String = ""): Item? {
         val id = UUID.randomUUID().toString()
-        val item = Item(id, m.name, m.mime, m.size, m.taken, System.currentTimeMillis(), m.duration, m.path, folder, m.w, m.h)
+        var item = Item(id, m.name, m.mime, m.size, m.taken, System.currentTimeMillis(), m.duration, m.path, folder, m.w, m.h)
         val tmp = File(dir, "$id.part")
         try {
-            ctx.contentResolver.openInputStream(m.uri)?.use { input ->
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            ctx.contentResolver.openInputStream(m.uri)?.use { raw ->
+                val input = java.security.DigestInputStream(raw, md)
                 FileOutputStream(tmp).use { fo -> Crypto.encrypting(ctx, fo).use { input.copyTo(it, 256 * 1024) } }
             } ?: return null
+            val hash = md.digest().joinToString("") { "%02x".format(it) }
+            // Already hidden? Don't keep a second copy (it can still be removed from the gallery).
+            synchronized(this) { items.firstOrNull { it.hash == hash } }?.let { existing ->
+                tmp.delete(); duplicatesSkipped++
+                if (folder.isNotEmpty() && existing.folder.isEmpty()) move(listOf(existing.id), folder)
+                return existing
+            }
             if (!tmp.renameTo(dataFile(item))) return null
+            val made = createdAt(item)
+            item = item.copy(hash = hash, dated = true, taken = if (made > 0) made else item.taken)
             // Gallery items have a ready thumbnail; files shared from other apps get one made here.
             val th = try { ctx.contentResolver.loadThumbnail(m.uri, Size(640, 640), null) } catch (e: Exception) { null }
                 ?: makeThumb(m)

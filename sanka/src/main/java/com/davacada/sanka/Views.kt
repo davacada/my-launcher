@@ -81,7 +81,7 @@ class PinPad(ctx: Context, private val showFingerprint: Boolean, private val onF
                     "del" -> ctx.iconButton(R.drawable.ic_backspace, "Delete digit", 72) { if (digits.isNotEmpty()) { digits = digits.dropLast(1); render() } }
                     else -> ctx.label(k, 28f).apply {
                         gravity = Gravity.CENTER
-                        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33FFFFFF), oval(0x14FFFFFF), null)
+                        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x40FFFFFF), oval(0x1AFFFFFF, ctx.dp(1), 0x2EFFFFFF), null)
                         setOnClickListener { press(k) }
                     }
                 }
@@ -117,6 +117,38 @@ class PinPad(ctx: Context, private val showFingerprint: Boolean, private val onF
             }, LayoutParams(context.dp(14), context.dp(14)).apply { setMargins(context.dp(8), 0, context.dp(8), 0) })
         }
         ok.visibility = if (autoSubmitAt == 0 && digits.length >= minLen) VISIBLE else INVISIBLE
+    }
+}
+
+/** The lock screen's background: slow, soft glows of violet and blue drifting over the dark. */
+class AuroraView(ctx: Context) : View(ctx) {
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val start = android.os.SystemClock.uptimeMillis()
+    // per glow: size (share of the screen's longer side), drift speed, phase
+    private val blobs = listOf(
+        floatArrayOf(0f, 0.75f, 0.11f, 0f),
+        floatArrayOf(0f, 0.65f, 0.08f, 2.1f),
+        floatArrayOf(0f, 0.55f, 0.13f, 4.2f),
+        floatArrayOf(0f, 0.45f, 0.09f, 1.3f),
+    )
+    private val colors = intArrayOf(0x8A5B2FD6.toInt(), 0x702D5BD8, 0x5CC9A2FF, 0x4AD14B9E)
+
+    override fun onDraw(c: android.graphics.Canvas) {
+        c.drawColor(BG)
+        val t = (android.os.SystemClock.uptimeMillis() - start) / 1000f
+        val w = width.toFloat(); val h = height.toFloat(); val big = maxOf(w, h)
+        blobs.forEachIndexed { i, b ->
+            val sp = b[2]; val ph = b[3]
+            val cx = w * (0.5f + 0.38f * kotlin.math.sin(t * sp + ph))
+            val cy = h * (0.42f + 0.32f * kotlin.math.cos(t * sp * 0.8f + ph * 1.7f))
+            val r = big * b[1]
+            paint.shader = android.graphics.RadialGradient(cx, cy, r, colors[i], 0x000B0F16, android.graphics.Shader.TileMode.CLAMP)
+            c.drawCircle(cx, cy, r, paint)
+        }
+        // darker at the bottom so the keypad stays easy to read
+        paint.shader = android.graphics.LinearGradient(0f, h * 0.45f, 0f, h, 0x000B0F16, 0xCC0B0F16.toInt(), android.graphics.Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, paint)
+        postInvalidateDelayed(33)
     }
 }
 
