@@ -242,7 +242,7 @@ class MainActivity : Activity() {
             hint = "Search apps"
             setHintTextColor(0x99FFFFFF.toInt()); setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            background = null; isSingleLine = true
+            background = null; setSingleLine(true)
             imeOptions = EditorInfo.IME_ACTION_GO
             setPadding(dp(4), 0, dp(4), 0)
             addTextChangedListener(object : TextWatcher {
