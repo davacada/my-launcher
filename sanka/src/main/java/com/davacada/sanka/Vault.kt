@@ -331,25 +331,59 @@ class Vault(private val ctx: Context) {
     /** How many of the last adds were already in Sanka (same contents) and so weren't copied again. */
     var duplicatesSkipped = 0
 
+    /** Why the last [add] failed, in plain words (for the import summary). */
+    var lastError = ""
+
+    /**
+     * Reads the source exactly once into an encrypted copy. Some apps (vaults especially) hand out files that can
+     * only be read once, or only as a stream, so everything else (size, length, thumbnail, date) comes from Sanka's
+     * own copy afterwards. Tries the direct file first, then the stream, a few times.
+     */
+    private fun copyIn(uri: Uri, tmp: File, md: java.security.MessageDigest): Long {
+        var last: Exception? = null
+        for (attempt in 0 until 3) {
+            for (direct in listOf(true, false)) {
+                md.reset(); tmp.delete()
+                try {
+                    val raw: InputStream = if (direct)
+                        ctx.contentResolver.openFileDescriptor(uri, "r")?.let { android.os.ParcelFileDescriptor.AutoCloseInputStream(it) } ?: continue
+                    else ctx.contentResolver.openInputStream(uri) ?: continue
+                    var n = 0L
+                    raw.use { r ->
+                        val input = java.security.DigestInputStream(r, md)
+                        FileOutputStream(tmp).use { fo -> Crypto.encrypting(ctx, fo).use { out ->
+                            val buf = ByteArray(256 * 1024)
+                            while (true) { val k = input.read(buf); if (k < 0) break; out.write(buf, 0, k); n += k }
+                        } }
+                    }
+                    if (n > 0) return n
+                    last = java.io.IOException("the other app sent an empty file")
+                } catch (e: Exception) { last = e }
+            }
+            Thread.sleep(600L * (attempt + 1))
+        }
+        throw last ?: java.io.IOException("the other app didn't hand over the file")
+    }
+
     fun add(m: Media, folder: String = ""): Item? {
         val id = UUID.randomUUID().toString()
         var item = Item(id, m.name, m.mime, m.size, m.taken, System.currentTimeMillis(), m.duration, m.path, folder, m.w, m.h)
         val tmp = File(dir, "$id.part")
+        lastError = ""
         try {
             val md = java.security.MessageDigest.getInstance("SHA-256")
-            ctx.contentResolver.openInputStream(m.uri)?.use { raw ->
-                val input = java.security.DigestInputStream(raw, md)
-                FileOutputStream(tmp).use { fo -> Crypto.encrypting(ctx, fo).use { input.copyTo(it, 256 * 1024) } }
-            } ?: return null
+            val bytes = copyIn(m.uri, tmp, md)
+            if (item.size <= 0) item = item.copy(size = bytes)
             val hash = md.digest().joinToString("") { "%02x".format(it) }
             // Identical copies are kept for now; Sanka shows them afterwards so you can decide.
-            if (!tmp.renameTo(dataFile(item))) return null
+            if (!tmp.renameTo(dataFile(item))) { lastError = "couldn't save the copy"; return null }
+            if (item.isVideo) videoInfo(item)?.let { (d, w, h) -> item = item.copy(duration = if (item.duration > 0) item.duration else d, w = if (item.w > 0) item.w else w, h = if (item.h > 0) item.h else h) }
             // When it was made: from inside the file, else from a date in its name (IMG_20230512…), else what the gallery said.
             val made = createdAt(item).takeIf { it > 0 } ?: Dates.fromName(item.name)
             item = item.copy(hash = hash, dated = DATED, taken = if (made > 0) made else item.taken)
-            // Gallery items have a ready thumbnail; files shared from other apps get one made here.
-            val th = try { ctx.contentResolver.loadThumbnail(m.uri, Size(640, 640), null) } catch (e: Exception) { null }
-                ?: makeThumb(m)
+            // Gallery items have a ready thumbnail; anything else gets one made from Sanka's own copy.
+            val th = (if (m.uri.authority == MediaStore.AUTHORITY) try { ctx.contentResolver.loadThumbnail(m.uri, Size(640, 640), null) } catch (e: Exception) { null } else null)
+                ?: makeThumb(item)
             var saved = item
             if (th != null) {
                 val bo = ByteArrayOutputStream(); th.compress(Bitmap.CompressFormat.JPEG, 85, bo)
@@ -359,23 +393,43 @@ class Vault(private val ctx: Context) {
             synchronized(this) { items.add(0, saved); save() }
             return saved
         } catch (e: Exception) {
+            lastError = when (e) {
+                is SecurityException -> "the other app didn't give permission to read it"
+                is java.io.FileNotFoundException -> "the other app said the file isn't there"
+                else -> e.message ?: e.javaClass.simpleName
+            }
             tmp.delete(); dataFile(item).delete(); thumbFile(item).delete()
             return null
         }
     }
 
-    private fun makeThumb(m: Media): Bitmap? = try {
-        if (m.isVideo) {
-            val r = android.media.MediaMetadataRetriever()
-            try { r.setDataSource(ctx, m.uri); r.getScaledFrameAtTime(1_000_000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 640, 640) }
-            finally { r.release() }
-        } else {
-            ImageDecoder.decodeBitmap(ImageDecoder.createSource(ctx.contentResolver, m.uri)) { d, info, _ ->
-                val longest = maxOf(info.size.width, info.size.height)
-                if (longest > 640) d.setTargetSampleSize((longest / 640).coerceAtLeast(1))
-                d.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+    /** Length (ms), width and height of a hidden video, read from Sanka's copy. */
+    private fun videoInfo(it: Item): Triple<Long, Int, Int>? = try {
+        val r = android.media.MediaMetadataRetriever()
+        try {
+            EncDataSource(ctx, dataFile(it)).use { src ->
+                r.setDataSource(src)
+                val d = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                val vw = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                val vh = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val rot = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                if (rot % 180 != 0) Triple(d, vh, vw) else Triple(d, vw, vh)
             }
-        }
+        } finally { r.release() }
+    } catch (e: Exception) { null }
+
+    /** A thumbnail made from Sanka's own (encrypted) copy. */
+    private fun makeThumb(it: Item): Bitmap? = try {
+        if (it.isVideo) {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                EncDataSource(ctx, dataFile(it)).use { src ->
+                    r.setDataSource(src)
+                    r.getScaledFrameAtTime(1_000_000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 640, 640)
+                        ?: r.getScaledFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 640, 640)
+                }
+            } finally { r.release() }
+        } else photo(it, 640)
     } catch (e: Exception) { null }
 
     /** Puts an item back in the gallery (in its original folder where possible) and removes it from Sanka. */

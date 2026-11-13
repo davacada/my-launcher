@@ -76,34 +76,9 @@ object Gallery {
             ?: typeHint?.takeIf { (it.startsWith("image/") || it.startsWith("video/")) && !it.endsWith("*") }
             ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
             ?: "image/jpeg"
-        var taken = 0L; var duration = 0L; var w = 0; var h = 0
-        if (mime.startsWith("video/")) {
-            val r = android.media.MediaMetadataRetriever()
-            try {
-                r.setDataSource(ctx, uri)
-                duration = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-                val vw = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-                val vh = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-                val rot = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-                if (rot % 180 != 0) { w = vh; h = vw } else { w = vw; h = vh }
-                r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DATE)?.let { d ->
-                    taken = try { java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.parse(d.take(15))?.time ?: 0L } catch (e: Exception) { 0L }
-                }
-            } catch (e: Exception) { } finally { r.release() }
-        } else {
-            try {
-                ctx.contentResolver.openInputStream(uri)?.use { s ->
-                    val ex = android.media.ExifInterface(s)
-                    val dt = ex.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL) ?: ex.getAttribute(android.media.ExifInterface.TAG_DATETIME)
-                    if (dt != null) taken = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US).parse(dt)?.time ?: 0L
-                    val iw = ex.getAttributeInt(android.media.ExifInterface.TAG_IMAGE_WIDTH, 0)
-                    val ih = ex.getAttributeInt(android.media.ExifInterface.TAG_IMAGE_LENGTH, 0)
-                    val o = ex.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)
-                    val turned = o == 5 || o == 6 || o == 7 || o == 8
-                    if (turned) { w = ih; h = iw } else { w = iw; h = ih }
-                }
-            } catch (e: Exception) { }
-        }
+        // Nothing is read from the file here: some apps only let it be read once, and Sanka needs that read
+        // for the copy. Length, size, shape and date all come from Sanka's own copy afterwards.
+        val taken = 0L; val duration = 0L; val w = 0; val h = 0
         return Media(uri, name, mime, size, taken, duration, "", w, h)
     }
 

@@ -172,7 +172,7 @@ class SankaActivity : Activity() {
                             ok = true; brought.add(got.id)
                             why = "added (${android.text.format.Formatter.formatShortFileSize(this, m.size)})"
                             break
-                        } else why = "couldn't be read (empty)"
+                        } else { why = "couldn't be read: " + v.lastError.ifEmpty { "unknown reason" }; if (attempt == 1) reasons.add(v.lastError) }
                     } catch (e: SecurityException) { reasons.add("no permission to read"); why = "no permission to read"; break }
                     catch (e: Exception) { val r = e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""); why = r; if (attempt == 1) reasons.add(r) }
                     if (attempt == 0) Thread.sleep(400)
