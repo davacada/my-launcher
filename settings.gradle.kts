@@ -8,3 +8,4 @@ dependencyResolutionManagement {
 rootProject.name = "my-launcher"
 include(":app")
 include(":camera")
+include(":sanka")

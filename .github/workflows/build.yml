@@ -39,6 +39,7 @@ jobs:
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk my-launcher.apk
           cp camera/build/outputs/apk/debug/camera-debug.apk pro-camera.apk
+          cp sanka/build/outputs/apk/debug/sanka-debug.apk sanka.apk
 
       - uses: actions/upload-artifact@v4
         with:
@@ -46,6 +47,7 @@ jobs:
           path: |
             my-launcher.apk
             pro-camera.apk
+            sanka.apk
 
       - name: Publish as a release (easy to download on the phone)
         uses: softprops/action-gh-release@v2
@@ -55,4 +57,5 @@ jobs:
           files: |
             my-launcher.apk
             pro-camera.apk
+            sanka.apk
           make_latest: true

@@ -70,3 +70,16 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
   vertical 9:16 video; the screen holds its orientation while recording
 - Volume buttons work as the shutter; the (i) button shows exactly what each lens supports
 - Files go to Movies/ProCamera and Pictures/ProCamera
+
+## Sanka
+
+Each release also has `sanka.apk`, a locked place for hidden photos and videos:
+
+- Locks with a PIN (4–8 digits) or fingerprint, and locks again as soon as you leave it.
+  Screenshots and the recent-apps preview are blocked
+- **Hide photos & videos:** choose them from your gallery; they're copied in, encrypted (AES-256, key kept in the
+  phone's secure hardware), and Android asks to remove the originals from the gallery
+- View photos (pinch / double-tap to zoom) and play videos inside the app; swipe between them
+- **Unhide** puts items back in the gallery in their original folder; **Delete** removes them for good
+- Long-press to select several. ⋯ menu: change PIN, fingerprint on/off
+- Hidden files live only on this phone: uninstalling Sanka deletes them, so unhide anything you want to keep first
