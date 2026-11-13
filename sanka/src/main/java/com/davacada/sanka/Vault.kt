@@ -263,15 +263,13 @@ class Vault(private val ctx: Context) {
             }
             changed = true
         }
-        var removed = 0
-        synchronized(this) {
-            items.filter { it.hash.isNotEmpty() }.groupBy { it.hash + "|" + it.name }.values.filter { it.size > 1 }.forEach { copies ->
-                val keep = copies.sortedWith(compareBy<Item> { it.folder.isEmpty() }.thenBy { it.added }).first()
-                copies.filter { it.id != keep.id }.forEach { d -> dataFile(d).delete(); thumbFile(d).delete(); items.removeAll { it.id == d.id }; removed++ }
-            }
-            if (changed || removed > 0) save()
-        }
-        return if (changed || removed > 0) removed else -1
+        if (changed) synchronized(this) { save() }
+        return if (changed) 0 else -1
+    }
+
+    /** Sets of items whose contents are identical (oldest first). Nothing is removed; you decide. */
+    fun duplicateGroups(): List<List<Item>> = synchronized(this) {
+        items.filter { it.hash.isNotEmpty() }.groupBy { it.hash }.values.filter { it.size > 1 }.map { g -> g.sortedBy { it.added } }
     }
 
     /** When the photo or video was made, from inside the file itself (EXIF / video header); 0 if it doesn't say. */
@@ -344,14 +342,7 @@ class Vault(private val ctx: Context) {
                 FileOutputStream(tmp).use { fo -> Crypto.encrypting(ctx, fo).use { input.copyTo(it, 256 * 1024) } }
             } ?: return null
             val hash = md.digest().joinToString("") { "%02x".format(it) }
-            // Already hidden? Don't keep a second copy (it can still be removed from the gallery).
-            // Only the very same file counts: same contents AND same name. (Some apps hand over files with
-            // identical bytes under different names; those are kept, so nothing ever silently goes missing.)
-            synchronized(this) { items.firstOrNull { it.hash == hash && it.name == item.name } }?.let { existing ->
-                tmp.delete(); duplicatesSkipped++
-                if (folder.isNotEmpty() && existing.folder != folder) move(listOf(existing.id), folder) // goes where you asked
-                return existing
-            }
+            // Identical copies are kept for now; Sanka shows them afterwards so you can decide.
             if (!tmp.renameTo(dataFile(item))) return null
             // When it was made: from inside the file, else from a date in its name (IMG_20230512…), else what the gallery said.
             val made = createdAt(item).takeIf { it > 0 } ?: Dates.fromName(item.name)

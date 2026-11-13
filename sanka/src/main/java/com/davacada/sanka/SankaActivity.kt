@@ -48,7 +48,7 @@ import java.util.concurrent.Executors
  */
 class SankaActivity : Activity() {
 
-    private enum class Screen { SETUP, LOCK, VAULT, FOLDER, ADD, VIEWER, RESULT }
+    private enum class Screen { SETUP, LOCK, VAULT, FOLDER, ADD, VIEWER, RESULT, DUPES }
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(3)
@@ -169,8 +169,8 @@ class SankaActivity : Activity() {
                         name = m.name
                         val got = v.add(m, folder)
                         if (got != null) {
-                            ok = true; brought.add(got.id); already += v.duplicatesSkipped
-                            why = if (v.duplicatesSkipped > 0) "already in Sanka" else "added (${android.text.format.Formatter.formatShortFileSize(this, m.size)})"
+                            ok = true; brought.add(got.id)
+                            why = "added (${android.text.format.Formatter.formatShortFileSize(this, m.size)})"
                             break
                         } else why = "couldn't be read (empty)"
                     } catch (e: SecurityException) { reasons.add("no permission to read"); why = "no permission to read"; break }
@@ -187,7 +187,8 @@ class SankaActivity : Activity() {
                 if (folder.isNotEmpty() && v.folders.any { it.id == folder }) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
                 val msg = StringBuilder("Received ${uris.size} from the other app.\n\n")
                 msg.append("• $added new in Sanka\n")
-                if (already > 0) msg.append("• $already were already in Sanka (identical files), so they weren't copied twice. They're now in the folder you chose; tap Show them to see all of them together\n")
+                val dupes = dupesTouching(brought)
+                if (dupes.isNotEmpty()) msg.append("• ${dupes.sumOf { it.size - 1 }} look identical to other pictures in Sanka; you'll get to check them next\n")
                 if (failed.isNotEmpty()) msg.append("• ${failed.size} couldn't be read" + (reasons.distinct().firstOrNull()?.let { " ($it)" } ?: "") + "\n")
                 if (failed.isEmpty()) msg.append("\nOnce you've checked them, you can delete them in the other app.")
                 val d = dialog().setTitle(if (failed.isEmpty()) "Done" else "Some didn't come through").setMessage(msg.toString())
@@ -195,6 +196,7 @@ class SankaActivity : Activity() {
                     .setNegativeButton("Details") { _, _ -> dialog().setTitle("Each file").setMessage(log.joinToString("\n")).setPositiveButton("OK", null).show() }
                 if (failed.isNotEmpty()) d.setNeutralButton("Try those again") { _, _ -> bringIn(failed, folder) }
                 else if (lastBrought.isNotEmpty()) d.setNeutralButton("Show them") { _, _ -> resultOpen = true; selected.clear(); show(Screen.RESULT) }
+                d.setOnDismissListener { if (dupes.isNotEmpty()) askAboutDupes(dupes, true) }
                 d.show()
             }
         }
@@ -218,7 +220,7 @@ class SankaActivity : Activity() {
         unlocked = false
         releasePlayer()
         thumbs.evictAll()
-        selected.clear(); picked.clear(); pickingLockBg = false; pickingCover = false; resultOpen = false
+        selected.clear(); picked.clear(); pickingLockBg = false; pickingCover = false; resultOpen = false; dupesOpen = false
         if (pin.isSet) show(Screen.LOCK)
     }
 
@@ -227,6 +229,7 @@ class SankaActivity : Activity() {
         when (screen) {
             Screen.VIEWER -> { releasePlayer(); show(back()) }
             Screen.ADD -> { picked.clear(); show(back()) }
+            Screen.DUPES -> { dupesOpen = false; show(Screen.VAULT) }
             Screen.RESULT -> { resultOpen = false; selected.clear(); show(if (folderId != null && vault?.folders?.any { it.id == folderId } == true) Screen.FOLDER else Screen.VAULT) }
             Screen.FOLDER -> if (selected.isNotEmpty() || pickingCover) { selected.clear(); pickingCover = false; rerender() } else { folderId = null; show(Screen.VAULT) }
             Screen.VAULT -> if (selected.isNotEmpty()) { selected.clear(); rerender() } else { lock(); moveTaskToBack(true) }
@@ -240,7 +243,7 @@ class SankaActivity : Activity() {
     private var lastBrought: List<String> = emptyList() // what the last import brought in (new + already there)
     private var resultOpen = false
 
-    private fun back() = if (resultOpen) Screen.RESULT else if (folderId != null && vault?.folders?.any { it.id == folderId } == true) Screen.FOLDER else Screen.VAULT
+    private fun back() = if (dupesOpen) Screen.DUPES else if (resultOpen) Screen.RESULT else if (folderId != null && vault?.folders?.any { it.id == folderId } == true) Screen.FOLDER else Screen.VAULT
 
     /** Redraws the current screen and keeps the scroll position (after selecting, moving, …). */
     private fun rerender() {
@@ -261,6 +264,7 @@ class SankaActivity : Activity() {
             Screen.VAULT -> homeScreen()
             Screen.FOLDER -> folderScreen()
             Screen.RESULT -> resultScreen()
+            Screen.DUPES -> dupesScreen()
             Screen.ADD -> addScreen()
             Screen.VIEWER -> viewerScreen()
         }, FrameLayout.LayoutParams(-1, -1))
@@ -374,10 +378,11 @@ class SankaActivity : Activity() {
         importer.execute {
             val v = vault ?: return@execute
             val sized = v.fillInSizes()
-            val removed = v.checkUp() // real creation dates, fingerprints, and exact duplicates removed
-            if (sized || removed >= 0) main.post {
-                if (screen == Screen.VAULT || screen == Screen.FOLDER) rerender()
-                if (removed > 0) Toast.makeText(this, "Removed $removed duplicate${if (removed == 1) "" else "s"}", Toast.LENGTH_LONG).show()
+            val changed = v.checkUp() >= 0 // real creation dates and fingerprints for older items
+            val dupes = v.duplicateGroups().filter { it.first().hash !in keptHashes() }
+            main.post {
+                if ((sized || changed) && (screen == Screen.VAULT || screen == Screen.FOLDER)) rerender()
+                if (dupes.isNotEmpty() && unlocked && !importing) askAboutDupes(dupes, false)
             }
         }
     }
@@ -645,6 +650,107 @@ class SankaActivity : Activity() {
         return frame
     }
 
+    // ------------------------------------------------------------------ identical pictures: you decide
+
+    private var pendingDupes: List<List<Item>> = emptyList()
+    private var dupeGroups: List<List<String>> = emptyList()
+    private val dupeKeep = HashSet<String>()
+    private var dupesOpen = false
+
+    /** Hashes you've already said to keep both copies of, so Sanka doesn't ask again. */
+    private fun keptHashes(): Set<String> = prefs.getStringSet("keptDupes", emptySet()) ?: emptySet()
+    private fun keepHashes(h: Collection<String>) = prefs.edit().putStringSet("keptDupes", keptHashes() + h).apply()
+
+    /** Groups of identical pictures that include any of [ids]. */
+    private fun dupesTouching(ids: Collection<String>): List<List<Item>> {
+        val set = ids.toSet()
+        return vault?.duplicateGroups()?.filter { g -> g.any { it.id in set } } ?: emptyList()
+    }
+
+    private fun flushDupes() {
+        val d = pendingDupes; pendingDupes = emptyList()
+        if (d.isNotEmpty()) askAboutDupes(d, true)
+    }
+
+    private fun askAboutDupes(groups: List<List<Item>>, justAdded: Boolean) {
+        val extra = groups.sumOf { it.size - 1 }
+        val text = if (justAdded) "$extra of what you just added ${if (extra == 1) "is" else "are"} identical to other pictures in Sanka (same contents)."
+                   else "Sanka found ${groups.size} set${if (groups.size == 1) "" else "s"} of identical pictures ($extra extra cop${if (extra == 1) "y" else "ies"})."
+        dialog().setTitle("Possible duplicates").setMessage("$text\n\nWhat would you like to do?")
+            .setPositiveButton("Look at them") { _, _ -> openDupes(groups) }
+            .setNeutralButton("Keep everything") { _, _ -> keepHashes(groups.map { it.first().hash }) }
+            .setNegativeButton("Keep one of each") { _, _ ->
+                val v = vault ?: return@setNegativeButton
+                groups.forEach { g -> g.drop(1).forEach { v.remove(it) } } // keeps the one that was there first
+                thumbs.evictAll(); rerender()
+                Toast.makeText(this, "Removed $extra extra cop${if (extra == 1) "y" else "ies"}", Toast.LENGTH_SHORT).show()
+            }.show()
+    }
+
+    private fun openDupes(groups: List<List<Item>>) {
+        dupeGroups = groups.map { g -> g.map { it.id } }
+        dupeKeep.clear(); dupeKeep.addAll(groups.map { it.first().id }) // first guess: keep the one that was there first
+        dupesOpen = true; selected.clear()
+        show(Screen.DUPES)
+    }
+
+    private fun dupesScreen(): View {
+        val v = vault ?: return View(this)
+        val byId = v.items.associateBy { it.id }
+        val groups = dupeGroups.map { g -> g.mapNotNull { byId[it] } }.filter { it.size > 1 }
+        val frame = FrameLayout(this)
+        val sv = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        scroll = sv
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, insetBottom + dp(110)) }
+        sv.addView(col)
+        col.addView(header("Possible duplicates", "Tap to choose which to keep · hold to look closer",
+            iconButton(R.drawable.ic_back, "Back") { onBackPressed() }, emptyList()))
+        if (groups.isEmpty()) col.addView(label("No duplicates left.", 14f, 0x99FFFFFF.toInt()).apply { setPadding(dp(24), dp(24), dp(24), 0) })
+        val tileW = dp(150)
+        val fmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+        groups.forEachIndexed { gi, g ->
+            col.addView(section("SET ${gi + 1} · ${g.size} IDENTICAL", null))
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(14), 0, dp(14), dp(6)) }
+            g.forEach { item ->
+                val keep = item.id in dupeKeep
+                val tile = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    val cell = Cell(context, square = true, radius = 14f)
+                    cell.set("d:" + item.id, item.duration, item.isVideo, true, keep)
+                    thumbInto(cell, item.id) { v.thumb(item) }
+                    addView(cell, LinearLayout.LayoutParams(tileW, tileW))
+                    val where = v.folders.firstOrNull { it.id == item.folder }?.name ?: "Not in a folder"
+                    addView(label(item.name, 12.5f, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE; setPadding(dp(2), dp(6), dp(2), 0) },
+                        LinearLayout.LayoutParams(tileW, -2))
+                    addView(label("${android.text.format.Formatter.formatShortFileSize(context, item.size)} · $where\nadded ${fmt.format(Date(item.added))}", 11.5f, 0xFFA9B2C0.toInt()).apply { setPadding(dp(2), dp(1), dp(2), 0) },
+                        LinearLayout.LayoutParams(tileW, -2))
+                    addView(label(if (keep) "Keep" else "Delete", 12f, if (keep) ACCENT else 0xFFFF6B6B.toInt(), bold = true).apply { setPadding(dp(2), dp(3), dp(2), 0) })
+                    setOnClickListener {
+                        if (keep) { if (g.count { it.id in dupeKeep } > 1) dupeKeep.remove(item.id) else Toast.makeText(context, "At least one copy stays", Toast.LENGTH_SHORT).show() }
+                        else dupeKeep.add(item.id)
+                        rerender()
+                    }
+                    setOnLongClickListener { viewList = g; viewIndex = g.indexOf(item); show(Screen.VIEWER); true }
+                }
+                row.addView(tile, LinearLayout.LayoutParams(tileW, -2).apply { marginEnd = dp(12) })
+            }
+            col.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) })
+        }
+        frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
+        val toDelete = groups.flatten().filter { it.id !in dupeKeep }
+        bottomBar(frame, listOf(
+            glassButton(null, "Keep all") { keepHashes(groups.map { it.first().hash }); dupesOpen = false; show(Screen.VAULT) },
+            glassButton(R.drawable.ic_trash, if (toDelete.isEmpty()) "Done" else "Delete ${toDelete.size}", if (toDelete.isEmpty()) Color.WHITE else 0xFFFF6B6B.toInt()) {
+                toDelete.forEach { v.remove(it) }
+                // sets where you kept more than one copy on purpose won't be asked about again
+                keepHashes(groups.filter { g -> g.count { it.id in dupeKeep } > 1 }.map { it.first().hash })
+                thumbs.evictAll(); dupesOpen = false
+                if (toDelete.isNotEmpty()) Toast.makeText(this, "Deleted ${toDelete.size}", Toast.LENGTH_SHORT).show()
+                show(Screen.VAULT)
+            }))
+        return frame
+    }
+
     // ------------------------------------------------------------------ what the last import brought in
 
     private fun resultScreen(): View {
@@ -730,7 +836,7 @@ class SankaActivity : Activity() {
     private fun settingsMenu(anchor: View) {
         val fpOk = getSystemService(BiometricManager::class.java)
             ?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
-        val labels = mutableListOf("Change PIN", "Lock screen background")
+        val labels = mutableListOf("Change PIN", "Lock screen background", "Find duplicates")
         if (fpOk) labels.add(if (pin.fingerprint) "Fingerprint unlock: on" else "Fingerprint unlock: off")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setItems(labels.toTypedArray()) { _, which ->
@@ -740,7 +846,8 @@ class SankaActivity : Activity() {
                         if (w == 0) { prefs.edit().remove("lockBg").apply(); Toast.makeText(this, "Aurora it is", Toast.LENGTH_SHORT).show() }
                         else { pickingLockBg = true; selected.clear(); rerender(); Toast.makeText(this, "Tap the picture you want behind the lock screen", Toast.LENGTH_LONG).show() }
                     }.show()
-                    2 -> { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
+                    2 -> { val g = vault?.duplicateGroups().orEmpty(); if (g.isEmpty()) Toast.makeText(this, "No duplicates", Toast.LENGTH_SHORT).show() else openDupes(g) }
+                    3 -> { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
                 }
             }.show()
     }
@@ -929,17 +1036,17 @@ class SankaActivity : Activity() {
         }
         if (chosen.isEmpty() || importing) return
         importing = true
-        v.duplicatesSkipped = 0
         busy("Hiding 0 of ${chosen.size}…")
         importer.execute {
             val done = ArrayList<Uri>()
+            val newIds = ArrayList<String>()
             chosen.forEachIndexed { i, m ->
                 main.post { progress?.text = "Hiding ${i + 1} of ${chosen.size}…" }
-                if (v.add(m, folder ?: byAlbum[m.album] ?: "") != null) done.add(m.uri)
+                v.add(m, folder ?: byAlbum[m.album] ?: "")?.let { done.add(m.uri); newIds.add(it.id) }
             }
             main.post {
                 busy(null); importing = false
-                if (v.duplicatesSkipped > 0) Toast.makeText(this, "${v.duplicatesSkipped} were already in Sanka, so they weren't copied again.", Toast.LENGTH_LONG).show()
+                pendingDupes = dupesTouching(newIds) // asked about once the gallery question is answered
                 picked.clear(); album = null
                 if (!folder.isNullOrEmpty() && v.folders.any { it.id == folder }) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
                 if (done.size < chosen.size) Toast.makeText(this, "${chosen.size - done.size} couldn't be read and stayed in the gallery.", Toast.LENGTH_LONG).show()
@@ -950,8 +1057,9 @@ class SankaActivity : Activity() {
                     } catch (e: Exception) {
                         awayForSystem = false
                         Toast.makeText(this, "Hidden. Remove the originals from your gallery yourself.", Toast.LENGTH_LONG).show()
+                        flushDupes()
                     }
-                }
+                } else flushDupes()
             }
         }
     }
@@ -961,6 +1069,7 @@ class SankaActivity : Activity() {
         if (requestCode == REQ_DELETE) {
             Toast.makeText(this, if (resultCode == RESULT_OK) "Hidden and removed from the gallery"
                 else "Hidden, but the originals are still in the gallery", Toast.LENGTH_LONG).show()
+            flushDupes()
         }
     }
 

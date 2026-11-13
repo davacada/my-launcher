@@ -92,8 +92,9 @@ Each release also has `sanka.apk`, a locked place for hidden photos and videos:
   *Hide in Sanka*. After unlocking you pick the folder; the other app keeps its copies until you delete them there
 - The hide screen has album chips and *Select all*, and can keep the albums pictures came from as Sanka folders
   (handy for moving a whole collection over from another vault app after exporting it to the gallery)
-- Hiding the same file twice is caught: Sanka recognises identical files and keeps one copy (older duplicates are
-  cleaned up automatically)
+- **Duplicates:** when something you add is identical to a picture already in Sanka, Sanka asks: *Look at them*
+  (each set side by side with name, size, folder and date; tap to choose which to keep, hold to view), *Keep one of
+  each*, or *Keep everything*. ⋯ › Find duplicates checks the whole vault any time
 - Lock screen: a slow, moving violet/blue glow, or one of your own pictures blurred (⋯ › Lock screen background)
 - Long-press to select several, then *Move*, *Unhide* or *Delete* (or *Cover* for one picture in a folder).
   ⋯ menu: change PIN, fingerprint on/off
