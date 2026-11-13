@@ -153,22 +153,32 @@ class SankaActivity : Activity() {
         importer.execute {
             val before = v.items.size
             val brought = ArrayList<String>()
+            val log = ArrayList<String>() // one line per file, for the Details list
             val failed = ArrayList<Uri>()
             val reasons = ArrayList<String>()
             var already = 0
             uris.forEachIndexed { i, u ->
                 main.post { progress?.text = "Bringing in ${i + 1} of ${uris.size}…" }
                 var ok = false
+                var name = u.lastPathSegment ?: "file ${i + 1}"
+                var why = ""
                 for (attempt in 0..1) {
                     try {
                         v.duplicatesSkipped = 0
-                        val got = v.add(Gallery.describe(this, u, incomingType), folder)
-                        if (got != null) { ok = true; brought.add(got.id); already += v.duplicatesSkipped; break }
-                    } catch (e: SecurityException) { reasons.add("no permission to read"); break }
-                    catch (e: Exception) { if (attempt == 1) reasons.add(e.javaClass.simpleName + (e.message?.let { ": $it" } ?: "")) }
+                        val m = Gallery.describe(this, u, incomingType)
+                        name = m.name
+                        val got = v.add(m, folder)
+                        if (got != null) {
+                            ok = true; brought.add(got.id); already += v.duplicatesSkipped
+                            why = if (v.duplicatesSkipped > 0) "already in Sanka" else "added (${android.text.format.Formatter.formatShortFileSize(this, m.size)})"
+                            break
+                        } else why = "couldn't be read (empty)"
+                    } catch (e: SecurityException) { reasons.add("no permission to read"); why = "no permission to read"; break }
+                    catch (e: Exception) { val r = e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""); why = r; if (attempt == 1) reasons.add(r) }
                     if (attempt == 0) Thread.sleep(400)
                 }
                 if (!ok) failed.add(u)
+                log.add("${i + 1}. $name — $why")
             }
             val added = v.items.size - before
             main.post {
@@ -182,6 +192,7 @@ class SankaActivity : Activity() {
                 if (failed.isEmpty()) msg.append("\nOnce you've checked them, you can delete them in the other app.")
                 val d = dialog().setTitle(if (failed.isEmpty()) "Done" else "Some didn't come through").setMessage(msg.toString())
                     .setPositiveButton("OK", null)
+                    .setNegativeButton("Details") { _, _ -> dialog().setTitle("Each file").setMessage(log.joinToString("\n")).setPositiveButton("OK", null).show() }
                 if (failed.isNotEmpty()) d.setNeutralButton("Try those again") { _, _ -> bringIn(failed, folder) }
                 else if (lastBrought.isNotEmpty()) d.setNeutralButton("Show them") { _, _ -> resultOpen = true; selected.clear(); show(Screen.RESULT) }
                 d.show()

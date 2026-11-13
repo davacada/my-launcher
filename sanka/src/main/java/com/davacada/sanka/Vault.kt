@@ -265,7 +265,7 @@ class Vault(private val ctx: Context) {
         }
         var removed = 0
         synchronized(this) {
-            items.filter { it.hash.isNotEmpty() }.groupBy { it.hash }.values.filter { it.size > 1 }.forEach { copies ->
+            items.filter { it.hash.isNotEmpty() }.groupBy { it.hash + "|" + it.name }.values.filter { it.size > 1 }.forEach { copies ->
                 val keep = copies.sortedWith(compareBy<Item> { it.folder.isEmpty() }.thenBy { it.added }).first()
                 copies.filter { it.id != keep.id }.forEach { d -> dataFile(d).delete(); thumbFile(d).delete(); items.removeAll { it.id == d.id }; removed++ }
             }
@@ -345,7 +345,9 @@ class Vault(private val ctx: Context) {
             } ?: return null
             val hash = md.digest().joinToString("") { "%02x".format(it) }
             // Already hidden? Don't keep a second copy (it can still be removed from the gallery).
-            synchronized(this) { items.firstOrNull { it.hash == hash } }?.let { existing ->
+            // Only the very same file counts: same contents AND same name. (Some apps hand over files with
+            // identical bytes under different names; those are kept, so nothing ever silently goes missing.)
+            synchronized(this) { items.firstOrNull { it.hash == hash && it.name == item.name } }?.let { existing ->
                 tmp.delete(); duplicatesSkipped++
                 if (folder.isNotEmpty() && existing.folder != folder) move(listOf(existing.id), folder) // goes where you asked
                 return existing
