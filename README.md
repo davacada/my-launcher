@@ -24,6 +24,8 @@ New builds install straight over the old one; your home column is kept.
 ## Using it
 
 - **Drawer:** pages of 6 × 8 apps; swipe left and right
+- **Search** (magnifier, first icon at the bottom of the drawer): type to filter apps; Enter opens the first match,
+  *Web* searches Google for what you typed
 - **Organiser** (slider icon at the bottom of the drawer): sort by Type, Most used or Newest.
   Most used asks once for usage access in Settings.
 - **Hide an app:** long-press it in the drawer, tap *Hide*. The eye icon shows hidden apps; tap one to bring it back

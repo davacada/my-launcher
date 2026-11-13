@@ -23,6 +23,7 @@ import android.graphics.Rect
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
@@ -38,6 +39,11 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
@@ -94,6 +100,10 @@ class MainActivity : Activity() {
 
     private var drawerOpen = false
     private var showHidden = false
+    private var searching = false
+    private lateinit var searchBox: LinearLayout
+    private lateinit var searchField: EditText
+    private lateinit var searchButton: ImageView
 
     private val renderSize by lazy { dp(46) }   // icon bitmaps are drawn at this size
     private val homeIconSize by lazy { dp(38) }
@@ -163,7 +173,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (drawerOpen) {
-            if (showHidden) setShowHidden(false) else closeDrawer(animate = true)
+            if (searching) setSearching(false) else if (showHidden) setShowHidden(false) else closeDrawer(animate = true)
         }
         // On the home screen itself, Back does nothing.
     }
@@ -227,9 +237,47 @@ class MainActivity : Activity() {
         }
         drawer.addView(hiddenHint, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
+        // Search: a glass field at the top of the drawer; results replace the pages as you type.
+        searchField = EditText(this).apply {
+            hint = "Search apps"
+            setHintTextColor(0x99FFFFFF.toInt()); setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            background = null; isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setPadding(dp(4), 0, dp(4), 0)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) { if (searching) { renderDrawer(); pager.goTo(0, smooth = false) } }
+            })
+            setOnEditorActionListener { _, _, _ ->
+                val first = searchResults().firstOrNull()
+                if (first != null) launch(first, this) else searchWeb()
+                true
+            }
+        }
+        searchBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply { setColor(0x40FFFFFF); cornerRadius = dp(22).toFloat(); setStroke(dp(1), 0x33FFFFFF) }
+            setPadding(dp(14), 0, dp(6), 0)
+            visibility = View.GONE
+            isClickable = true
+            addView(ImageView(context).apply { setImageResource(R.drawable.ic_search); alpha = 0.8f }, LinearLayout.LayoutParams(dp(20), dp(20)))
+            addView(searchField, LinearLayout.LayoutParams(0, -1, 1f).apply { marginStart = dp(8) })
+            addView(TextView(context).apply {
+                text = "Web"; setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER; setPadding(dp(12), 0, dp(12), 0)
+                background = GradientDrawable().apply { setColor(0x26FFFFFF); cornerRadius = dp(16).toFloat() }
+                contentDescription = "Search the web"
+                setOnClickListener { searchWeb() }
+            }, LinearLayout.LayoutParams(-2, dp(32)))
+        }
+        drawer.addView(searchBox, FrameLayout.LayoutParams(-1, dp(44), Gravity.TOP).apply { leftMargin = dp(16); rightMargin = dp(16) })
+
         pager = AppPager(this)
         drawer.addView(pager, FrameLayout.LayoutParams(-1, -1))
 
+        searchButton = barButton(R.drawable.ic_search, "Search apps") { setSearching(!searching) }
         organiserButton = barButton(R.drawable.ic_organiser, "Organiser") { showOrganiser(it) }
         hiddenButton = barButton(R.drawable.ic_hidden, "Hidden apps") { setShowHidden(!showHidden) }
         val backgroundButton = barButton(R.drawable.ic_photo, "Drawer background") { showBackgroundMenu(it) }
@@ -238,7 +286,8 @@ class MainActivity : Activity() {
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            val slot = { LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginStart = dp(4); marginEnd = dp(4) } }
+            val slot = { LinearLayout.LayoutParams(dp(50), dp(50)).apply { marginStart = dp(3); marginEnd = dp(3) } }
+            addView(searchButton, slot())
             addView(organiserButton, slot())
             addView(hiddenButton, slot())
             addView(backgroundButton, slot())
@@ -260,6 +309,7 @@ class MainActivity : Activity() {
             // Column sits low on the right, in easy thumb reach, clear of the gesture bar.
             homeScroll.setPadding(0, top, 0, bottom + dp(84))
             (hiddenHint.layoutParams as FrameLayout.LayoutParams).topMargin = top + dp(18)
+            (searchBox.layoutParams as FrameLayout.LayoutParams).topMargin = top + dp(2)
             (pager.layoutParams as FrameLayout.LayoutParams).apply {
                 topMargin = top + dp(48)
                 bottomMargin = bottom + dp(96)
@@ -311,9 +361,9 @@ class MainActivity : Activity() {
 
     private fun renderDrawer() {
         val hidden = hiddenKeys()
-        val visible = apps.filter { (it.key in hidden) == showHidden }
+        val visible = if (searching) searchResults() else apps.filter { (it.key in hidden) == showHidden }
         val byName = compareBy<AppEntry> { it.label.lowercase() }
-        val sorted = when (sort) {
+        val sorted = if (searching) visible else when (sort) {
             SORT_USED -> visible.sortedWith(compareByDescending<AppEntry> { usage[it.pkg] ?: 0L }.then(byName))
             SORT_NEW -> visible.sortedWith(compareByDescending<AppEntry> { it.installed }.then(byName))
             else -> visible.sortedWith(compareBy<AppEntry> { typeRank(it.category) }.then(byName))
@@ -329,6 +379,43 @@ class MainActivity : Activity() {
         pager.setPages(pages)
         hiddenHint.visibility = if (showHidden) View.VISIBLE else View.GONE
         hiddenButton.isSelected = showHidden
+    }
+
+    /** Apps whose name matches what's typed: names that start with it first, then the rest. */
+    private fun searchResults(): List<AppEntry> {
+        val q = searchField.text.toString().trim().lowercase()
+        val hidden = hiddenKeys()
+        val pool = apps.filter { it.key !in hidden }
+        if (q.isEmpty()) return pool.sortedBy { it.label.lowercase() }
+        return pool.filter { it.label.lowercase().contains(q) }
+            .sortedWith(compareBy<AppEntry> { !it.label.lowercase().startsWith(q) }.thenBy { it.label.lowercase() })
+    }
+
+    private fun setSearching(on: Boolean) {
+        searching = on
+        searchButton.isSelected = on
+        searchBox.visibility = if (on) View.VISIBLE else View.GONE
+        val imm = getSystemService(InputMethodManager::class.java)
+        if (on) {
+            showHidden = false
+            searchField.setText("")
+            searchField.requestFocus()
+            imm.showSoftInput(searchField, InputMethodManager.SHOW_IMPLICIT)
+        } else {
+            searchField.clearFocus()
+            imm.hideSoftInputFromWindow(searchField.windowToken, 0)
+        }
+        renderDrawer()
+        pager.goTo(0, smooth = false)
+    }
+
+    /** Hands what's typed to the phone's web search (Google), or the browser if that's missing. */
+    private fun searchWeb() {
+        val q = searchField.text.toString().trim()
+        val web = Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, q)
+        try { startActivity(web) } catch (e: Exception) {
+            try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode(q)))) } catch (e2: Exception) { }
+        }
     }
 
     private fun bindApp(view: ImageView, entry: AppEntry, fromHome: Boolean) {
@@ -377,6 +464,7 @@ class MainActivity : Activity() {
 
     private fun closeDrawer(animate: Boolean) {
         drawerOpen = false
+        if (searching) setSearching(false)
         drawer.animate().cancel()
         homeScroll.animate().cancel()
         homeScroll.visibility = View.VISIBLE
@@ -418,6 +506,7 @@ class MainActivity : Activity() {
     }
 
     private fun setShowHidden(on: Boolean) {
+        if (searching) setSearching(false)
         showHidden = on
         pager.goTo(0, smooth = false)
         renderDrawer()
