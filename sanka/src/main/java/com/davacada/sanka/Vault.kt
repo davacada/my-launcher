@@ -153,7 +153,7 @@ data class Item(
     val taken: Long, val added: Long, val duration: Long, val path: String,
     val folder: String = "", val w: Int = 0, val h: Int = 0,
     val hash: String = "",          // fingerprint of the file's contents, to spot duplicates
-    val dated: Boolean = false      // true once the creation date has been read from inside the file
+    val dated: Int = 0              // how thoroughly the creation date was checked (2 = inside the file, then its name)
 ) {
     val isVideo get() = mime.startsWith("video/")
     /** Width / height as shown (1 when unknown). */
@@ -164,7 +164,7 @@ data class Item(
     companion object {
         fun from(o: JSONObject) = Item(o.getString("id"), o.optString("name"), o.optString("mime"), o.optLong("size"),
             o.optLong("taken"), o.optLong("added"), o.optLong("duration"), o.optString("path"),
-            o.optString("folder"), o.optInt("w"), o.optInt("h"), o.optString("hash"), o.optBoolean("dated"))
+            o.optString("folder"), o.optInt("w"), o.optInt("h"), o.optString("hash"), o.optInt("dated", 0))
     }
 }
 
@@ -178,6 +178,8 @@ data class Folder(val id: String, val name: String, val cover: String = "", val 
 
 /** What's hidden: encrypted files in the app's private storage plus an encrypted list. */
 class Vault(private val ctx: Context) {
+    private companion object { const val DATED = 2 }
+
     private val dir = File(ctx.filesDir, "vault").apply { mkdirs() }
     private val indexFile = File(dir, "index.bin")
     var items: MutableList<Item> = mutableListOf()
@@ -250,13 +252,13 @@ class Vault(private val ctx: Context) {
      * Returns how many duplicates were removed, or -1 if nothing changed.
      */
     fun checkUp(): Int {
-        val todo = items.filter { it.hash.isEmpty() || !it.dated }
+        val todo = items.filter { it.hash.isEmpty() || it.dated < DATED }
         var changed = false
         for (m in todo) {
             val hash = if (m.hash.isEmpty()) try { EncFile(ctx, dataFile(m)).use { e -> fingerprint(e.stream()) } } catch (e: Exception) { "" } else m.hash
-            val made = if (!m.dated) createdAt(m) else 0L
+            val made = if (m.dated < DATED) createdAt(m).takeIf { it > 0 } ?: Dates.fromName(m.name) else 0L
             synchronized(this) {
-                items = items.map { x -> if (x.id != m.id) x else x.copy(hash = hash.ifEmpty { x.hash }, dated = true,
+                items = items.map { x -> if (x.id != m.id) x else x.copy(hash = hash.ifEmpty { x.hash }, dated = DATED,
                     taken = if (made > 0) made else x.taken) }.toMutableList()
             }
             changed = true
@@ -349,8 +351,9 @@ class Vault(private val ctx: Context) {
                 return existing
             }
             if (!tmp.renameTo(dataFile(item))) return null
-            val made = createdAt(item)
-            item = item.copy(hash = hash, dated = true, taken = if (made > 0) made else item.taken)
+            // When it was made: from inside the file, else from a date in its name (IMG_20230512…), else what the gallery said.
+            val made = createdAt(item).takeIf { it > 0 } ?: Dates.fromName(item.name)
+            item = item.copy(hash = hash, dated = DATED, taken = if (made > 0) made else item.taken)
             // Gallery items have a ready thumbnail; files shared from other apps get one made here.
             val th = try { ctx.contentResolver.loadThumbnail(m.uri, Size(640, 640), null) } catch (e: Exception) { null }
                 ?: makeThumb(m)

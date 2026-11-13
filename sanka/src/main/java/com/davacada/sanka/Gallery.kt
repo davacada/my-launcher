@@ -30,6 +30,29 @@ object Dates {
         return 0L
     }
 
+    /**
+     * A date written in a file name: IMG_20230512_141500, VID-20210301-WA0003, Screenshot_2022-11-03-18-22-10,
+     * PXL_20240107_093012345, signal-2023-04-01-120000, or a timestamp like FB_IMG_1678901234567. 0 if none.
+     */
+    fun fromName(name: String): Long {
+        val now = System.currentTimeMillis()
+        val ymd = Regex("(?<!\\d)((?:19|20)\\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\\d|3[01])(?:[-_ T.]?([01]\\d|2[0-3])[-_.:]?([0-5]\\d)(?:[-_.:]?([0-5]\\d))?)?")
+        ymd.find(name)?.let { m ->
+            val g = m.groupValues
+            val c = java.util.Calendar.getInstance()
+            c.set(g[1].toInt(), g[2].toInt() - 1, g[3].toInt(), g[4].toIntOrNull() ?: 12, g[5].toIntOrNull() ?: 0, g[6].toIntOrNull() ?: 0)
+            c.set(java.util.Calendar.MILLISECOND, 0)
+            val t = c.timeInMillis
+            if (g[1].toInt() >= 1990 && t <= now + 86_400_000L) return t
+        }
+        // 13-digit millisecond timestamps (Facebook, Messenger, many apps), between 2005 and now
+        Regex("(?<!\\d)(1[1-9]\\d{11})(?!\\d)").find(name)?.let { m ->
+            val t = m.value.toLong()
+            if (t in 1_104_537_600_000L..now) return t
+        }
+        return 0L
+    }
+
     /** Video headers store e.g. "20240312T101530.000Z" (UTC); 1904/1970 placeholders mean "unknown". */
     fun video(v: String?): Long {
         if (v.isNullOrBlank()) return 0L
