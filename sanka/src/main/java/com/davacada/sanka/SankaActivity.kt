@@ -93,7 +93,64 @@ class SankaActivity : Activity() {
             ins
         }
         setContentView(root)
+        takeShared(intent)
         show(if (pin.isSet) Screen.LOCK else Screen.SETUP)
+    }
+
+    // ------------------------------------------------------------------ shared in from other apps
+
+    /** Photos and videos another app shared to Sanka; brought in once Sanka is unlocked. */
+    private val incoming = ArrayList<Uri>()
+    private var incomingType: String? = null
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (takeShared(intent) && unlocked && vault != null) importShared()
+    }
+
+    private fun takeShared(i: Intent?): Boolean {
+        i ?: return false
+        val uris = ArrayList<Uri>()
+        @Suppress("DEPRECATION")
+        when (i.action) {
+            Intent.ACTION_SEND -> (i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris.add(it) }
+            Intent.ACTION_SEND_MULTIPLE -> i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+        }
+        if (uris.isEmpty()) return false
+        incoming.clear(); incoming.addAll(uris); incomingType = i.type
+        i.action = Intent.ACTION_MAIN // don't bring them in twice
+        return true
+    }
+
+    /** Asks which folder, then copies the shared files in, encrypted. The other app keeps its copies. */
+    private fun importShared() {
+        val v = vault ?: return
+        if (incoming.isEmpty()) return
+        val uris = ArrayList(incoming); incoming.clear()
+        val go = { folder: String ->
+            busy("Bringing in 0 of ${uris.size}…")
+            io.execute {
+                var ok = 0
+                uris.forEachIndexed { i, u ->
+                    main.post { progress?.text = "Bringing in ${i + 1} of ${uris.size}…" }
+                    try { if (v.add(Gallery.describe(this, u, incomingType), folder) != null) ok++ } catch (e: Exception) { }
+                }
+                main.post {
+                    busy(null)
+                    if (folder.isNotEmpty()) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
+                    Toast.makeText(this, if (ok == uris.size) "$ok added to Sanka. Once you've checked them, you can delete them in the other app."
+                        else "$ok of ${uris.size} added. The rest couldn't be read.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        val choices = mutableListOf<Pair<String, () -> Unit>>(
+            "New folder…" to { newFolderDialog { f -> go(f.id) } },
+            "Not in a folder" to { go("") })
+        v.folders.forEach { f -> choices.add(f.name to { go(f.id) }) }
+        dialog().setTitle("Add ${uris.size} to").setItems(choices.map { it.first }.toTypedArray()) { _, which -> choices[which].second() }
+            .setOnCancelListener { incoming.addAll(uris) }
+            .show()
     }
 
     override fun onResume() {
@@ -234,6 +291,7 @@ class SankaActivity : Activity() {
             }
         }
         show(Screen.VAULT)
+        if (incoming.isNotEmpty()) main.post { importShared() }
         // Items hidden before folders existed don't know their shape yet; work it out once.
         io.execute { if (vault?.fillInSizes() == true) main.post { if (screen == Screen.VAULT || screen == Screen.FOLDER) rerender() } }
     }

@@ -287,18 +287,36 @@ class Vault(private val ctx: Context) {
                 FileOutputStream(tmp).use { fo -> Crypto.encrypting(ctx, fo).use { input.copyTo(it, 256 * 1024) } }
             } ?: return null
             if (!tmp.renameTo(dataFile(item))) return null
+            // Gallery items have a ready thumbnail; files shared from other apps get one made here.
             val th = try { ctx.contentResolver.loadThumbnail(m.uri, Size(640, 640), null) } catch (e: Exception) { null }
+                ?: makeThumb(m)
+            var saved = item
             if (th != null) {
                 val bo = ByteArrayOutputStream(); th.compress(Bitmap.CompressFormat.JPEG, 85, bo)
                 Crypto.writeBytes(ctx, thumbFile(item), bo.toByteArray())
+                if (item.w == 0 || item.h == 0) saved = item.copy(w = th.width, h = th.height) // thumbnail keeps the shape
             }
-            synchronized(this) { items.add(0, item); save() }
-            return item
+            synchronized(this) { items.add(0, saved); save() }
+            return saved
         } catch (e: Exception) {
             tmp.delete(); dataFile(item).delete(); thumbFile(item).delete()
             return null
         }
     }
+
+    private fun makeThumb(m: Media): Bitmap? = try {
+        if (m.isVideo) {
+            val r = android.media.MediaMetadataRetriever()
+            try { r.setDataSource(ctx, m.uri); r.getScaledFrameAtTime(1_000_000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 640, 640) }
+            finally { r.release() }
+        } else {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(ctx.contentResolver, m.uri)) { d, info, _ ->
+                val longest = maxOf(info.size.width, info.size.height)
+                if (longest > 640) d.setTargetSampleSize((longest / 640).coerceAtLeast(1))
+                d.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        }
+    } catch (e: Exception) { null }
 
     /** Puts an item back in the gallery (in its original folder where possible) and removes it from Sanka. */
     fun restore(it: Item): Boolean {
