@@ -150,14 +150,27 @@ class EncDataSource(ctx: Context, file: File) : MediaDataSource() {
 
 data class Item(
     val id: String, val name: String, val mime: String, val size: Long,
-    val taken: Long, val added: Long, val duration: Long, val path: String
+    val taken: Long, val added: Long, val duration: Long, val path: String,
+    val folder: String = "", val w: Int = 0, val h: Int = 0
 ) {
     val isVideo get() = mime.startsWith("video/")
+    /** Width / height as shown (1 when unknown). */
+    val aspect: Float get() = if (w > 0 && h > 0) (w.toFloat() / h).coerceIn(0.3f, 3.5f) else 1f
     fun json() = JSONObject().put("id", id).put("name", name).put("mime", mime).put("size", size)
         .put("taken", taken).put("added", added).put("duration", duration).put("path", path)
+        .put("folder", folder).put("w", w).put("h", h)
     companion object {
         fun from(o: JSONObject) = Item(o.getString("id"), o.optString("name"), o.optString("mime"), o.optLong("size"),
-            o.optLong("taken"), o.optLong("added"), o.optLong("duration"), o.optString("path"))
+            o.optLong("taken"), o.optLong("added"), o.optLong("duration"), o.optString("path"),
+            o.optString("folder"), o.optInt("w"), o.optInt("h"))
+    }
+}
+
+/** A folder; its cover is [cover] if that item is still in it, otherwise the first thing added to it. */
+data class Folder(val id: String, val name: String, val cover: String = "", val created: Long = System.currentTimeMillis()) {
+    fun json() = JSONObject().put("id", id).put("name", name).put("cover", cover).put("created", created)
+    companion object {
+        fun from(o: JSONObject) = Folder(o.getString("id"), o.optString("name"), o.optString("cover"), o.optLong("created"))
     }
 }
 
@@ -165,19 +178,85 @@ data class Item(
 class Vault(private val ctx: Context) {
     private val dir = File(ctx.filesDir, "vault").apply { mkdirs() }
     private val indexFile = File(dir, "index.bin")
-    var items: MutableList<Item> = load()
+    var items: MutableList<Item> = mutableListOf()
+        private set
+    var folders: MutableList<Folder> = mutableListOf()
         private set
 
-    private fun load(): MutableList<Item> = try {
-        if (!indexFile.exists()) mutableListOf() else {
-            val a = JSONArray(String(Crypto.readBytes(ctx, indexFile)))
-            (0 until a.length()).map { Item.from(a.getJSONObject(it)) }.toMutableList()
-        }
-    } catch (e: Exception) { mutableListOf() }
+    init { load() }
+
+    private fun load() {
+        try {
+            if (!indexFile.exists()) return
+            val text = String(Crypto.readBytes(ctx, indexFile)).trim()
+            if (text.startsWith("[")) { // first version: just a list of items
+                val a = JSONArray(text)
+                items = (0 until a.length()).map { Item.from(a.getJSONObject(it)) }.toMutableList()
+            } else {
+                val o = JSONObject(text)
+                val a = o.optJSONArray("items") ?: JSONArray()
+                val f = o.optJSONArray("folders") ?: JSONArray()
+                items = (0 until a.length()).map { Item.from(a.getJSONObject(it)) }.toMutableList()
+                folders = (0 until f.length()).map { Folder.from(f.getJSONObject(it)) }.toMutableList()
+            }
+        } catch (e: Exception) { }
+    }
 
     @Synchronized private fun save() {
         val a = JSONArray(); items.forEach { a.put(it.json()) }
-        Crypto.writeBytes(ctx, indexFile, a.toString().toByteArray())
+        val f = JSONArray(); folders.forEach { f.put(it.json()) }
+        Crypto.writeBytes(ctx, indexFile, JSONObject().put("v", 2).put("items", a).put("folders", f).toString().toByteArray())
+    }
+
+    // ------------------------------------------------------------------ folders
+
+    fun inFolder(folder: String) = items.filter { it.folder == folder }
+
+    fun coverOf(f: Folder): Item? {
+        val list = inFolder(f.id)
+        return list.firstOrNull { it.id == f.cover } ?: list.lastOrNull() // items are newest first, so last = first added
+    }
+
+    @Synchronized fun newFolder(name: String): Folder {
+        val f = Folder(UUID.randomUUID().toString(), name.trim().ifEmpty { "New folder" })
+        folders.add(0, f); save(); return f
+    }
+
+    @Synchronized fun renameFolder(id: String, name: String) {
+        folders = folders.map { if (it.id == id) it.copy(name = name.trim().ifEmpty { it.name }) else it }.toMutableList(); save()
+    }
+
+    /** Removes the folder; what was in it stays hidden, just not in a folder. */
+    @Synchronized fun deleteFolder(id: String) {
+        folders.removeAll { it.id == id }
+        items = items.map { if (it.folder == id) it.copy(folder = "") else it }.toMutableList(); save()
+    }
+
+    @Synchronized fun move(ids: Collection<String>, folder: String) {
+        items = items.map { if (it.id in ids) it.copy(folder = folder) else it }.toMutableList(); save()
+    }
+
+    @Synchronized fun setCover(folder: String, item: String) {
+        folders = folders.map { if (it.id == folder) it.copy(cover = item) else it }.toMutableList(); save()
+    }
+
+    /** Older items were saved without their size: work it out from the thumbnail so the collage gets their shape. */
+    fun fillInSizes(): Boolean {
+        val missing = items.filter { it.w == 0 || it.h == 0 }
+        if (missing.isEmpty()) return false
+        val sizes = HashMap<String, Pair<Int, Int>>()
+        for (m in missing) {
+            try {
+                val b = Crypto.readBytes(ctx, thumbFile(m))
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(b, 0, b.size, o)
+                if (o.outWidth > 0) sizes[m.id] = o.outWidth to o.outHeight
+            } catch (e: Exception) { }
+        }
+        synchronized(this) {
+            items = items.map { x -> sizes[x.id]?.let { (w, h) -> x.copy(w = w, h = h) } ?: x }.toMutableList(); save()
+        }
+        return sizes.isNotEmpty()
     }
 
     fun dataFile(it: Item) = File(dir, it.id + ".bin")
@@ -199,16 +278,16 @@ class Vault(private val ctx: Context) {
     } catch (e: Exception) { null }
 
     /** Copies a gallery item in, encrypted. Returns the new item, or null if it couldn't be read. */
-    fun add(m: Media): Item? {
+    fun add(m: Media, folder: String = ""): Item? {
         val id = UUID.randomUUID().toString()
-        val item = Item(id, m.name, m.mime, m.size, m.taken, System.currentTimeMillis(), m.duration, m.path)
+        val item = Item(id, m.name, m.mime, m.size, m.taken, System.currentTimeMillis(), m.duration, m.path, folder, m.w, m.h)
         val tmp = File(dir, "$id.part")
         try {
             ctx.contentResolver.openInputStream(m.uri)?.use { input ->
                 FileOutputStream(tmp).use { fo -> Crypto.encrypting(ctx, fo).use { input.copyTo(it, 256 * 1024) } }
             } ?: return null
             if (!tmp.renameTo(dataFile(item))) return null
-            val th = try { ctx.contentResolver.loadThumbnail(m.uri, Size(420, 420), null) } catch (e: Exception) { null }
+            val th = try { ctx.contentResolver.loadThumbnail(m.uri, Size(640, 640), null) } catch (e: Exception) { null }
             if (th != null) {
                 val bo = ByteArrayOutputStream(); th.compress(Bitmap.CompressFormat.JPEG, 85, bo)
                 Crypto.writeBytes(ctx, thumbFile(item), bo.toByteArray())

@@ -48,7 +48,7 @@ import java.util.concurrent.Executors
  */
 class SankaActivity : Activity() {
 
-    private enum class Screen { SETUP, LOCK, VAULT, ADD, VIEWER }
+    private enum class Screen { SETUP, LOCK, VAULT, FOLDER, ADD, VIEWER }
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(3)
@@ -67,7 +67,11 @@ class SankaActivity : Activity() {
 
     // vault grid
     private val selected = LinkedHashSet<String>()
-    private var vaultAdapter: VaultAdapter? = null
+    private var folderId: String? = null      // the open folder (FOLDER screen)
+    private var viewList: List<Item> = emptyList()
+    private var addTarget: String? = null     // where new hides go; null = ask
+    private var pickingCover = false
+    private var scroll: android.widget.ScrollView? = null
     // add screen
     private var gallery: List<Media> = emptyList()
     private val picked = LinkedHashSet<Uri>()
@@ -117,23 +121,36 @@ class SankaActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when (screen) {
-            Screen.VIEWER -> { releasePlayer(); show(Screen.VAULT) }
-            Screen.ADD -> { picked.clear(); show(Screen.VAULT) }
-            Screen.VAULT -> if (selected.isNotEmpty()) { selected.clear(); show(Screen.VAULT) } else { lock(); moveTaskToBack(true) }
+            Screen.VIEWER -> { releasePlayer(); show(back()) }
+            Screen.ADD -> { picked.clear(); show(back()) }
+            Screen.FOLDER -> if (selected.isNotEmpty() || pickingCover) { selected.clear(); pickingCover = false; rerender() } else { folderId = null; show(Screen.VAULT) }
+            Screen.VAULT -> if (selected.isNotEmpty()) { selected.clear(); rerender() } else { lock(); moveTaskToBack(true) }
             else -> moveTaskToBack(true)
         }
     }
 
     // ------------------------------------------------------------------ screens
 
+    /** Where Back from a viewer or the picker goes. */
+    private fun back() = if (folderId != null && vault?.folders?.any { it.id == folderId } == true) Screen.FOLDER else Screen.VAULT
+
+    /** Redraws the current screen and keeps the scroll position (after selecting, moving, …). */
+    private fun rerender() {
+        val y = scroll?.scrollY ?: 0
+        show(screen)
+        scroll?.let { sv -> sv.post { sv.scrollTo(0, y) } }
+    }
+
     private fun show(s: Screen) {
         screen = s
         val r = root ?: return
+        scroll = null
         r.removeAllViews()
         r.addView(when (s) {
             Screen.SETUP -> setupScreen()
             Screen.LOCK -> lockScreen()
-            Screen.VAULT -> vaultScreen()
+            Screen.VAULT -> homeScreen()
+            Screen.FOLDER -> folderScreen()
             Screen.ADD -> addScreen()
             Screen.VIEWER -> viewerScreen()
         }, FrameLayout.LayoutParams(-1, -1))
@@ -217,6 +234,8 @@ class SankaActivity : Activity() {
             }
         }
         show(Screen.VAULT)
+        // Items hidden before folders existed don't know their shape yet; work it out once.
+        io.execute { if (vault?.fillInSizes() == true) main.post { if (screen == Screen.VAULT || screen == Screen.FOLDER) rerender() } }
     }
 
     // ------------------------------------------------------------------ vault grid
@@ -233,64 +252,262 @@ class SankaActivity : Activity() {
         right.forEach { addView(it, LinearLayout.LayoutParams(dp(44), dp(44))) }
     }
 
-    private fun vaultScreen(): View {
+    private fun section(title: String, right: View?): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(20), dp(14), dp(16), dp(10))
+        addView(label(title, 12.5f, 0xFFA9B2C0.toInt(), bold = true).apply { letterSpacing = 0.08f }, LinearLayout.LayoutParams(0, -2, 1f))
+        if (right != null) addView(right)
+    }
+
+    private fun smallPill(icon: Int, text: String, onClick: () -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(10), 0, dp(14), 0); background = pill(0x29C9A2FF, dpf(17f))
+        addView(ImageView(context).apply { setImageResource(icon); setColorFilter(ACCENT) }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(6) })
+        addView(label(text, 13f, ACCENT, bold = true))
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(-2, dp(34))
+    }
+
+    private fun count(list: List<Item>): String {
+        val photos = list.count { !it.isVideo }; val videos = list.size - photos
+        return listOfNotNull(if (photos > 0) "$photos photo${if (photos == 1) "" else "s"}" else null,
+            if (videos > 0) "$videos video${if (videos == 1) "" else "s"}" else null).joinToString(" · ").ifEmpty { "Empty" }
+    }
+
+    /** Photos and videos as a collage that keeps each one's shape. */
+    private fun collage(list: List<Item>, targetDp: Int): View {
+        val j = JustifiedLayout(this, targetDp).apply { aspects = list.map { it.aspect }; setPadding(dp(8), 0, dp(8), 0) }
+        list.forEachIndexed { i, item ->
+            val cell = Cell(this, square = false, radius = 6f)
+            cell.set(item.id, item.duration, item.isVideo, selected.isNotEmpty(), item.id in selected)
+            thumbInto(cell, item.id) { vault?.thumb(item) }
+            cell.setOnClickListener {
+                when {
+                    pickingCover -> {
+                        folderId?.let { f -> vault?.setCover(f, item.id) }
+                        pickingCover = false
+                        Toast.makeText(this, "Cover changed", Toast.LENGTH_SHORT).show()
+                        show(Screen.FOLDER)
+                    }
+                    selected.isNotEmpty() -> { if (!selected.remove(item.id)) selected.add(item.id); rerender() }
+                    else -> { viewList = list; viewIndex = i; show(Screen.VIEWER) }
+                }
+            }
+            cell.setOnLongClickListener {
+                it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                pickingCover = false
+                if (!selected.remove(item.id)) selected.add(item.id); rerender(); true
+            }
+            j.addView(cell)
+        }
+        return j
+    }
+
+    private fun bottomBar(frame: FrameLayout, buttons: List<View>) {
+        frame.addView(View(this).apply {
+            background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(BG, BG, 0))
+        }, FrameLayout.LayoutParams(-1, insetBottom + dp(110), Gravity.BOTTOM))
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+            background = pill(0xEB151A22.toInt(), dpf(32f)); setPadding(dp(8), dp(8), dp(8), dp(8)); elevation = dpf(8f)
+        }
+        buttons.forEach { bar.addView(it, LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4); marginEnd = dp(4) }) }
+        frame.addView(bar, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = insetBottom + dp(20) })
+    }
+
+    private fun selectionButtons(items: List<Item>, inFolder: Boolean): List<View> {
+        val sel = items.filter { it.id in selected }
+        val list = mutableListOf<View>(
+            glassButton(R.drawable.ic_folder_move, "Move") { moveTo(sel) },
+            glassButton(R.drawable.ic_unhide, "Unhide") { unhide(sel) },
+            glassButton(R.drawable.ic_trash, "Delete", 0xFFFF6B6B.toInt()) { confirmDelete(sel) })
+        if (inFolder && sel.size == 1) list.add(0, glassButton(R.drawable.ic_image, "Cover") {
+            folderId?.let { f -> vault?.setCover(f, sel[0].id) }; selected.clear(); show(Screen.FOLDER)
+        })
+        return list
+    }
+
+    // ------------------------------------------------------------------ home: folders + loose items
+
+    private fun homeScreen(): View {
         val v = vault ?: return View(this)
-        val items = v.items
         val frame = FrameLayout(this)
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val photos = items.count { !it.isVideo }; val videos = items.size - photos
-        val sub = if (items.isEmpty()) "" else listOfNotNull(
-            if (photos > 0) "$photos photo${if (photos == 1) "" else "s"}" else null,
-            if (videos > 0) "$videos video${if (videos == 1) "" else "s"}" else null).joinToString(" · ")
-        val title = if (selected.isEmpty()) "Sanka" else "${selected.size} selected"
-        col.addView(header(title, sub,
-            if (selected.isEmpty()) null else iconButton(R.drawable.ic_close, "Cancel selection") { selected.clear(); show(Screen.VAULT) },
+        val sv = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false; clipToPadding = false }
+        scroll = sv
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, insetBottom + dp(110)) }
+        sv.addView(col)
+        val loose = v.inFolder("")
+        val folders = v.folders
+        val sub = "${folders.size} folder${if (folders.size == 1) "" else "s"} · ${v.items.size} item${if (v.items.size == 1) "" else "s"}"
+        col.addView(header(if (selected.isEmpty()) "Sanka" else "${selected.size} selected", sub,
+            if (selected.isEmpty()) null else iconButton(R.drawable.ic_close, "Cancel selection") { selected.clear(); rerender() },
             listOf(iconButton(R.drawable.ic_lock, "Lock now") { lock() }, iconButton(R.drawable.ic_more, "Settings") { settingsMenu(it) })))
 
-        if (items.isEmpty()) {
+        if (v.items.isEmpty() && folders.isEmpty()) {
             col.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(32), dp(120), dp(32), 0)
                 addView(ImageView(context).apply { setImageResource(R.drawable.ic_mono); alpha = 0.35f }, LinearLayout.LayoutParams(dp(96), dp(96)))
                 addView(label("Nothing hidden yet", 17f, bold = true), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
                 addView(label("Tap Hide to choose photos and videos.\nThey're moved here, encrypted, and taken out of your gallery.", 14f, 0x99FFFFFF.toInt()).apply {
                     gravity = Gravity.CENTER; setLineSpacing(0f, 1.25f)
                 }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
-            }, LinearLayout.LayoutParams(-1, 0, 1f).apply { bottomMargin = dp(80) })
+                addView(smallPill(R.drawable.ic_add, "New folder") { newFolderDialog { show(Screen.VAULT) } }, LinearLayout.LayoutParams(-2, dp(34)).apply { topMargin = dp(20) })
+            })
         } else {
-            val adapter = VaultAdapter().also { vaultAdapter = it }
-            col.addView(GridView(this).apply {
-                numColumns = 3; stretchMode = GridView.STRETCH_COLUMN_WIDTH
-                horizontalSpacing = dp(4); verticalSpacing = dp(4)
-                setPadding(dp(8), dp(4), dp(8), insetBottom + dp(96)); clipToPadding = false
-                selector = pill(Color.TRANSPARENT, 0f)
-                this.adapter = adapter
-                setOnItemClickListener { _, _, pos, _ ->
-                    val tapped = items[pos]
-                    if (selected.isNotEmpty()) { if (!selected.remove(tapped.id)) selected.add(tapped.id); show(Screen.VAULT) }
-                    else { viewIndex = pos; show(Screen.VIEWER) }
-                }
-                setOnItemLongClickListener { _, view, pos, _ ->
-                    view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-                    selected.add(items[pos].id); show(Screen.VAULT); true
-                }
-            }, LinearLayout.LayoutParams(-1, 0, 1f))
+            col.addView(section("FOLDERS", if (selected.isEmpty()) smallPill(R.drawable.ic_add, "New folder") { newFolderDialog { show(Screen.VAULT) } } else null))
+            if (folders.isEmpty()) col.addView(label("No folders yet. Make one to sort what you hide.", 13.5f, 0x99FFFFFF.toInt()).apply { setPadding(dp(20), 0, dp(20), dp(6)) })
+            val tileW = (resources.displayMetrics.widthPixels - dp(16) * 2 - dp(12)) / 2
+            folders.chunked(2).forEach { pair ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(16), 0, dp(16), dp(16)) }
+                pair.forEachIndexed { i, f -> row.addView(folderTile(f), LinearLayout.LayoutParams(tileW, -2).apply { if (i == 1) marginStart = dp(12) }) }
+                col.addView(row)
+            }
+            if (loose.isNotEmpty()) {
+                col.addView(section("NOT IN A FOLDER", label("${loose.size}", 12.5f, 0xFFA9B2C0.toInt())))
+                col.addView(collage(loose, 130))
+            }
         }
-        frame.addView(col, FrameLayout.LayoutParams(-1, -1))
-
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
-            background = pill(0xE6151A22.toInt(), dpf(32f)); setPadding(dp(8), dp(8), dp(8), dp(8))
-        }
-        val lp = { LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4); marginEnd = dp(4) } }
-        if (selected.isEmpty()) {
-            bar.addView(glassButton(R.drawable.ic_add, "Hide photos & videos", filled = true) { openAdd() }, lp())
-        } else {
-            val sel = items.filter { it.id in selected }
-            bar.addView(glassButton(R.drawable.ic_unhide, "Unhide") { unhide(sel) }, lp())
-            bar.addView(glassButton(R.drawable.ic_trash, "Delete", 0xFFFF6B6B.toInt()) { confirmDelete(sel) }, lp())
-        }
-        frame.addView(bar, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = insetBottom + dp(20) })
+        frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
+        bottomBar(frame, if (selected.isEmpty()) listOf(glassButton(R.drawable.ic_add, "Hide photos & videos", filled = true) { addTarget = null; openAdd() })
+            else selectionButtons(loose, false))
         return frame
+    }
+
+    private fun folderTile(f: Folder): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        val v = vault!!
+        val inside = v.inFolder(f.id)
+        val cover = v.coverOf(f)
+        val cell = Cell(context, square = true, radius = 20f)
+        cell.set("cover:" + (cover?.id ?: f.id), 0, false, false, false)
+        if (cover != null) thumbInto(cell, cover.id) { v.thumb(cover) }
+        else cell.addView(ImageView(context).apply { setImageResource(R.drawable.ic_folder_move); alpha = 0.3f },
+            FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER))
+        addView(cell)
+        addView(label(f.name, 15f, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(4), dp(8), dp(4), 0) })
+        addView(label(if (inside.isEmpty()) "Empty" else "${inside.size} item${if (inside.size == 1) "" else "s"}", 12f, 0xFFA9B2C0.toInt()).apply { setPadding(dp(4), dp(1), dp(4), 0) })
+        setOnClickListener { selected.clear(); folderId = f.id; show(Screen.FOLDER) }
+        setOnLongClickListener { performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); folderMenu(f); true }
+    }
+
+    // ------------------------------------------------------------------ inside a folder
+
+    private fun folderScreen(): View {
+        val v = vault ?: return View(this)
+        val f = v.folders.firstOrNull { it.id == folderId } ?: run { main.post { show(Screen.VAULT) }; return View(this) }
+        val items = v.inFolder(f.id)
+        val cover = v.coverOf(f)
+        val frame = FrameLayout(this)
+        val sv = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        scroll = sv
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, insetBottom + dp(110)) }
+        sv.addView(col)
+
+        // Cover across the top, fading into the background, with the name over it.
+        val hero = FrameLayout(this)
+        val heroImg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        hero.addView(heroImg, FrameLayout.LayoutParams(-1, -1))
+        if (cover != null) {
+            thumbs.get(cover.id)?.let { heroImg.setImageBitmap(it) } ?: io.execute { v.thumb(cover)?.let { b -> main.post { if (heroImg.drawable == null) heroImg.setImageBitmap(b) } } }
+            if (!cover.isVideo) io.execute { v.photo(cover, 1600)?.let { b -> main.post { heroImg.setImageBitmap(b) } } }
+        }
+        hero.addView(View(this).apply {
+            background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0x8C0B0F16.toInt(), 0x000B0F16, 0x330B0F16, BG))
+        }, FrameLayout.LayoutParams(-1, -1))
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(6), insetTop + dp(4), dp(8), 0)
+            addView(iconButton(if (selected.isEmpty()) R.drawable.ic_back else R.drawable.ic_close, if (selected.isEmpty()) "Back to folders" else "Cancel selection") {
+                if (selected.isNotEmpty() || pickingCover) { selected.clear(); pickingCover = false; rerender() } else { folderId = null; show(Screen.VAULT) }
+            }, LinearLayout.LayoutParams(dp(44), dp(44)))
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(iconButton(R.drawable.ic_more, "Folder options") { folderMenu(f) }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        }
+        hero.addView(topRow, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+        hero.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), 0, dp(20), dp(14))
+            addView(label(if (selected.isEmpty()) f.name else "${selected.size} selected", 30f, bold = true).apply { maxLines = 2 })
+            addView(label(if (pickingCover) "Tap the picture you want as the cover" else count(items), 13.5f, if (pickingCover) ACCENT else 0xFFCFD5DE.toInt()))
+        }, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        col.addView(hero, LinearLayout.LayoutParams(-1, insetTop + dp(if (cover != null) 260 else 170)))
+
+        if (items.isEmpty()) {
+            col.addView(label("This folder is empty.\nTap Add to hide photos and videos straight into it.", 14f, 0x99FFFFFF.toInt()).apply {
+                gravity = Gravity.CENTER; setLineSpacing(0f, 1.25f); setPadding(dp(32), dp(40), dp(32), 0)
+            })
+        } else col.addView(collage(items, 160))
+        frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
+
+        bottomBar(frame, when {
+            selected.isNotEmpty() -> selectionButtons(items, true)
+            pickingCover -> listOf(glassButton(R.drawable.ic_close, "Cancel") { pickingCover = false; rerender() })
+            else -> listOfNotNull(
+                glassButton(R.drawable.ic_add, "Add", filled = true) { addTarget = f.id; openAdd() },
+                if (items.isNotEmpty()) glassButton(R.drawable.ic_image, "Change cover") {
+                    pickingCover = true; selected.clear(); rerender()
+                } else null)
+        })
+        return frame
+    }
+
+    // ------------------------------------------------------------------ folder dialogs
+
+    private fun dialog() = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+
+    private fun nameDialog(title: String, start: String, ok: String, done: (String) -> Unit) {
+        val input = android.widget.EditText(this).apply {
+            setText(start); setSelection(start.length); setSingleLine(true); hint = "Folder name"
+            setTextColor(Color.WHITE); setHintTextColor(0x80FFFFFF.toInt())
+        }
+        val box = FrameLayout(this).apply { setPadding(dp(22), dp(8), dp(22), 0); addView(input) }
+        val d = dialog().setTitle(title).setView(box)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(ok) { _, _ -> done(input.text.toString()) }
+            .create()
+        d.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        d.show()
+        input.requestFocus()
+    }
+
+    private fun newFolderDialog(then: (Folder) -> Unit) =
+        nameDialog("New folder", "", "Create") { name -> vault?.newFolder(name)?.let(then) }
+
+    private fun folderMenu(f: Folder) {
+        dialog().setTitle(f.name).setItems(arrayOf("Rename", "Change cover", "Delete folder")) { _, which ->
+            when (which) {
+                0 -> nameDialog("Rename folder", f.name, "Save") { n -> vault?.renameFolder(f.id, n); rerender() }
+                1 -> { folderId = f.id; selected.clear(); pickingCover = vault?.inFolder(f.id)?.isNotEmpty() == true; show(Screen.FOLDER) }
+                2 -> dialog().setTitle("Delete \"${f.name}\"?")
+                    .setMessage("The folder goes; everything in it stays hidden in Sanka, just not in a folder.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Delete folder") { _, _ -> vault?.deleteFolder(f.id); folderId = null; selected.clear(); show(Screen.VAULT) }
+                    .show()
+            }
+        }.show()
+    }
+
+    /** Asks which folder (or none, or a new one), then calls [done] with its id ("" = not in a folder). */
+    private fun chooseFolder(title: String, exclude: String?, done: (String) -> Unit) {
+        val v = vault ?: return
+        val choices = mutableListOf<Pair<String, String?>>("New folder…" to null)
+        if (exclude != "") choices.add("Not in a folder" to "")
+        v.folders.filter { it.id != exclude }.forEach { choices.add(it.name to it.id) }
+        dialog().setTitle(title).setItems(choices.map { it.first }.toTypedArray()) { _, which ->
+            val id = choices[which].second
+            if (id == null) newFolderDialog { f -> done(f.id) } else done(id)
+        }.show()
+    }
+
+    private fun moveTo(list: List<Item>) {
+        if (list.isEmpty()) return
+        val here = list.first().folder.takeIf { s -> list.all { it.folder == s } }
+        chooseFolder("Move ${list.size} to", here) { id ->
+            vault?.move(list.map { it.id }, id)
+            selected.clear()
+            Toast.makeText(this, "Moved", Toast.LENGTH_SHORT).show()
+            rerender()
+        }
     }
 
     private fun settingsMenu(anchor: View) {
@@ -314,19 +531,6 @@ class SankaActivity : Activity() {
             val b = try { load() } catch (e: Exception) { null } ?: return@execute
             thumbs.put(key, b)
             main.post { if (cell.boundKey == key) cell.image.setImageBitmap(b) }
-        }
-    }
-
-    private inner class VaultAdapter : BaseAdapter() {
-        override fun getCount() = vault?.items?.size ?: 0
-        override fun getItem(p: Int) = vault!!.items[p]
-        override fun getItemId(p: Int) = p.toLong()
-        override fun getView(p: Int, convert: View?, parent: ViewGroup): View {
-            val cell = (convert as? Cell) ?: Cell(this@SankaActivity)
-            val item = vault!!.items[p]
-            cell.set(item.id, item.duration, item.isVideo, selected.isNotEmpty(), item.id in selected)
-            thumbInto(cell, item.id) { vault?.thumb(item) }
-            return cell
         }
     }
 
@@ -372,7 +576,7 @@ class SankaActivity : Activity() {
         val partial = Build.VERSION.SDK_INT >= 34 && readPerms.none { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
         col.addView(header(if (picked.isEmpty()) "Choose what to hide" else "${picked.size} chosen",
             if (partial) "Only the photos you allowed are shown" else "",
-            iconButton(R.drawable.ic_back, "Back") { picked.clear(); show(Screen.VAULT) },
+            iconButton(R.drawable.ic_back, "Back") { picked.clear(); show(back()) },
             if (partial) listOf(iconButton(R.drawable.ic_add, "Allow more photos") { askAccess() }) else emptyList()))
         if (gallery.isEmpty()) {
             col.addView(FrameLayout(this).apply {
@@ -438,6 +642,11 @@ class SankaActivity : Activity() {
 
     /** Copies the chosen items in (encrypted), then asks Android to remove the originals from the gallery. */
     private fun hidePicked() {
+        val target = addTarget
+        if (target == null) chooseFolder("Hide ${picked.size} in", null) { id -> hideInto(id) } else hideInto(target)
+    }
+
+    private fun hideInto(folder: String) {
         val v = vault ?: return
         val chosen = gallery.filter { it.uri in picked }
         if (chosen.isEmpty()) return
@@ -446,12 +655,12 @@ class SankaActivity : Activity() {
             val done = ArrayList<Uri>()
             chosen.forEachIndexed { i, m ->
                 main.post { progress?.text = "Hiding ${i + 1} of ${chosen.size}…" }
-                if (v.add(m) != null) done.add(m.uri)
+                if (v.add(m, folder) != null) done.add(m.uri)
             }
             main.post {
                 busy(null)
-                picked.clear(); thumbs.evictAll()
-                show(Screen.VAULT)
+                picked.clear()
+                if (folder.isNotEmpty() && v.folders.any { it.id == folder }) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
                 if (done.size < chosen.size) Toast.makeText(this, "${chosen.size - done.size} couldn't be read and stayed in the gallery.", Toast.LENGTH_LONG).show()
                 if (done.isNotEmpty()) {
                     try {
@@ -488,7 +697,7 @@ class SankaActivity : Activity() {
             }
             main.post {
                 busy(null); selected.clear(); releasePlayer()
-                show(Screen.VAULT)
+                show(back())
                 Toast.makeText(this, if (ok == list.size) "Back in the gallery" else "$ok of ${list.size} put back", Toast.LENGTH_SHORT).show()
             }
         }
@@ -505,7 +714,7 @@ class SankaActivity : Activity() {
                 releasePlayer()
                 list.forEach { v.remove(it) }
                 selected.clear()
-                show(Screen.VAULT)
+                show(back())
             }.show()
     }
 
@@ -513,8 +722,9 @@ class SankaActivity : Activity() {
 
     private fun viewerScreen(): View {
         val v = vault ?: return View(this)
-        val items = v.items
-        if (items.isEmpty()) { main.post { show(Screen.VAULT) }; return View(this) }
+        val gone = v.items.map { it.id }.toSet()
+        val items = viewList.filter { it.id in gone }.also { viewList = it }
+        if (items.isEmpty()) { main.post { show(back()) }; return View(this) }
         viewIndex = viewIndex.coerceIn(0, items.lastIndex)
         val item = items[viewIndex]
         releasePlayer()
@@ -544,7 +754,7 @@ class SankaActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), insetTop + dp(6), dp(16), dp(10))
             background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xAA000000.toInt(), 0))
-            addView(iconButton(R.drawable.ic_back, "Back") { releasePlayer(); show(Screen.VAULT) }, LinearLayout.LayoutParams(dp(44), dp(44)))
+            addView(iconButton(R.drawable.ic_back, "Back") { releasePlayer(); show(back()) }, LinearLayout.LayoutParams(dp(44), dp(44)))
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(label(date, 15f, bold = true))

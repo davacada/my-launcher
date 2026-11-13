@@ -179,17 +179,18 @@ class ZoomImageView(ctx: Context, private val onTap: () -> Unit, private val onS
 }
 
 /** A square grid cell: thumbnail, video length, and a tick when selected. */
-class Cell(ctx: Context) : FrameLayout(ctx) {
+class Cell(ctx: Context, private val square: Boolean = true, radius: Float = 10f) : FrameLayout(ctx) {
     val image = ImageView(ctx).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
     private val badge = ctx.label("", 11f, bold = true).apply {
         setPadding(ctx.dp(6), ctx.dp(2), ctx.dp(6), ctx.dp(2)); background = pill(0x99000000.toInt(), ctx.dpf(8f))
     }
     private val tick = ImageView(ctx).apply { setPadding(ctx.dp(3), ctx.dp(3), ctx.dp(3), ctx.dp(3)) }
     var boundKey: String = ""
+    private val cornerDp = radius
 
     init {
         clipToOutline = true
-        background = pill(0x14FFFFFF, ctx.dpf(10f))
+        background = pill(0x14FFFFFF, ctx.dpf(radius))
         addView(image, LayoutParams(-1, -1))
         addView(badge, LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { setMargins(ctx.dp(5), 0, 0, ctx.dp(5)) })
         addView(tick, LayoutParams(ctx.dp(22), ctx.dp(22), Gravity.TOP or Gravity.END).apply { setMargins(0, ctx.dp(6), ctx.dp(6), 0) })
@@ -204,8 +205,56 @@ class Cell(ctx: Context) : FrameLayout(ctx) {
         tick.background = if (selected) oval(ACCENT) else oval(0x33000000, context.dp(2), Color.WHITE)
         tick.setImageResource(if (selected) R.drawable.ic_check else 0)
         tick.setColorFilter(BG)
-        foreground = if (selected) pill(0x33C9A2FF, context.dpf(10f), context.dp(3), ACCENT) else null
+        foreground = if (selected) pill(0x33C9A2FF, context.dpf(cornerDp), context.dp(3), ACCENT) else null
     }
 
-    override fun onMeasure(w: Int, h: Int) = super.onMeasure(w, w)
+    override fun onMeasure(w: Int, h: Int) = if (square) super.onMeasure(w, w) else super.onMeasure(w, h)
+}
+
+/**
+ * Lays its children out like a photo collage: each keeps its own shape (tall ones narrow, wide ones wide),
+ * every row is the same height, and each full row fills the width exactly. [aspects] holds width/height per child.
+ */
+class JustifiedLayout(ctx: Context, private val targetDp: Int = 150) : android.view.ViewGroup(ctx) {
+    var aspects: List<Float> = emptyList()
+    private val gap = ctx.dp(3)
+    private val frames = ArrayList<android.graphics.Rect>()
+
+    override fun onMeasure(wSpec: Int, hSpec: Int) {
+        val width = MeasureSpec.getSize(wSpec) - paddingLeft - paddingRight
+        val target = context.dp(targetDp).toFloat()
+        frames.clear()
+        var y = paddingTop
+        var start = 0
+        val n = minOf(childCount, aspects.size)
+        while (start < n) {
+            var end = start; var sum = 0f; var h = target
+            while (end < n) {
+                sum += aspects[end]; end++
+                h = (width - gap * (end - start - 1)) / sum
+                if (h <= target) break
+            }
+            val last = end >= n && h > target
+            if (last) h = target
+            var x = paddingLeft.toFloat()
+            for (i in start until end) {
+                val w = if (!last && i == end - 1) (paddingLeft + width - x) else aspects[i] * h
+                frames.add(android.graphics.Rect(x.toInt(), y, (x + w).toInt(), (y + h).toInt()))
+                x += w + gap
+            }
+            y += h.toInt() + gap
+            start = end
+        }
+        for (i in 0 until childCount) {
+            val f = frames.getOrNull(i)
+            val c = getChildAt(i)
+            if (f == null) { c.measure(0, 0); continue }
+            c.measure(MeasureSpec.makeMeasureSpec(f.width(), MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(f.height(), MeasureSpec.EXACTLY))
+        }
+        setMeasuredDimension(MeasureSpec.getSize(wSpec), (y - gap + paddingBottom).coerceAtLeast(0))
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        for (i in 0 until childCount) frames.getOrNull(i)?.let { getChildAt(i).layout(it.left, it.top, it.right, it.bottom) }
+    }
 }

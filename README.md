@@ -81,5 +81,11 @@ Each release also has `sanka.apk`, a locked place for hidden photos and videos:
   phone's secure hardware), and Android asks to remove the originals from the gallery
 - View photos (pinch / double-tap to zoom) and play videos inside the app; swipe between them
 - **Unhide** puts items back in the gallery in their original folder; **Delete** removes them for good
-- Long-press to select several. ⋯ menu: change PIN, fingerprint on/off
+- **Folders:** + New folder on the main screen; each folder's tile shows a cover picture from inside it (the first
+  thing you added, or pick one with *Change cover*). Long-press a folder to rename, change its cover or delete it
+  (deleting a folder keeps what's in it)
+- Pictures show as a collage that keeps each one's shape: tall ones narrow, wide ones wide, every row the same height
+- When you hide new pictures you choose the folder (or none); *Add* inside a folder hides straight into it
+- Long-press to select several, then *Move*, *Unhide* or *Delete* (or *Cover* for one picture in a folder).
+  ⋯ menu: change PIN, fingerprint on/off
 - Hidden files live only on this phone: uninstalling Sanka deletes them, so unhide anything you want to keep first
