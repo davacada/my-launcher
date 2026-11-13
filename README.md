@@ -86,6 +86,8 @@ Each release also has `sanka.apk`, a locked place for hidden photos and videos:
   (deleting a folder keeps what's in it)
 - Pictures show as a collage that keeps each one's shape: tall ones narrow, wide ones wide, every row the same height
 - When you hide new pictures you choose the folder (or none); *Add* inside a folder hides straight into it
+- The hide screen has album chips and *Select all*, and can keep the albums pictures came from as Sanka folders
+  (handy for moving a whole collection over from another vault app after exporting it to the gallery)
 - Long-press to select several, then *Move*, *Unhide* or *Delete* (or *Cover* for one picture in a folder).
   ⋯ menu: change PIN, fingerprint on/off
 - Hidden files live only on this phone: uninstalling Sanka deletes them, so unhide anything you want to keep first

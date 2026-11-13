@@ -570,19 +570,61 @@ class SankaActivity : Activity() {
         else Toast.makeText(this, "Sanka needs access to your photos and videos to hide them.", Toast.LENGTH_LONG).show()
     }
 
+    private var album: String? = null          // album filter on the hide screen; null = all
+    private var addTitle: TextView? = null
+    private var hideButton: View? = null
+    private var allButton: TextView? = null
+
+    private fun shown() = if (album == null) gallery else gallery.filter { it.album == album }
+
+    /** Updates the title, the Hide button and the ticks without rebuilding (so the list keeps its place). */
+    private fun refreshPicks() {
+        addTitle?.text = if (picked.isEmpty()) "Choose what to hide" else "${picked.size} chosen"
+        (hideButton as? LinearLayout)?.let { b -> ((b.getChildAt(b.childCount - 1)) as? TextView)?.text = "Hide ${picked.size}" }
+        hideButton?.visibility = if (picked.isEmpty()) View.GONE else View.VISIBLE
+        val list = shown()
+        allButton?.text = if (list.isNotEmpty() && list.all { it.uri in picked }) "Clear" else "Select all"
+        addAdapter?.notifyDataSetChanged()
+    }
+
     private fun addScreen(): View {
         val frame = FrameLayout(this)
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val partial = Build.VERSION.SDK_INT >= 34 && readPerms.none { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
-        col.addView(header(if (picked.isEmpty()) "Choose what to hide" else "${picked.size} chosen",
+        val head = header("Choose what to hide",
             if (partial) "Only the photos you allowed are shown" else "",
-            iconButton(R.drawable.ic_back, "Back") { picked.clear(); show(back()) },
-            if (partial) listOf(iconButton(R.drawable.ic_add, "Allow more photos") { askAccess() }) else emptyList()))
+            iconButton(R.drawable.ic_back, "Back") { picked.clear(); album = null; show(back()) },
+            if (partial) listOf(iconButton(R.drawable.ic_add, "Allow more photos") { askAccess() }) else emptyList()) as LinearLayout
+        addTitle = (head.getChildAt(1) as LinearLayout).getChildAt(0) as TextView
+        // Select all / clear, for the album shown
+        allButton = label("Select all", 13f, ACCENT, bold = true).apply {
+            gravity = Gravity.CENTER; setPadding(dp(14), 0, dp(14), 0); background = pill(0x29C9A2FF, dpf(17f))
+            setOnClickListener {
+                val list = shown()
+                if (list.isNotEmpty() && list.all { it.uri in picked }) list.forEach { picked.remove(it.uri) } else list.forEach { picked.add(it.uri) }
+                refreshPicks()
+            }
+        }
+        head.addView(allButton, LinearLayout.LayoutParams(-2, dp(34)).apply { marginStart = dp(4) })
+        col.addView(head)
+
         if (gallery.isEmpty()) {
             col.addView(FrameLayout(this).apply {
                 addView(ProgressBar(context), FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER))
             }, LinearLayout.LayoutParams(-1, 0, 1f))
         } else {
+            // Albums as chips, biggest first, so a whole album (e.g. what you exported from another app) is two taps.
+            val albums = gallery.groupBy { it.album }.filterKeys { it.isNotEmpty() }.toList().sortedByDescending { it.second.size }
+            val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(14), dp(2), dp(14), dp(8)) }
+            fun chip(text: String, key: String?) = label(text, 13.5f, if (album == key) BG else Color.WHITE, bold = true).apply {
+                gravity = Gravity.CENTER; setPadding(dp(14), 0, dp(14), 0)
+                background = pill(if (album == key) Color.WHITE else 0x1FFFFFFF, dpf(17f))
+                setOnClickListener { album = key; show(Screen.ADD) }
+            }
+            chips.addView(chip("All  ${gallery.size}", null), LinearLayout.LayoutParams(-2, dp(34)).apply { marginEnd = dp(6) })
+            albums.forEach { (name, list) -> chips.addView(chip("$name  ${list.size}", name), LinearLayout.LayoutParams(-2, dp(34)).apply { marginEnd = dp(6) }) }
+            col.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+
             val adapter = AddAdapter().also { addAdapter = it }
             col.addView(GridView(this).apply {
                 numColumns = 4; stretchMode = GridView.STRETCH_COLUMN_WIDTH
@@ -591,27 +633,26 @@ class SankaActivity : Activity() {
                 selector = pill(Color.TRANSPARENT, 0f)
                 this.adapter = adapter
                 setOnItemClickListener { _, _, pos, _ ->
-                    val m = gallery[pos]
+                    val m = shown()[pos]
                     if (!picked.remove(m.uri)) picked.add(m.uri)
-                    show(Screen.ADD)
+                    refreshPicks()
                 }
             }, LinearLayout.LayoutParams(-1, 0, 1f))
         }
         frame.addView(col, FrameLayout.LayoutParams(-1, -1))
-        if (picked.isNotEmpty()) {
-            frame.addView(glassButton(R.drawable.ic_lock, "Hide ${picked.size}", filled = true) { hidePicked() },
-                FrameLayout.LayoutParams(-2, dp(52), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = insetBottom + dp(24) })
-        }
+        hideButton = glassButton(R.drawable.ic_lock, "Hide ${picked.size}", filled = true) { hidePicked() }
+        frame.addView(hideButton, FrameLayout.LayoutParams(-2, dp(52), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = insetBottom + dp(24) })
+        refreshPicks()
         return frame
     }
 
     private inner class AddAdapter : BaseAdapter() {
-        override fun getCount() = gallery.size
-        override fun getItem(p: Int) = gallery[p]
+        override fun getCount() = shown().size
+        override fun getItem(p: Int) = shown()[p]
         override fun getItemId(p: Int) = p.toLong()
         override fun getView(p: Int, convert: View?, parent: ViewGroup): View {
             val cell = (convert as? Cell) ?: Cell(this@SankaActivity)
-            val m = gallery[p]
+            val m = shown()[p]
             val key = "g:" + m.uri
             cell.set(key, m.duration, m.isVideo, true, m.uri in picked)
             thumbInto(cell, key) { contentResolver.loadThumbnail(m.uri, Size(300, 300), null) }
@@ -643,24 +684,39 @@ class SankaActivity : Activity() {
     /** Copies the chosen items in (encrypted), then asks Android to remove the originals from the gallery. */
     private fun hidePicked() {
         val target = addTarget
-        if (target == null) chooseFolder("Hide ${picked.size} in", null) { id -> hideInto(id) } else hideInto(target)
-    }
-
-    private fun hideInto(folder: String) {
+        if (target != null) { hideInto(target); return }
         val v = vault ?: return
         val chosen = gallery.filter { it.uri in picked }
+        val albums = chosen.map { it.album }.filter { it.isNotEmpty() }.distinct()
+        // Offer to keep the albums they came from as Sanka folders (handy when moving everything over from another app).
+        val choices = mutableListOf<Pair<String, () -> Unit>>()
+        if (albums.isNotEmpty()) choices.add((if (albums.size == 1) "Into a folder called \"${albums[0]}\"" else "Keep their ${albums.size} albums as folders") to { hideInto(null) })
+        choices.add("New folder…" to { newFolderDialog { f -> hideInto(f.id) } })
+        choices.add("Not in a folder" to { hideInto("") })
+        v.folders.forEach { f -> choices.add(f.name to { hideInto(f.id) }) }
+        dialog().setTitle("Hide ${chosen.size} in").setItems(choices.map { it.first }.toTypedArray()) { _, which -> choices[which].second() }.show()
+    }
+
+    /** [folder] = folder id ("" = none), or null to put each item in a folder named after its album. */
+    private fun hideInto(folder: String?) {
+        val v = vault ?: return
+        val chosen = gallery.filter { it.uri in picked }
+        val byAlbum = HashMap<String, String>()
+        if (folder == null) chosen.map { it.album }.filter { it.isNotEmpty() }.distinct().forEach { name ->
+            byAlbum[name] = (v.folders.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: v.newFolder(name)).id
+        }
         if (chosen.isEmpty()) return
         busy("Hiding 0 of ${chosen.size}…")
         io.execute {
             val done = ArrayList<Uri>()
             chosen.forEachIndexed { i, m ->
                 main.post { progress?.text = "Hiding ${i + 1} of ${chosen.size}…" }
-                if (v.add(m, folder) != null) done.add(m.uri)
+                if (v.add(m, folder ?: byAlbum[m.album] ?: "") != null) done.add(m.uri)
             }
             main.post {
                 busy(null)
-                picked.clear()
-                if (folder.isNotEmpty() && v.folders.any { it.id == folder }) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
+                picked.clear(); album = null
+                if (!folder.isNullOrEmpty() && v.folders.any { it.id == folder }) { folderId = folder; show(Screen.FOLDER) } else { folderId = null; show(Screen.VAULT) }
                 if (done.size < chosen.size) Toast.makeText(this, "${chosen.size - done.size} couldn't be read and stayed in the gallery.", Toast.LENGTH_LONG).show()
                 if (done.isNotEmpty()) {
                     try {
