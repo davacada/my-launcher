@@ -75,9 +75,12 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
 
 Each release also has `sanka.apk`, a locked place for hidden photos and videos:
 
-- **Folder layout** (Settings): Grid, Banners (wide strips), Mosaic (big and small tiles), Collage (prints on a
+- **Bottom bar:** Order, Lock, Hide and Settings sit at the bottom, within thumb reach. *Settings* is a page of its
+  own (folders, lock, privacy), with switches for fingerprint unlock, dot numbers and screenshots
+- **Folder layout** (Settings, a sheet over your folders so you see each choice straight away): Grid, Banners (wide strips), Mosaic (big and small tiles), Collage (prints on a
   table), Stacks (each folder a fanned pile of its pictures) or List
-- **Folder background** (Settings): any picture in Sanka behind the folders, with blur and darkness levels
+- **Folder background** (in the same sheet): any picture in Sanka behind the folders, with Blur and Darken sliders
+  that change it live
 - **Allow screenshots** (Settings): after your fingerprint (or PIN), screenshots and screen recording work until you
   leave Sanka; a banner shows while they're allowed, with *Block now*
 - **Lock screen:** matt black with grain and only the Sanka mark. Ten dots on the right at thumb height stand for

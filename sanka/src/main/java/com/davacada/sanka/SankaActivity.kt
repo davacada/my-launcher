@@ -48,7 +48,7 @@ import java.util.concurrent.Executors
  */
 class SankaActivity : Activity() {
 
-    private enum class Screen { SETUP, LOCK, VAULT, FOLDER, ADD, VIEWER, RESULT, DUPES }
+    private enum class Screen { SETUP, LOCK, VAULT, FOLDER, ADD, VIEWER, RESULT, DUPES, SETTINGS }
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(3)
@@ -221,6 +221,7 @@ class SankaActivity : Activity() {
     override fun onDestroy() { releasePlayer(); io.shutdownNow(); super.onDestroy() }
 
     private fun lock() {
+        closeSheet()
         blockShots()
         unlocked = false
         releasePlayer()
@@ -231,7 +232,9 @@ class SankaActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        if (sheet != null) { closeSheet(); return }
         when (screen) {
+            Screen.SETTINGS -> show(Screen.VAULT)
             Screen.VIEWER -> { releasePlayer(); show(back()) }
             Screen.ADD -> { picked.clear(); show(back()) }
             Screen.DUPES -> { dupesOpen = false; show(Screen.VAULT) }
@@ -273,6 +276,7 @@ class SankaActivity : Activity() {
             Screen.DUPES -> dupesScreen()
             Screen.ADD -> addScreen()
             Screen.VIEWER -> viewerScreen()
+            Screen.SETTINGS -> settingsScreen()
         }, FrameLayout.LayoutParams(-1, -1))
     }
 
@@ -604,8 +608,9 @@ class SankaActivity : Activity() {
                     pickingLockBg -> {
                         prefs.edit().putString("homeBg", item.id).apply()
                         pickingLockBg = false
-                        Toast.makeText(this, "Folder background set", Toast.LENGTH_SHORT).show()
+                        folderId = null
                         show(Screen.VAULT)
+                        main.post { layoutSheet() }
                     }
                     pickingCover -> {
                         folderId?.let { f -> vault?.setCover(f, item.id) }
@@ -669,7 +674,7 @@ class SankaActivity : Activity() {
         val sub = "${folders.size} folder${if (folders.size == 1) "" else "s"} · ${v.items.size} item${if (v.items.size == 1) "" else "s"}"
         col.addView(header(if (selected.isEmpty()) "Sanka" else "${selected.size} selected", sub,
             if (selected.isEmpty()) null else iconButton(R.drawable.ic_close, "Cancel selection") { selected.clear(); rerender() },
-            listOf(iconButton(R.drawable.ic_sort, "Order") { sortMenu() }, iconButton(R.drawable.ic_lock, "Lock now") { lock() }, iconButton(R.drawable.ic_more, "Settings") { settingsMenu(it) })))
+            emptyList()))
         if (shotsAllowed) col.addView(shotsBanner())
 
         if (v.items.isEmpty() && folders.isEmpty()) {
@@ -694,7 +699,11 @@ class SankaActivity : Activity() {
         homeBackground()?.let { frame.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
         bottomBar(frame, if (pickingLockBg) listOf(glassButton(R.drawable.ic_close, "Cancel choosing background") { pickingLockBg = false; rerender() })
-            else if (selected.isEmpty()) listOf(glassButton(R.drawable.ic_add, "Hide photos & videos", filled = true) { addTarget = null; openAdd() })
+            else if (selected.isEmpty()) listOf(
+                compactButton(R.drawable.ic_sort, "Order") { sortMenu() },
+                compactButton(R.drawable.ic_lock, "Lock") { lock() },
+                glassButton(R.drawable.ic_add, "Hide", filled = true) { addTarget = null; openAdd() },
+                compactButton(R.drawable.ic_more, "Settings") { show(Screen.SETTINGS) })
             else selectionButtons(loose, false))
         return frame
     }
@@ -852,18 +861,13 @@ class SankaActivity : Activity() {
 
     private fun homeBackground(): View? {
         val id = prefs.getString("homeBg", null) ?: return null
-        val blur = floatArrayOf(0f, 14f, 28f, 48f)[prefs.getInt("homeBlur", 2).coerceIn(0, 3)]
-        val dim = floatArrayOf(0.3f, 0.5f, 0.7f)[prefs.getInt("homeDim", 1).coerceIn(0, 2)]
         val frame = FrameLayout(this)
-        val img = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f
-            if (blur > 0f) setRenderEffect(android.graphics.RenderEffect.createBlurEffect(dpf(blur), dpf(blur), android.graphics.Shader.TileMode.CLAMP))
-        }
+        val img = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f }
         frame.addView(img, FrameLayout.LayoutParams(-1, -1))
-        fun a(x: Float) = (x.coerceIn(0f, 1f) * 255).toInt() shl 24 or 0x0B0F16
-        frame.addView(View(this).apply {
-            background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(a(dim - 0.1f), a(dim), a(dim + 0.25f)))
-        }, FrameLayout.LayoutParams(-1, -1))
+        val shade = View(this)
+        frame.addView(shade, FrameLayout.LayoutParams(-1, -1))
+        bgImg = img; bgShade = shade
+        applyBgLook()
         io.execute {
             val v = vault ?: return@execute
             val item = v.items.firstOrNull { it.id == id }
@@ -874,6 +878,20 @@ class SankaActivity : Activity() {
             }
         }
         return frame
+    }
+
+    private var bgImg: ImageView? = null
+    private var bgShade: View? = null
+    private val bgBlur get() = prefs.getFloat("homeBlurDp", 28f)
+    private val bgDim get() = prefs.getFloat("homeDimF", 0.5f)
+
+    /** Blur and darkness of the folder background, applied straight away (the sliders move it live). */
+    private fun applyBgLook() {
+        val b = bgBlur
+        bgImg?.setRenderEffect(if (b > 0.5f) android.graphics.RenderEffect.createBlurEffect(dpf(b), dpf(b), android.graphics.Shader.TileMode.CLAMP) else null)
+        fun a(x: Float) = (x.coerceIn(0f, 1f) * 255).toInt() shl 24 or 0x0B0F16
+        val d = bgDim
+        bgShade?.background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(a(d - 0.1f), a(d), a(d + 0.25f)))
     }
 
     private fun backgroundMenu() {
@@ -1206,28 +1224,210 @@ class SankaActivity : Activity() {
         }
     }
 
-    private fun settingsMenu(anchor: View) {
-        val fpOk = getSystemService(BiometricManager::class.java)
-            ?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
-        val labels = mutableListOf("Change PIN", "Line up the fingerprint point", "Find duplicates",
-            if (prefs.getBoolean("dotNumbers", true)) "Numbers beside the dots: on" else "Numbers beside the dots: off",
-            if (pin.fingerprint) "Fingerprint unlock: on" else "Fingerprint unlock: off",
-            "Folder layout", "Folder background", if (shotsAllowed) "Block screenshots again" else "Allow screenshots")
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setItems(labels.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> { unlocked = true; show(Screen.SETUP) }
-                    1 -> lineUpSensor()
-                    2 -> { val g = vault?.duplicateGroups().orEmpty(); if (g.isEmpty()) Toast.makeText(this, "No duplicates", Toast.LENGTH_SHORT).show() else openDupes(g) }
-                    3 -> { val on = !prefs.getBoolean("dotNumbers", true); prefs.edit().putBoolean("dotNumbers", on).apply()
-                        Toast.makeText(this, if (on) "Numbers shown beside the dots" else "Dots only, no numbers", Toast.LENGTH_SHORT).show() }
-                    4 -> if (fpOk) { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
-                         else Toast.makeText(this, "No fingerprint set up on this phone", Toast.LENGTH_SHORT).show()
-                    5 -> layoutMenu()
-                    6 -> backgroundMenu()
-                    7 -> if (shotsAllowed) { blockShots(); rerender() } else allowShots()
+    // ------------------------------------------------------------------ settings page
+
+    private val SUBTLE = 0xFFA9B2C0.toInt()
+
+    private fun settingsScreen(): View {
+        val frame = FrameLayout(this)
+        val sv = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        scroll = sv
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, insetBottom + dp(110)) }
+        sv.addView(col)
+        col.addView(header("Settings", "", iconButton(R.drawable.ic_back, "Back") { show(Screen.VAULT) }, emptyList()))
+        val fpOk = getSystemService(BiometricManager::class.java)?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+        val layoutName = mapOf("grid" to "Grid", "banners" to "Banners", "mosaic" to "Mosaic", "collage" to "Collage", "stacks" to "Stacks", "list" to "List")[folderLayout] ?: "Grid"
+        val hasBg = prefs.getString("homeBg", null) != null
+        val orderName = mapOf("date" to "By date created", "newest" to "Newest added first", "format" to "By format", "similar" to "By similarity")[sortMode] ?: ""
+
+        fun group(t: String) = col.addView(label(t, 12.5f, SUBTLE, bold = true).apply { letterSpacing = 0.08f; setPadding(dp(22), dp(18), dp(20), dp(4)) })
+        group("FOLDERS")
+        col.addView(row(R.drawable.ic_s_mosaic, "Folder layout", layoutName, chevron()) { show(Screen.VAULT); layoutSheet() })
+        col.addView(row(R.drawable.ic_image, "Folder background", if (hasBg) "Your picture · blur ${bgBlur.toInt()}" else "None", chevron()) { show(Screen.VAULT); layoutSheet() })
+        col.addView(row(R.drawable.ic_sort, "Order", orderName, chevron()) { sortMenu() })
+        group("LOCK")
+        if (fpOk) col.addView(row(R.drawable.ic_fingerprint, "Fingerprint unlock", if (pin.fingerprint) "On" else "Off", toggle(pin.fingerprint)) { pin.fingerprint = !pin.fingerprint; rerender() })
+        col.addView(row(R.drawable.ic_s_numbers, "Numbers beside the dots", if (prefs.getBoolean("dotNumbers", true)) "Shown" else "Dots only", toggle(prefs.getBoolean("dotNumbers", true))) {
+            prefs.edit().putBoolean("dotNumbers", !prefs.getBoolean("dotNumbers", true)).apply(); rerender() })
+        if (fpOk) col.addView(row(R.drawable.ic_s_target, "Line up the fingerprint point", "Drag it onto your sensor", chevron()) { lineUpSensor() })
+        col.addView(row(R.drawable.ic_s_key, "Change PIN", "", chevron()) { unlocked = true; show(Screen.SETUP) })
+        group("PRIVACY")
+        col.addView(row(R.drawable.ic_s_shot, "Allow screenshots", if (shotsAllowed) "On until you leave Sanka" else "Off: screens in Sanka stay black", toggle(shotsAllowed)) {
+            if (shotsAllowed) { blockShots(); rerender() } else shotsSheet() })
+        col.addView(row(R.drawable.ic_s_copy, "Find duplicates", "Pictures with identical contents", chevron()) {
+            val g = vault?.duplicateGroups().orEmpty(); if (g.isEmpty()) Toast.makeText(this, "No duplicates", Toast.LENGTH_SHORT).show() else openDupes(g) })
+        frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
+        bottomBar(frame, listOf(glassButton(R.drawable.ic_back, "Back to folders") { show(Screen.VAULT) }))
+        return frame
+    }
+
+    private fun chevron(): View = ImageView(this).apply { setImageResource(R.drawable.ic_s_chev); setColorFilter(0x80FFFFFF.toInt()); layoutParams = LinearLayout.LayoutParams(dp(20), dp(20)) }
+
+    private fun toggle(on: Boolean): View = FrameLayout(this).apply {
+        background = pill(if (on) ACCENT else 0x24FFFFFF, dpf(14f))
+        addView(View(context).apply { background = oval(if (on) Color.WHITE else 0xFFCFD5DE.toInt()) },
+            FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER_VERTICAL or (if (on) Gravity.END else Gravity.START)).apply { setMargins(dp(3), 0, dp(3), 0) })
+        layoutParams = LinearLayout.LayoutParams(dp(46), dp(28))
+    }
+
+    private fun row(icon: Int, title: String, sub: String, right: View, onClick: () -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(18), dp(10), dp(20), dp(10))
+        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x1FFFFFFF), null, pill(Color.WHITE, 0f))
+        addView(ImageView(context).apply { setImageResource(icon); setColorFilter(Color.WHITE); setPadding(dp(10), dp(10), dp(10), dp(10)); background = pill(0x12FFFFFF, dpf(13f)) },
+            LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(14) })
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label(title, 15.5f))
+            if (sub.isNotEmpty()) addView(label(sub, 12.5f, SUBTLE))
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        addView(right)
+        setOnClickListener { onClick() }
+    }
+
+    // ------------------------------------------------------------------ bottom sheets
+
+    private var sheet: View? = null
+
+    /** Slides [content] up from the bottom over a dimmed screen. Lives above the screens, so they can change behind it. */
+    private fun openSheet(content: View, dimAlpha: Int = 0x66, onClose: (() -> Unit)? = null) {
+        closeSheet()
+        val host = findViewById<ViewGroup>(android.R.id.content)
+        val dim = FrameLayout(this).apply { setBackgroundColor(dimAlpha shl 24); isClickable = true; setOnClickListener { closeSheet() }; tag = onClose }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; isClickable = true
+            setPadding(dp(18), dp(10), dp(18), insetBottom + dp(24))
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(0xF7151A22.toInt()); cornerRadii = floatArrayOf(dpf(28f), dpf(28f), dpf(28f), dpf(28f), 0f, 0f, 0f, 0f) }
+            elevation = dpf(16f)
+            addView(View(context).apply { background = pill(0x33FFFFFF, dpf(2f)) }, LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(14) })
+            addView(content)
+        }
+        dim.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        host.addView(dim, FrameLayout.LayoutParams(-1, -1))
+        sheet = dim
+        card.translationY = dpf(500f); card.animate().translationY(0f).setDuration(240).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+    }
+
+    private fun closeSheet() {
+        val s = sheet ?: return
+        sheet = null
+        @Suppress("UNCHECKED_CAST") (s.tag as? (() -> Unit))?.invoke()
+        (s.parent as? ViewGroup)?.removeView(s)
+    }
+
+    /** Folder layout cards and the background picker, over the folders so every change shows behind it. */
+    private fun layoutSheet() {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun build() {
+            col.removeAllViews()
+            col.addView(label("Folder layout", 20f, bold = true).apply { setPadding(dp(4), 0, 0, dp(2)) })
+            col.addView(label("How your folders look when Sanka opens", 13f, SUBTLE).apply { setPadding(dp(4), 0, 0, dp(14)) })
+            val modes = listOf(Triple("grid", R.drawable.ic_s_grid, "Grid" to "Square covers, two across"), Triple("banners", R.drawable.ic_s_banner, "Banners" to "Wide cinematic strips"),
+                Triple("mosaic", R.drawable.ic_s_mosaic, "Mosaic" to "Big and small tiles"), Triple("collage", R.drawable.ic_s_collage, "Collage" to "Prints on a table"),
+                Triple("stacks", R.drawable.ic_s_stack, "Stacks" to "Each folder a fanned pile"), Triple("list", R.drawable.ic_s_list, "List" to "Compact, small cover"))
+            modes.chunked(3).forEachIndexed { ri, three ->
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                three.forEachIndexed { i, (k, icon, names) ->
+                    val on = folderLayout == k
+                    r.addView(LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(12), dp(10), dp(12))
+                        background = pill(if (on) 0x24C9A2FF else 0x0DFFFFFF, dpf(18f), dp(if (on) 2 else 1), if (on) ACCENT else 0x14FFFFFF)
+                        addView(ImageView(context).apply { setImageResource(icon); setColorFilter(if (on) BG else Color.WHITE); setPadding(dp(8), dp(8), dp(8), dp(8)); background = pill(if (on) ACCENT else 0x14FFFFFF, dpf(12f)) },
+                            LinearLayout.LayoutParams(dp(36), dp(36)))
+                        addView(label(names.first, 14.5f, bold = true).apply { setPadding(0, dp(8), 0, dp(2)) })
+                        addView(label(names.second, 11.5f, SUBTLE).apply { setLineSpacing(0f, 1.15f) })
+                        setOnClickListener { folderLayout = k; show(Screen.VAULT); build() }
+                    }, LinearLayout.LayoutParams(0, -1, 1f).apply { if (i > 0) marginStart = dp(10) })
                 }
-            }.show()
+                col.addView(r, LinearLayout.LayoutParams(-1, -2).apply { if (ri > 0) topMargin = dp(10) })
+            }
+            // background
+            col.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(20), dp(4), dp(10))
+                addView(label("BACKGROUND", 12.5f, SUBTLE, bold = true).apply { letterSpacing = 0.08f }, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(label("From your pictures", 12.5f, ACCENT, bold = true).apply {
+                    setOnClickListener { closeSheet(); pickingLockBg = true; selected.clear(); show(Screen.VAULT)
+                        Toast.makeText(this@SankaActivity, "Tap the picture you want behind your folders (open a folder to pick from it)", Toast.LENGTH_LONG).show() }
+                })
+            })
+            val v = vault
+            val current = prefs.getString("homeBg", null)
+            val strip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            strip.addView(label("None", 11.5f, SUBTLE).apply {
+                gravity = Gravity.CENTER; background = pill(0x0FFFFFFF, dpf(14f), if (current == null) dp(2) else 0, ACCENT)
+                setOnClickListener { prefs.edit().remove("homeBg").apply(); show(Screen.VAULT); build() }
+            }, LinearLayout.LayoutParams(dp(62), dp(62)).apply { marginEnd = dp(10) })
+            val pics = (v?.items.orEmpty().filter { it.id == current } + v?.items.orEmpty().filter { !it.isVideo && it.id != current }.sortedByDescending { it.added }.take(14))
+            pics.forEach { item ->
+                val cell = Cell(this, square = false, radius = 14f)
+                cell.set("bg:" + item.id, 0, false, false, false)
+                if (item.id == current) cell.foreground = pill(0, dpf(14f), dp(3), ACCENT)
+                thumbInto(cell, item.id) { v?.thumb(item) }
+                cell.setOnClickListener { prefs.edit().putString("homeBg", item.id).apply(); show(Screen.VAULT); build() }
+                strip.addView(cell, LinearLayout.LayoutParams(dp(62), dp(62)).apply { marginEnd = dp(10) })
+            }
+            col.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(strip) })
+            if (current != null) {
+                val sliders = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(16), 0, 0) }
+                fun slider(name: String, value: Float, max: Float, onMove: (Float) -> Unit) = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(label(name, 12.5f, SUBTLE).apply { setPadding(dp(4), 0, 0, 0) })
+                    addView(android.widget.SeekBar(context).apply {
+                        this.max = 100; progress = (value / max * 100).toInt()
+                        progressTintList = android.content.res.ColorStateList.valueOf(ACCENT); thumbTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+                        progressBackgroundTintList = android.content.res.ColorStateList.valueOf(0x40FFFFFF)
+                        setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                            override fun onProgressChanged(sb: android.widget.SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) onMove(p / 100f * max) }
+                            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+                            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {}
+                        })
+                    }, LinearLayout.LayoutParams(-1, dp(36)))
+                }
+                sliders.addView(slider("Blur", bgBlur, 48f) { prefs.edit().putFloat("homeBlurDp", it).apply(); applyBgLook() }, LinearLayout.LayoutParams(0, -2, 1f))
+                sliders.addView(slider("Darken", bgDim, 0.9f) { prefs.edit().putFloat("homeDimF", it).apply(); applyBgLook() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(12) })
+                col.addView(sliders)
+            }
+        }
+        build()
+        openSheet(col, 0x40)
+    }
+
+    /** "Allow screenshots?": rest a finger on the sensor (the sheet shows it), or use the PIN. */
+    private fun shotsSheet() {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+        col.addView(label("Allow screenshots?", 20f, bold = true))
+        col.addView(label("Touch the sensor to confirm. Screenshots and screen recording work until you leave Sanka; then they're blocked again by themselves.", 13.5f, SUBTLE).apply {
+            gravity = Gravity.CENTER; setLineSpacing(0f, 1.3f); setPadding(dp(8), dp(8), dp(8), dp(18)) })
+        val rings = FrameLayout(this)
+        listOf(176 to 0x1FC9A2FF, 136 to 0x47C9A2FF, 96 to 0x8CC9A2FF).forEach { (d, c) ->
+            rings.addView(View(this).apply { background = oval(0, dp(1), c) }, FrameLayout.LayoutParams(dp(d), dp(d), Gravity.CENTER))
+        }
+        val fp = ImageView(this).apply { setImageResource(R.drawable.ic_fingerprint); setColorFilter(ACCENT); setPadding(dp(16), dp(16), dp(16), dp(16)); background = oval(0x29C9A2FF) }
+        rings.addView(fp, FrameLayout.LayoutParams(dp(72), dp(72), Gravity.CENTER))
+        col.addView(rings, LinearLayout.LayoutParams(dp(180), dp(180)))
+        val hint = label("Touch the fingerprint sensor", 13f, ACCENT, bold = true).apply { setPadding(0, dp(6), 0, dp(18)) }
+        col.addView(hint)
+        val ok = {
+            shotsAllowed = true
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            closeSheet()
+            Toast.makeText(this, "Screenshots allowed until you leave Sanka", Toast.LENGTH_SHORT).show()
+            rerender()
+        }
+        val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        btns.addView(glassButton(null, "Cancel") { closeSheet() }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { marginEnd = dp(10) })
+        btns.addView(glassButton(null, "Use PIN") {
+            val e = android.widget.EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD; setTextColor(Color.WHITE) }
+            dialog().setTitle("Enter your PIN").setView(FrameLayout(this).apply { setPadding(dp(20), 0, dp(20), 0); addView(e) })
+                .setPositiveButton("Allow") { _, _ -> if (pin.check(e.text.toString())) ok() else Toast.makeText(this, "Wrong PIN", Toast.LENGTH_SHORT).show() }
+                .setNegativeButton("Cancel", null).show()
+        }, LinearLayout.LayoutParams(0, dp(50), 1f))
+        col.addView(btns, LinearLayout.LayoutParams(-1, -2))
+        col.addView(label("Screenshots you take land in your normal gallery, outside Sanka.", 12f, SUBTLE).apply { gravity = Gravity.CENTER; setPadding(0, dp(16), 0, 0) })
+        openSheet(col, 0x99, onClose = { finger.stop() })
+        if (finger.usable) {
+            finger.start(ok = { ok() }, miss = { hint.text = "Not recognised. Try again"; hint.setTextColor(0xFFFF6B6B.toInt()) }, stopped = { m -> if (m.isNotBlank()) hint.text = m })
+        } else { hint.text = "No fingerprint here: use your PIN" }
     }
 
     /**
