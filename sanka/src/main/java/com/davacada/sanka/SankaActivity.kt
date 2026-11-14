@@ -715,7 +715,7 @@ class SankaActivity : Activity() {
 
     private fun bindFolder(view: View, f: Folder) {
         view.setOnClickListener { selected.clear(); folderId = f.id; show(Screen.FOLDER) }
-        view.setOnLongClickListener { performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); folderMenu(f); true }
+        view.setOnLongClickListener { view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); folderMenu(f); true }
     }
 
     private fun countText(f: Folder): String { val n = vault?.inFolder(f.id)?.size ?: 0; return if (n == 0) "Empty" else "$n item${if (n == 1) "" else "s"}" }
