@@ -154,7 +154,11 @@ data class Item(
     val folder: String = "", val w: Int = 0, val h: Int = 0,
     val hash: String = "",          // fingerprint of the file's contents, to spot duplicates
     val dated: Int = 0,             // how thoroughly the creation date was checked (2 = inside the file, then its name)
-    val made: Long = 0              // when the file itself was created, from inside it or its name; 0 = the file doesn't say
+    val made: Long = 0,             // when the file itself was created, from inside it or its name; 0 = the file doesn't say
+    val ph: Long = 0,               // look-alike fingerprint of the picture (see Similar)
+    val col: Int = 0,               // its average colour
+    val scene: String = "",         // what's in it: "Beach & sea", "Food & drink", …
+    val seen: Int = 0               // Similar.VERSION it was looked at with (0 = not yet)
 ) {
     val isVideo get() = mime.startsWith("video/")
     /** Width / height as shown (1 when unknown). */
@@ -162,10 +166,12 @@ data class Item(
     fun json() = JSONObject().put("id", id).put("name", name).put("mime", mime).put("size", size)
         .put("taken", taken).put("added", added).put("duration", duration).put("path", path)
         .put("folder", folder).put("w", w).put("h", h).put("hash", hash).put("dated", dated).put("made", made)
+        .put("ph", ph).put("col", col).put("scene", scene).put("seen", seen)
     companion object {
         fun from(o: JSONObject) = Item(o.getString("id"), o.optString("name"), o.optString("mime"), o.optLong("size"),
             o.optLong("taken"), o.optLong("added"), o.optLong("duration"), o.optString("path"),
-            o.optString("folder"), o.optInt("w"), o.optInt("h"), o.optString("hash"), o.optInt("dated", 0), o.optLong("made"))
+            o.optString("folder"), o.optInt("w"), o.optInt("h"), o.optString("hash"), o.optInt("dated", 0), o.optLong("made"),
+            o.optLong("ph"), o.optInt("col"), o.optString("scene"), o.optInt("seen"))
     }
 }
 
@@ -266,6 +272,34 @@ class Vault(private val ctx: Context) {
         }
         if (changed) synchronized(this) { save() }
         return if (changed) 0 else -1
+    }
+
+    /** Pictures not yet looked at for similarity. */
+    fun unseen() = synchronized(this) { items.count { it.seen < Similar.VERSION } }
+
+    /**
+     * Looks at every picture not yet seen: its look-alike fingerprint and what's in it. Works from Sanka's own
+     * thumbnails, on the phone. Saves as it goes; [progress] gets how many are left.
+     */
+    fun analyse(progress: (Int) -> Unit) {
+        val todo = synchronized(this) { items.filter { it.seen < Similar.VERSION } }
+        var n = 0
+        for (m in todo) {
+            val b = thumb(m)
+            var ph = 0L; var col = 0; var scene = ""
+            if (b != null) {
+                try {
+                    ph = Similar.dhash(b); col = Similar.avgColor(b)
+                    scene = Similar.scene(m.name, Similar.labels(b))
+                } catch (e: Exception) { } finally { b.recycle() }
+            }
+            synchronized(this) {
+                items = items.map { x -> if (x.id != m.id) x else x.copy(ph = ph, col = col, scene = scene, seen = Similar.VERSION) }.toMutableList()
+                if (++n % 25 == 0) save()
+            }
+            if (n % 10 == 0) progress(todo.size - n)
+        }
+        if (n > 0) synchronized(this) { save() }
     }
 
     /** Sets of items whose contents are identical (oldest first). Nothing is removed; you decide. */

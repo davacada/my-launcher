@@ -54,6 +54,7 @@ class SankaActivity : Activity() {
     private val io = Executors.newFixedThreadPool(3)
     private val importer = Executors.newSingleThreadExecutor() // imports one at a time, so nothing is copied twice
     private var importing = false
+    private val looker = Executors.newSingleThreadExecutor() // groups pictures by similarity, without holding up imports
     private var pickingLockBg = false
     private lateinit var pin: Pin
     private var vault: Vault? = null
@@ -428,7 +429,7 @@ class SankaActivity : Activity() {
     // ------------------------------------------------------------------ order: by date created, newest added, or by shape
 
     private val prefs get() = getSharedPreferences("sanka", MODE_PRIVATE)
-    /** "date" (when the file was created), "newest" (when it came into Sanka) or "format" (vertical / horizontal). */
+    /** "date" (when the file was created), "newest" (when it came into Sanka), "format" (vertical / horizontal) or "similar". */
     private var sortMode: String
         get() = prefs.getString("sort", "date") ?: "date"
         set(v) { prefs.edit().putString("sort", v).apply() }
@@ -457,7 +458,8 @@ class SankaActivity : Activity() {
     }
 
     private fun sortMenu() {
-        val modes = listOf("date" to "By date created (newest first)", "newest" to "Newest added to Sanka first", "format" to "By format: vertical, then horizontal")
+        val modes = listOf("date" to "By date created (newest first)", "newest" to "Newest added to Sanka first", "format" to "By format: vertical, then horizontal",
+            "similar" to "By similarity: look-alikes, then scenes")
         val labels = modes.map { (k, l) -> (if (sortMode == k) "✓  " else "     ") + l }.toTypedArray()
         dialog().setTitle("Order").setItems(labels) { _, which -> sortMode = modes[which].first; rerender() }.show()
     }
@@ -472,17 +474,73 @@ class SankaActivity : Activity() {
                 if (undated.isEmpty() || undated.size == all.size) listOf("" to all)
                 else listOf("" to all.filter { createdOf(it) > 0 }, "NO CREATION DATE IN THE FILE" to undated)
             }
+            "similar" -> similarParts(all)
             else -> listOf("" to all)
         }
         if (parts.size == 1 && parts[0].first.isEmpty()) return collageRows(all, all, 0, targetDp)
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val flat = parts.flatMap { it.second } // the viewer swipes through them in the order shown
         var offset = 0
         parts.forEach { (title, items) ->
-            if (title.isNotEmpty()) col.addView(section(title, label("${items.size}", 12.5f, 0xFFA9B2C0.toInt())))
-            col.addView(collageRows(items, all, offset, targetDp))
+            if (title.isNotEmpty()) {
+                val asFolder = sortMode == "similar" && title != "OTHER" && !title.startsWith("NOT LOOKED") && selected.isEmpty()
+                col.addView(section(if (sortMode == "similar") "$title · ${items.size}" else title,
+                    if (asFolder) smallPill(R.drawable.ic_folder_move, "Make folder") { groupToFolder(title, items) }
+                    else label("${items.size}", 12.5f, 0xFFA9B2C0.toInt()).takeIf { sortMode != "similar" }))
+            }
+            col.addView(collageRows(items, flat, offset, targetDp))
             offset += items.size
         }
         return col
+    }
+
+    // ------------------------------------------------------------------ by similarity
+
+    @Volatile private var analysing = false
+    @Volatile private var leftToLook = 0
+
+    /** Look-alike sets first, then the rest grouped by scene (biggest first), small groups under Other. */
+    private fun similarParts(all: List<Item>): List<Pair<String, List<Item>>> {
+        val out = ArrayList<Pair<String, List<Item>>>()
+        val alike = Similar.lookAlikes(all)
+        val inAlike = HashSet<String>()
+        alike.forEach { g -> out.add("LOOK ALIKE" to byCreated(g)); g.forEach { inAlike.add(it.id) } }
+        val rest = all.filter { it.id !in inAlike }
+        val notYet = rest.filter { it.seen < Similar.VERSION }
+        val scenes = rest.filter { it.seen >= Similar.VERSION }.groupBy { it.scene }
+        val big = scenes.filter { (k, v) -> k.isNotEmpty() && v.size >= 3 }.entries.sortedByDescending { it.value.size }
+        big.forEach { (k, v) -> out.add(k.uppercase() to v) }
+        val other = scenes.filter { (k, v) -> k.isEmpty() || v.size < 3 }.values.flatten()
+        if (other.isNotEmpty()) out.add("OTHER" to byCreated(other))
+        if (notYet.isNotEmpty()) {
+            out.add((if (analysing) "NOT LOOKED AT YET – WORKING ON IT" else "NOT LOOKED AT YET") to notYet)
+            lookAtPictures()
+        }
+        return out
+    }
+
+    /** Works out look-alike fingerprints and scenes for pictures not yet seen, in the background. */
+    private fun lookAtPictures() {
+        if (analysing) return
+        val v = vault ?: return
+        if (v.unseen() == 0) return
+        analysing = true
+        Toast.makeText(this, "Sanka is looking at your pictures to group them. This stays on your phone.", Toast.LENGTH_LONG).show()
+        looker.execute {
+            try { v.analyse { left -> leftToLook = left } } finally {
+                analysing = false
+                main.post { if (unlocked && sortMode == "similar" && (screen == Screen.VAULT || screen == Screen.FOLDER)) rerender() }
+            }
+        }
+    }
+
+    private fun groupToFolder(title: String, items: List<Item>) {
+        val v = vault ?: return
+        val name = title.lowercase().replaceFirstChar { it.uppercase() }.replace("look alike", "Look-alikes", ignoreCase = true)
+        val f = v.newFolder(name)
+        v.move(items.map { it.id }, f.id)
+        Toast.makeText(this, "Moved ${items.size} into “${f.name}”", Toast.LENGTH_SHORT).show()
+        rerender()
     }
 
     /** One justified block of [part]; [all] and [offset] let the viewer swipe through everything in order. */

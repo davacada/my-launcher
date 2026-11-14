@@ -87,7 +87,11 @@ Each release also has `sanka.apk`, a locked place for hidden photos and videos:
 - **Order** (lines icon at the top): *By date created*, meaning when each photo or video file was made (read from
   inside the file or from a date in its name, never the day it came into Sanka; files that carry no date at all
   are listed last under their own heading), *Newest added to Sanka first*, or *By format*: vertical, then
-  horizontal, then square, each newest first. Folders follow the same order
+  horizontal, then square, each newest first, or *By similarity*: sets of look-alike pictures (bursts, retakes,
+  edited copies) first, then the rest grouped by what's in them (beach & sea, food & drink, people, nature, pets,
+  nights out, screenshots…), each group with *Make folder*. The grouping is worked out on the phone by an image
+  recognition model built into Sanka; Sanka has no internet permission, so nothing is ever sent anywhere. Folders
+  follow the same order
 - Pictures show as a collage that keeps each one's shape: tall ones narrow, wide ones wide, every row the same height
 - When you hide new pictures you choose the folder (or none); *Add* inside a folder hides straight into it
 - **Share into Sanka:** in any app (another vault, Files, the gallery) select photos or videos, tap Share and choose
