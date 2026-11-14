@@ -135,6 +135,7 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
     private var rec: Recorder? = null
     private var recView: View? = null
     private var recFinish: (() -> Unit)? = null
+    val recording get() = recFinish != null
     private val RHYME_COLORS = intArrayOf(0xFFB05E26.toInt(), 0xFF3E5F8F.toInt(), 0xFF5A7A3A.toInt(), 0xFF8E4A7A.toInt(), 0xFFC4952A.toInt(), 0xFF2F7F7A.toInt())
 
     override fun view(): View {

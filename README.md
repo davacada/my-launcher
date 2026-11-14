@@ -138,5 +138,10 @@ Each release also has `letra.apk`, a sandstone notebook with a mode for each kin
   then play takes back, tap a line to jump there, and *Add words to the song*
 - **Script:** screenplay elements (scene, action, character, parenthetical, dialogue, transition); Enter moves to the
   element that usually comes next, and the names you've used become one-tap chips
+- **Share into Letra:** share text (or a text file) from any app and Letra works out what it is: a song (sections,
+  chord lines, [C]hordPro chords, rhyming verses), a script (scene headings, character names, transitions), a list
+  (bullets, checkboxes, a column of short items) or a note. It shows what it found and you confirm or pick another
+  type; songs keep their chords over the right words, scripts their elements, lists their ticks. Letra files open as
+  they were
 - **Share:** songs as a chord-sheet PDF, lyrics with or without chords, a recording, or a Letra file; scripts as a
   screenplay PDF, Fountain, plain text or a scene list; notes and lists as text or PDF

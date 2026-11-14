@@ -59,6 +59,71 @@ class LetraActivity : Activity() {
         }
         setContentView(root)
         home()
+        handleShare(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShare(intent)
+    }
+
+    // ---------------------------------------------------------------- shared in from other apps
+
+    /** Text (or a text file) shared from another app: Letra guesses what it is and asks to confirm. */
+    private fun handleShare(i: android.content.Intent?) {
+        if (i?.action != android.content.Intent.ACTION_SEND) return
+        i.action = null // handle once
+        var subject = i.getStringExtra(android.content.Intent.EXTRA_SUBJECT) ?: i.getStringExtra(android.content.Intent.EXTRA_TITLE)
+        var text = i.getCharSequenceExtra(android.content.Intent.EXTRA_TEXT)?.toString()
+        if (text.isNullOrBlank()) {
+            @Suppress("DEPRECATION") val uri = i.getParcelableExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)
+            if (uri != null) try {
+                contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst() && subject.isNullOrBlank()) subject = c.getString(0)?.substringBeforeLast('.')
+                }
+                text = contentResolver.openInputStream(uri)?.use { s -> String(s.readBytes().let { b -> if (b.size > 2_000_000) b.copyOf(2_000_000) else b }) }
+            } catch (e: Exception) { toast("Couldn't read what was shared") ; return }
+        }
+        val t = text?.trim()
+        if (t.isNullOrBlank()) { toast("Nothing to save: only text can be shared into Letra"); return }
+        val e = editor
+        if (e is SongEditor && e.recording) { toast("Finish the recording first"); return }
+        if (e != null) closeEditor()
+        Import.letraFile(t)?.let { n -> store.save(n); open(n); toast("Opened “${n.displayTitle()}”"); return }
+        Thread { Words.load(this); val g = Import.guess(t); main.post { importSheet(t, subject, g) } }.start()
+    }
+
+    private fun importSheet(body: String, subject: String?, g: Import.Guess) {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(text(body.lines().filter { it.isNotBlank() }.take(4).joinToString("\n"), 14f, Look.SOFT).apply {
+            typeface = Typeface.create("serif", Typeface.ITALIC); maxLines = 4; ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(14), dp(12), dp(14), dp(12)); background = pill(Look.PAPER, dpf(16f))
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
+        val order = listOf(g.mode) + listOf(Note.SONG, Note.NOTE, Note.LIST, Note.SCRIPT).filter { it != g.mode }
+        val desc = mapOf(Note.SONG to "Sections, chords and lyric lines", Note.NOTE to "Text as it is", Note.LIST to "One item per line", Note.SCRIPT to "Scenes, characters and dialogue")
+        order.forEach { m ->
+            val detected = m == g.mode
+            val c = Look.color(m)
+            col.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(10), dp(14), dp(10))
+                background = ripple(pill(if (detected) Look.PAPER else Look.TINT, dpf(18f), if (detected) dp(2) else 0, c), pill(Color.WHITE, dpf(18f)))
+                addView(ImageView(context).apply { setImageResource(Look.icon(m)); setColorFilter(Look.SAND); background = pill(c, dpf(12f)); setPadding(dp(8), dp(8), dp(8), dp(8)) },
+                    LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(12) })
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(context.text(if (detected) "Looks like a ${Look.name(m).lowercase()}" else "As a ${Look.name(m).lowercase()}", 15.5f, Look.UMBER, true))
+                    addView(context.text(if (detected && g.why.isNotEmpty()) "Found ${g.why}" else desc[m] ?: "", 12.5f, Look.SUB))
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                setOnClickListener {
+                    closeSheet()
+                    val n = Import.build(body, m, subject)
+                    store.save(n); open(n)
+                    toast("Saved as a ${Look.name(m).lowercase()}")
+                }
+            }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        }
+        showSheet("Save in Letra", ScrollView(this).apply { addView(col) })
     }
 
     override fun onPause() {
