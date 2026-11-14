@@ -1399,7 +1399,7 @@ class SankaActivity : Activity() {
         col.addView(label("Touch the sensor to confirm. Screenshots and screen recording work until you leave Sanka; then they're blocked again by themselves.", 13.5f, SUBTLE).apply {
             gravity = Gravity.CENTER; setLineSpacing(0f, 1.3f); setPadding(dp(8), dp(8), dp(8), dp(18)) })
         val rings = FrameLayout(this)
-        listOf(176 to 0x1FC9A2FF, 136 to 0x47C9A2FF, 96 to 0x8CC9A2FF).forEach { (d, c) ->
+        listOf(176 to 0x1FC9A2FF, 136 to 0x47C9A2FF, 96 to 0x8CC9A2FF.toInt()).forEach { (d, c) ->
             rings.addView(View(this).apply { background = oval(0, dp(1), c) }, FrameLayout.LayoutParams(dp(d), dp(d), Gravity.CENTER))
         }
         val fp = ImageView(this).apply { setImageResource(R.drawable.ic_fingerprint); setColorFilter(ACCENT); setPadding(dp(16), dp(16), dp(16), dp(16)); background = oval(0x29C9A2FF) }
