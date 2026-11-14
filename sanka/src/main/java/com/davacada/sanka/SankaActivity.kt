@@ -211,7 +211,7 @@ class SankaActivity : Activity() {
         if (screen == Screen.LOCK) main.postDelayed({ if (screen == Screen.LOCK && !unlocked) listenForFinger() }, 250)
     }
 
-    override fun onPause() { super.onPause(); finger.stop() }
+    override fun onPause() { super.onPause(); finger.stop(); if (!awayForSystem) blockShots() }
 
     override fun onStop() {
         super.onStop()
@@ -221,6 +221,7 @@ class SankaActivity : Activity() {
     override fun onDestroy() { releasePlayer(); io.shutdownNow(); super.onDestroy() }
 
     private fun lock() {
+        blockShots()
         unlocked = false
         releasePlayer()
         thumbs.evictAll()
@@ -601,10 +602,10 @@ class SankaActivity : Activity() {
             cell.setOnClickListener {
                 when {
                     pickingLockBg -> {
-                        prefs.edit().putString("lockBg", item.id).apply()
+                        prefs.edit().putString("homeBg", item.id).apply()
                         pickingLockBg = false
-                        Toast.makeText(this, "Lock screen background set", Toast.LENGTH_SHORT).show()
-                        rerender()
+                        Toast.makeText(this, "Folder background set", Toast.LENGTH_SHORT).show()
+                        show(Screen.VAULT)
                     }
                     pickingCover -> {
                         folderId?.let { f -> vault?.setCover(f, item.id) }
@@ -669,6 +670,7 @@ class SankaActivity : Activity() {
         col.addView(header(if (selected.isEmpty()) "Sanka" else "${selected.size} selected", sub,
             if (selected.isEmpty()) null else iconButton(R.drawable.ic_close, "Cancel selection") { selected.clear(); rerender() },
             listOf(iconButton(R.drawable.ic_sort, "Order") { sortMenu() }, iconButton(R.drawable.ic_lock, "Lock now") { lock() }, iconButton(R.drawable.ic_more, "Settings") { settingsMenu(it) })))
+        if (shotsAllowed) col.addView(shotsBanner())
 
         if (v.items.isEmpty() && folders.isEmpty()) {
             col.addView(LinearLayout(this).apply {
@@ -683,22 +685,262 @@ class SankaActivity : Activity() {
         } else {
             col.addView(section("FOLDERS", if (selected.isEmpty()) smallPill(R.drawable.ic_add, "New folder") { newFolderDialog { show(Screen.VAULT) } } else null))
             if (folders.isEmpty()) col.addView(label("No folders yet. Make one to sort what you hide.", 13.5f, 0x99FFFFFF.toInt()).apply { setPadding(dp(20), 0, dp(20), dp(6)) })
-            val tileW = (resources.displayMetrics.widthPixels - dp(16) * 2 - dp(12)) / 2
-            folders.chunked(2).forEach { pair ->
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(16), 0, dp(16), dp(16)) }
-                pair.forEachIndexed { i, f -> row.addView(folderTile(f), LinearLayout.LayoutParams(tileW, -2).apply { if (i == 1) marginStart = dp(12) }) }
-                col.addView(row)
-            }
+            col.addView(folderViews(folders))
             if (loose.isNotEmpty()) {
                 col.addView(section("NOT IN A FOLDER", label("${loose.size}", 12.5f, 0xFFA9B2C0.toInt())))
                 col.addView(collage(loose, 130))
             }
         }
+        homeBackground()?.let { frame.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
         bottomBar(frame, if (pickingLockBg) listOf(glassButton(R.drawable.ic_close, "Cancel choosing background") { pickingLockBg = false; rerender() })
             else if (selected.isEmpty()) listOf(glassButton(R.drawable.ic_add, "Hide photos & videos", filled = true) { addTarget = null; openAdd() })
             else selectionButtons(loose, false))
         return frame
+    }
+
+    // ------------------------------------------------------------------ folder layouts
+
+    private var folderLayout: String
+        get() = prefs.getString("folderLayout", "grid") ?: "grid"
+        set(v) { prefs.edit().putString("folderLayout", v).apply() }
+
+    private fun layoutMenu() {
+        val modes = listOf("grid" to "Grid: square covers, two across", "banners" to "Banners: wide strips", "mosaic" to "Mosaic: big and small tiles",
+            "collage" to "Collage: prints on a table", "stacks" to "Stacks: each folder a fanned pile", "list" to "List: compact, small cover")
+        dialog().setTitle("Folder layout").setItems(modes.map { (k, l) -> (if (folderLayout == k) "✓  " else "     ") + l }.toTypedArray()) { _, w ->
+            folderLayout = modes[w].first; show(Screen.VAULT)
+        }.show()
+    }
+
+    private fun bindFolder(view: View, f: Folder) {
+        view.setOnClickListener { selected.clear(); folderId = f.id; show(Screen.FOLDER) }
+        view.setOnLongClickListener { performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); folderMenu(f); true }
+    }
+
+    private fun countText(f: Folder): String { val n = vault?.inFolder(f.id)?.size ?: 0; return if (n == 0) "Empty" else "$n item${if (n == 1) "" else "s"}" }
+
+    /** A picture from the folder (its cover, or the [nth] newest) filling a rounded tile. */
+    private fun coverCell(f: Folder, radius: Float, nth: Int = -1): Cell {
+        val v = vault!!
+        val item = if (nth < 0) v.coverOf(f) else v.inFolder(f.id).filter { it.id != v.coverOf(f)?.id }.getOrNull(nth)
+        val cell = Cell(this, square = false, radius = radius)
+        cell.set("cover:" + (item?.id ?: f.id) + ":" + nth, 0, false, false, false)
+        if (item != null) thumbInto(cell, item.id) { v.thumb(item) }
+        else if (nth < 0) cell.addView(ImageView(this).apply { setImageResource(R.drawable.ic_folder_move); alpha = 0.3f }, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER))
+        return cell
+    }
+
+    /** Cover with the name and count over a dark fade (banners and mosaic). */
+    private fun overlayTile(f: Folder, big: Boolean, sideFade: Boolean): FrameLayout = FrameLayout(this).apply {
+        clipToOutline = true; background = pill(0x14FFFFFF, dpf(if (big) 20f else 16f))
+        addView(coverCell(f, if (big) 20f else 16f), FrameLayout.LayoutParams(-1, -1))
+        addView(View(context).apply {
+            background = if (sideFade) android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0x9E000000.toInt(), 0x26000000, 0))
+            else android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0x99000000.toInt(), 0x33000000, 0))
+        }, FrameLayout.LayoutParams(-1, -1))
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label(f.name, if (sideFade) 22f else if (big) 19f else 14f, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+            addView(label(countText(f), if (big || sideFade) 12.5f else 11f, 0xCCFFFFFF.toInt()))
+        }, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(dp(if (big || sideFade) 16 else 11), 0, dp(10), dp(if (big || sideFade) 14 else 9)) })
+        bindFolder(this, f)
+    }
+
+    private fun folderViews(folders: List<Folder>): View {
+        val W = resources.displayMetrics.widthPixels - dp(32)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), dp(8)) }
+        when (folderLayout) {
+            "banners" -> folders.forEach { f -> col.addView(overlayTile(f, true, true), LinearLayout.LayoutParams(-1, dp(118)).apply { bottomMargin = dp(12) }) }
+            "list" -> folders.forEach { f ->
+                col.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(6), dp(4), dp(6))
+                    addView(coverCell(f, 14f), LinearLayout.LayoutParams(dp(58), dp(58)).apply { marginEnd = dp(14) })
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        addView(label(f.name, 16f, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                        addView(label(countText(f), 12.5f, 0xFFA9B2C0.toInt()))
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(label("›", 22f, 0x80FFFFFF.toInt()))
+                    background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x22FFFFFF), null, pill(Color.WHITE, dpf(16f)))
+                    bindFolder(this, f)
+                })
+            }
+            "mosaic" -> {
+                val g = dp(8); val c = (W - 2 * g) / 3f
+                folders.chunked(6).forEach { grp ->
+                    val box = FrameLayout(this)
+                    val slots = if (grp.size == 1) listOf(floatArrayOf(0f, 0f, W.toFloat(), c * 1.4f, 1f)) else listOf(
+                        floatArrayOf(0f, 0f, 2 * c + g, 2 * c + g, 1f), floatArrayOf(2 * c + 2 * g, 0f, c, c, 0f), floatArrayOf(2 * c + 2 * g, c + g, c, c, 0f),
+                        floatArrayOf(0f, 2 * c + 2 * g, c, c * 1.4f, 0f), floatArrayOf(c + g, 2 * c + 2 * g, 2 * c + g, c * 1.4f, 1f),
+                        floatArrayOf(0f, 3.4f * c + 3 * g, W.toFloat(), c * 0.95f, 1f))
+                    var bottom = 0f
+                    grp.forEachIndexed { i, f ->
+                        val sl = slots[i]
+                        box.addView(overlayTile(f, sl[4] > 0f, false), FrameLayout.LayoutParams(sl[2].toInt(), sl[3].toInt()).apply { leftMargin = sl[0].toInt(); topMargin = sl[1].toInt() })
+                        bottom = maxOf(bottom, sl[1] + sl[3])
+                    }
+                    col.addView(box, LinearLayout.LayoutParams(-1, bottom.toInt()).apply { bottomMargin = g })
+                }
+            }
+            "collage" -> {
+                val cardW = W / 2 - dp(14); val photo = cardW - dp(18)
+                val cardH = photo + dp(48)
+                val box = FrameLayout(this).apply { clipChildren = false; clipToPadding = false }
+                val tilt = floatArrayOf(-7f, 5f, 4f, -6f, -3f, 7f)
+                folders.forEachIndexed { i, f ->
+                    val r = i / 2; val side = i % 2
+                    val card = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                        setPadding(dp(9), dp(9), dp(9), 0); background = pill(0xFFF4F1EA.toInt(), dpf(4f)); elevation = dpf(10f)
+                        addView(coverCell(f, 1f), LinearLayout.LayoutParams(photo, photo))
+                        addView(label(f.name, 21f, 0xFF2B2622.toInt()).apply {
+                            typeface = android.graphics.Typeface.create("casual", android.graphics.Typeface.NORMAL)
+                            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; gravity = Gravity.CENTER; setPadding(dp(4), dp(6), dp(4), 0)
+                        })
+                        addView(label(countText(f), 11.5f, 0xFF8A7F73.toInt()).apply { gravity = Gravity.CENTER })
+                        rotation = tilt[i % tilt.size]
+                        bindFolder(this, f)
+                    }
+                    box.addView(card, FrameLayout.LayoutParams(cardW, cardH).apply {
+                        leftMargin = if (side == 0) dp(4) else W / 2 + dp(8)
+                        topMargin = r * (cardH + dp(18)) + (if (side == 1) dp(22) else 0) + dp(8)
+                    })
+                }
+                val rows = (folders.size + 1) / 2
+                col.addView(box, LinearLayout.LayoutParams(-1, rows * (cardH + dp(18)) + dp(40)))
+            }
+            "stacks" -> {
+                val tileW = (W - dp(12)) / 2; val pic = tileW - dp(30)
+                folders.chunked(2).forEach { pair ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, dp(18)) }
+                    pair.forEachIndexed { i, f ->
+                        val tile = LinearLayout(this).apply {
+                            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                            val pile = FrameLayout(context).apply { clipChildren = false }
+                            listOf(Triple(1, -9f, -dp(8)), Triple(0, 7f, dp(8)), Triple(-1, 0f, 0)).forEach { (nth, rot, dx) ->
+                                val c = coverCell(f, 16f, nth).apply {
+                                    rotation = rot; translationX = dx.toFloat(); elevation = dpf(if (nth < 0) 8f else 5f)
+                                    alpha = if (nth < 0) 1f else 0.9f
+                                    if (nth < 0) foreground = pill(0, dpf(16f), dp(2), 0xE6FFFFFF.toInt())
+                                }
+                                pile.addView(c, FrameLayout.LayoutParams(pic, pic, Gravity.CENTER))
+                            }
+                            addView(pile, LinearLayout.LayoutParams(tileW, pic + dp(16)))
+                            addView(label(f.name, 15f, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(4), dp(10), dp(4), 0) })
+                            addView(label(countText(f), 12f, 0xFFA9B2C0.toInt()))
+                            bindFolder(this, f)
+                        }
+                        row.addView(tile, LinearLayout.LayoutParams(tileW, -2).apply { if (i == 1) marginStart = dp(12) })
+                    }
+                    col.addView(row)
+                }
+            }
+            else -> {
+                val tileW = (W - dp(12)) / 2
+                folders.chunked(2).forEach { pair ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(16)) }
+                    pair.forEachIndexed { i, f -> row.addView(folderTile(f), LinearLayout.LayoutParams(tileW, -2).apply { if (i == 1) marginStart = dp(12) }) }
+                    col.addView(row)
+                }
+            }
+        }
+        return col
+    }
+
+    // ------------------------------------------------------------------ background behind the folders
+
+    private fun homeBackground(): View? {
+        val id = prefs.getString("homeBg", null) ?: return null
+        val blur = floatArrayOf(0f, 14f, 28f, 48f)[prefs.getInt("homeBlur", 2).coerceIn(0, 3)]
+        val dim = floatArrayOf(0.3f, 0.5f, 0.7f)[prefs.getInt("homeDim", 1).coerceIn(0, 2)]
+        val frame = FrameLayout(this)
+        val img = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f
+            if (blur > 0f) setRenderEffect(android.graphics.RenderEffect.createBlurEffect(dpf(blur), dpf(blur), android.graphics.Shader.TileMode.CLAMP))
+        }
+        frame.addView(img, FrameLayout.LayoutParams(-1, -1))
+        fun a(x: Float) = (x.coerceIn(0f, 1f) * 255).toInt() shl 24 or 0x0B0F16
+        frame.addView(View(this).apply {
+            background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(a(dim - 0.1f), a(dim), a(dim + 0.25f)))
+        }, FrameLayout.LayoutParams(-1, -1))
+        io.execute {
+            val v = vault ?: return@execute
+            val item = v.items.firstOrNull { it.id == id }
+            val b = item?.let { if (it.isVideo) v.thumb(it) else v.photo(it, 1080) ?: v.thumb(it) }
+            main.post {
+                if (b != null) { img.setImageBitmap(b); img.animate().alpha(1f).setDuration(350).start() }
+                else prefs.edit().remove("homeBg").apply()
+            }
+        }
+        return frame
+    }
+
+    private fun backgroundMenu() {
+        val has = prefs.getString("homeBg", null) != null
+        val items = mutableListOf("Choose a picture from Sanka")
+        if (has) { items.add("Blur: " + listOf("none", "soft", "medium", "strong")[prefs.getInt("homeBlur", 2)]); items.add("Darken: " + listOf("light", "medium", "dark")[prefs.getInt("homeDim", 1)]); items.add("No background") }
+        dialog().setTitle("Folder background").setItems(items.toTypedArray()) { _, w ->
+            when (w) {
+                0 -> { pickingLockBg = true; selected.clear(); show(Screen.VAULT); Toast.makeText(this, "Tap the picture you want behind your folders (open a folder to pick from it)", Toast.LENGTH_LONG).show() }
+                1 -> dialog().setTitle("Blur").setItems(arrayOf("None", "Soft", "Medium", "Strong")) { _, b -> prefs.edit().putInt("homeBlur", b).apply(); show(Screen.VAULT) }.show()
+                2 -> dialog().setTitle("Darken").setItems(arrayOf("Light", "Medium", "Dark")) { _, d -> prefs.edit().putInt("homeDim", d).apply(); show(Screen.VAULT) }.show()
+                3 -> { prefs.edit().remove("homeBg").apply(); show(Screen.VAULT) }
+            }
+        }.show()
+    }
+
+    // ------------------------------------------------------------------ screenshots, after the fingerprint
+
+    private var shotsAllowed = false
+
+    private fun allowShots() {
+        val ok = {
+            shotsAllowed = true
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            Toast.makeText(this, "Screenshots allowed until you leave Sanka", Toast.LENGTH_SHORT).show()
+            rerender()
+        }
+        val fp = getSystemService(BiometricManager::class.java)?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+        if (!fp) {
+            val e = android.widget.EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD; setTextColor(Color.WHITE) }
+            dialog().setTitle("Enter your PIN to allow screenshots").setView(FrameLayout(this).apply { setPadding(dp(20), 0, dp(20), 0); addView(e) })
+                .setPositiveButton("Allow") { _, _ -> if (pin.check(e.text.toString())) ok() else Toast.makeText(this, "Wrong PIN", Toast.LENGTH_SHORT).show() }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
+        val exec = mainExecutor
+        try {
+            BiometricPrompt.Builder(this)
+                .setTitle("Allow screenshots?")
+                .setSubtitle("Screenshots and screen recording work until you leave Sanka. They save to your normal gallery.")
+                .setNegativeButton("Cancel", exec) { _, _ -> }
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                .build()
+                .authenticate(CancellationSignal(), exec, object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { awayForSystem = false; ok() }
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) { awayForSystem = false }
+                })
+            awayForSystem = true
+        } catch (e: Exception) { }
+    }
+
+    private fun blockShots() {
+        if (!shotsAllowed) return
+        shotsAllowed = false
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
+    private fun shotsBanner(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), dp(10), dp(10), dp(10))
+        background = pill(0x24FFB86B, dpf(16f), dp(1), 0x59FFB86B)
+        addView(label("Screenshots allowed until you leave Sanka", 13f, 0xFFFFB86B.toInt(), bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+        addView(label("Block now", 12.5f, 0xFFFFB86B.toInt(), bold = true).apply {
+            gravity = Gravity.CENTER; setPadding(dp(12), 0, dp(12), 0); background = pill(0x33FFB86B, dpf(16f))
+            setOnClickListener { blockShots(); rerender() }
+        }, LinearLayout.LayoutParams(-2, dp(32)))
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(16), 0, dp(16), dp(12)) }
     }
 
     private fun folderTile(f: Folder): View = LinearLayout(this).apply {
@@ -968,8 +1210,9 @@ class SankaActivity : Activity() {
         val fpOk = getSystemService(BiometricManager::class.java)
             ?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
         val labels = mutableListOf("Change PIN", "Line up the fingerprint point", "Find duplicates",
-            if (prefs.getBoolean("dotNumbers", true)) "Numbers beside the dots: on" else "Numbers beside the dots: off")
-        if (fpOk) labels.add(if (pin.fingerprint) "Fingerprint unlock: on" else "Fingerprint unlock: off")
+            if (prefs.getBoolean("dotNumbers", true)) "Numbers beside the dots: on" else "Numbers beside the dots: off",
+            if (pin.fingerprint) "Fingerprint unlock: on" else "Fingerprint unlock: off",
+            "Folder layout", "Folder background", if (shotsAllowed) "Block screenshots again" else "Allow screenshots")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
@@ -978,7 +1221,11 @@ class SankaActivity : Activity() {
                     2 -> { val g = vault?.duplicateGroups().orEmpty(); if (g.isEmpty()) Toast.makeText(this, "No duplicates", Toast.LENGTH_SHORT).show() else openDupes(g) }
                     3 -> { val on = !prefs.getBoolean("dotNumbers", true); prefs.edit().putBoolean("dotNumbers", on).apply()
                         Toast.makeText(this, if (on) "Numbers shown beside the dots" else "Dots only, no numbers", Toast.LENGTH_SHORT).show() }
-                    4 -> { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
+                    4 -> if (fpOk) { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
+                         else Toast.makeText(this, "No fingerprint set up on this phone", Toast.LENGTH_SHORT).show()
+                    5 -> layoutMenu()
+                    6 -> backgroundMenu()
+                    7 -> if (shotsAllowed) { blockShots(); rerender() } else allowShots()
                 }
             }.show()
     }
