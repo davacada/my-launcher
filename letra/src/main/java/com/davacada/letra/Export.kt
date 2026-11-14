@@ -138,7 +138,7 @@ object Export {
             page = doc.startPage(PdfDocument.PageInfo.Builder(w, h, n).create())
             y = top
             if (footer != null && n > 1) {
-                val p = paint(Typeface.MONOSPACE, 10f, 0xFF000000.toInt())
+                val p = Export.paint(Typeface.MONOSPACE, 10f, 0xFF000000.toInt())
                 p.textAlign = Paint.Align.RIGHT
                 page!!.canvas.drawText("$n.", w - margin, top - 24f, p)
             }

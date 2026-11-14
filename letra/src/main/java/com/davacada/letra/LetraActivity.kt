@@ -381,13 +381,13 @@ class LetraActivity : Activity() {
 
     fun sheet(title: String, rows: List<Triple<Int, String, () -> Unit>>) {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        rows.forEach { (icon, label, act) ->
+        rows.forEach { (icon, label, go) ->
             box.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), 0, dp(8), 0)
                 background = ripple(null, pill(Color.WHITE, dpf(14f)))
                 addView(ImageView(context).apply { setImageResource(icon); setColorFilter(Look.UMBER); background = pill(Look.TINT, dpf(12f)); setPadding(dp(8), dp(8), dp(8), dp(8)) }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(14) })
                 addView(context.text(label, 15.5f, Look.UMBER))
-                setOnClickListener { act() }
+                setOnClickListener { go() }
             }, LinearLayout.LayoutParams(-1, dp(54)))
         }
         showSheet(title, box)

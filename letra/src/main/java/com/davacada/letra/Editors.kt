@@ -312,14 +312,14 @@ class ListEditor(a: LetraActivity, n: Note) : Editor(a, n) {
         focus?.let { f -> rows[f]?.let { e -> a.main.post { e.requestFocus(); e.setSelection(if (at < 0) e.text.length else at.coerceAtMost(e.text.length)); a.showKeyboard(e) } } }
     }
 
-    private fun box(done: Boolean) = ImageView(a).apply {
+    private fun checkBox(done: Boolean) = ImageView(a).apply {
         background = if (done) pill(Look.OLIVE, 999f) else pill(0, 999f, a.dp(2), 0x664A3624)
         if (done) { setImageResource(R.drawable.i_checkmark); setColorFilter(Look.SAND); setPadding(a.dp(3), a.dp(3), a.dp(3), a.dp(3)) }
     }
 
     private fun row(it: Item): View {
         val r = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP; setPadding(a.dp(8), 0, 0, 0) }
-        val check = box(it.done)
+        val check = checkBox(it.done)
         val tap = FrameLayout(a).apply {
             setPadding(0, a.dp(13), a.dp(12), a.dp(8))
             addView(check, FrameLayout.LayoutParams(a.dp(22), a.dp(22)))
