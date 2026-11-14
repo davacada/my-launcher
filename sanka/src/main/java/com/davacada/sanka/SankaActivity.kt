@@ -425,26 +425,64 @@ class SankaActivity : Activity() {
     }
 
     /** Photos and videos as a collage that keeps each one's shape. */
-    // ------------------------------------------------------------------ order: by date taken (with months) or newest added
+    // ------------------------------------------------------------------ order: by date created, newest added, or by shape
 
     private val prefs get() = getSharedPreferences("sanka", MODE_PRIVATE)
-    private var byDate: Boolean
-        get() = prefs.getString("sort", "date") == "date"
-        set(v) { prefs.edit().putString("sort", if (v) "date" else "newest").apply() }
+    /** "date" (when the file was created), "newest" (when it came into Sanka) or "format" (vertical / horizontal). */
+    private var sortMode: String
+        get() = prefs.getString("sort", "date") ?: "date"
+        set(v) { prefs.edit().putString("sort", v).apply() }
+    private val byDate get() = sortMode != "newest"
 
-    private fun whenOf(it: Item) = if (it.taken > 0) it.taken else it.added
+    /**
+     * When the file itself was created: the date written inside it (or in its name). Failing that, the gallery's date,
+     * but only if it's clearly older than the import (otherwise it's just the day the file was copied). 0 = unknown.
+     */
+    private fun createdOf(it: Item): Long = when {
+        it.made > 0 -> it.made
+        it.taken > 0 && it.taken < it.added - 6 * 3_600_000L -> it.taken
+        else -> 0L
+    }
+    private fun whenOf(it: Item) = createdOf(it).takeIf { t -> t > 0 } ?: it.added
 
-    private fun ordered(list: List<Item>) = if (byDate) list.sortedByDescending { whenOf(it) } else list.sortedByDescending { it.added }
+    /** Newest created first; things whose files carry no date at all go last (newest added first among them). */
+    private fun byCreated(list: List<Item>) = list.sortedWith(compareByDescending<Item> { createdOf(it) > 0 }.thenByDescending { createdOf(it) }.thenByDescending { it.added })
 
-    private fun sortMenu() {
-        val labels = arrayOf((if (byDate) "✓  " else "     ") + "By date created (newest first)", (if (!byDate) "✓  " else "     ") + "Newest added first")
-        dialog().setTitle("Order").setItems(labels) { _, which -> byDate = which == 0; rerender() }.show()
+    private fun shape(it: Item) = when { it.aspect < 0.95f -> 0; it.aspect > 1.05f -> 1; else -> 2 }
+
+    private fun ordered(list: List<Item>) = when (sortMode) {
+        "newest" -> list.sortedByDescending { it.added }
+        "format" -> byCreated(list).sortedBy { shape(it) } // stable: keeps date order inside each shape
+        else -> byCreated(list)
     }
 
-    /** The collage, in the chosen order; by date it's split into months with a heading each. */
+    private fun sortMenu() {
+        val modes = listOf("date" to "By date created (newest first)", "newest" to "Newest added to Sanka first", "format" to "By format: vertical, then horizontal")
+        val labels = modes.map { (k, l) -> (if (sortMode == k) "✓  " else "     ") + l }.toTypedArray()
+        dialog().setTitle("Order").setItems(labels) { _, which -> sortMode = modes[which].first; rerender() }.show()
+    }
+
+    /** The collage in the chosen order. By format it's split into Vertical / Horizontal / Square; by date, files without a date come last. */
     private fun collage(list: List<Item>, targetDp: Int): View {
         val all = ordered(list)
-        return collageRows(all, all, 0, targetDp) // one continuous collage, no month headings
+        val parts: List<Pair<String, List<Item>>> = when (sortMode) {
+            "format" -> listOf("VERTICAL", "HORIZONTAL", "SQUARE").mapIndexed { i, t -> t to all.filter { shape(it) == i } }.filter { it.second.isNotEmpty() }
+            "date" -> {
+                val undated = all.filter { createdOf(it) == 0L }
+                if (undated.isEmpty() || undated.size == all.size) listOf("" to all)
+                else listOf("" to all.filter { createdOf(it) > 0 }, "NO CREATION DATE IN THE FILE" to undated)
+            }
+            else -> listOf("" to all)
+        }
+        if (parts.size == 1 && parts[0].first.isEmpty()) return collageRows(all, all, 0, targetDp)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        var offset = 0
+        parts.forEach { (title, items) ->
+            if (title.isNotEmpty()) col.addView(section(title, label("${items.size}", 12.5f, 0xFFA9B2C0.toInt())))
+            col.addView(collageRows(items, all, offset, targetDp))
+            offset += items.size
+        }
+        return col
     }
 
     /** One justified block of [part]; [all] and [offset] let the viewer swipe through everything in order. */
@@ -1173,7 +1211,8 @@ class SankaActivity : Activity() {
             }
         }
 
-        val date = SimpleDateFormat("d MMM yyyy · HH:mm", Locale.getDefault()).format(Date(if (item.taken > 0) item.taken else item.added))
+        val date = createdOf(item).let { c -> if (c > 0) SimpleDateFormat("d MMM yyyy · HH:mm", Locale.getDefault()).format(Date(c))
+            else "No date in the file · added " + SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(item.added)) }
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), insetTop + dp(6), dp(16), dp(10))

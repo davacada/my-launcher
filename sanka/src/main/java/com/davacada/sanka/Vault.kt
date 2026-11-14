@@ -153,18 +153,19 @@ data class Item(
     val taken: Long, val added: Long, val duration: Long, val path: String,
     val folder: String = "", val w: Int = 0, val h: Int = 0,
     val hash: String = "",          // fingerprint of the file's contents, to spot duplicates
-    val dated: Int = 0              // how thoroughly the creation date was checked (2 = inside the file, then its name)
+    val dated: Int = 0,             // how thoroughly the creation date was checked (2 = inside the file, then its name)
+    val made: Long = 0              // when the file itself was created, from inside it or its name; 0 = the file doesn't say
 ) {
     val isVideo get() = mime.startsWith("video/")
     /** Width / height as shown (1 when unknown). */
     val aspect: Float get() = if (w > 0 && h > 0) (w.toFloat() / h).coerceIn(0.3f, 3.5f) else 1f
     fun json() = JSONObject().put("id", id).put("name", name).put("mime", mime).put("size", size)
         .put("taken", taken).put("added", added).put("duration", duration).put("path", path)
-        .put("folder", folder).put("w", w).put("h", h).put("hash", hash).put("dated", dated)
+        .put("folder", folder).put("w", w).put("h", h).put("hash", hash).put("dated", dated).put("made", made)
     companion object {
         fun from(o: JSONObject) = Item(o.getString("id"), o.optString("name"), o.optString("mime"), o.optLong("size"),
             o.optLong("taken"), o.optLong("added"), o.optLong("duration"), o.optString("path"),
-            o.optString("folder"), o.optInt("w"), o.optInt("h"), o.optString("hash"), o.optInt("dated", 0))
+            o.optString("folder"), o.optInt("w"), o.optInt("h"), o.optString("hash"), o.optInt("dated", 0), o.optLong("made"))
     }
 }
 
@@ -178,7 +179,7 @@ data class Folder(val id: String, val name: String, val cover: String = "", val 
 
 /** What's hidden: encrypted files in the app's private storage plus an encrypted list. */
 class Vault(private val ctx: Context) {
-    private companion object { const val DATED = 3 } // 3: better video dates
+    private companion object { const val DATED = 4 } // 4: remember whether the file itself has a date
 
     private val dir = File(ctx.filesDir, "vault").apply { mkdirs() }
     private val indexFile = File(dir, "index.bin")
@@ -259,7 +260,7 @@ class Vault(private val ctx: Context) {
             val made = if (m.dated < DATED) createdAt(m).takeIf { it > 0 } ?: Dates.fromName(m.name) else 0L
             synchronized(this) {
                 items = items.map { x -> if (x.id != m.id) x else x.copy(hash = hash.ifEmpty { x.hash }, dated = DATED,
-                    taken = if (made > 0) made else x.taken) }.toMutableList()
+                    taken = if (made > 0) made else x.taken, made = if (m.dated < DATED) made else x.made) }.toMutableList()
             }
             changed = true
         }
@@ -380,7 +381,7 @@ class Vault(private val ctx: Context) {
             if (item.isVideo) videoInfo(item)?.let { (d, w, h) -> item = item.copy(duration = if (item.duration > 0) item.duration else d, w = if (item.w > 0) item.w else w, h = if (item.h > 0) item.h else h) }
             // When it was made: from inside the file, else from a date in its name (IMG_20230512…), else what the gallery said.
             val made = createdAt(item).takeIf { it > 0 } ?: Dates.fromName(item.name)
-            item = item.copy(hash = hash, dated = DATED, taken = if (made > 0) made else item.taken)
+            item = item.copy(hash = hash, dated = DATED, taken = if (made > 0) made else item.taken, made = made)
             // Gallery items have a ready thumbnail; anything else gets one made from Sanka's own copy.
             val th = (if (m.uri.authority == MediaStore.AUTHORITY) try { ctx.contentResolver.loadThumbnail(m.uri, Size(640, 640), null) } catch (e: Exception) { null } else null)
                 ?: makeThumb(item)
