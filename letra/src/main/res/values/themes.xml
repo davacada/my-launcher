@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="LetraTheme" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowBackground">@color/sand</item>
+        <item name="android:statusBarColor">@color/sand</item>
+        <item name="android:navigationBarColor">@color/sand</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorAccent">@color/terracotta</item>
+        <item name="android:textColorPrimary">@color/umber</item>
+    </style>
+    <color name="sand">#FFE8DCC6</color>
+    <color name="umber">#FF3D2F23</color>
+    <color name="terracotta">#FFB05E26</color>
+    <color name="ic_bg_top">#FFEDE2CF</color>
+    <color name="ic_bg_bottom">#FFD9C6A5</color>
+</resources>

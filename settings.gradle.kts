@@ -9,3 +9,4 @@ rootProject.name = "my-launcher"
 include(":app")
 include(":camera")
 include(":sanka")
+include(":letra")
