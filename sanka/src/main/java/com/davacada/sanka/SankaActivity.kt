@@ -208,8 +208,10 @@ class SankaActivity : Activity() {
         super.onResume()
         awayForSystem = false
         if (pin.isSet && !unlocked && screen != Screen.LOCK) show(Screen.LOCK)
-        if (screen == Screen.LOCK) main.postDelayed({ if (screen == Screen.LOCK && !unlocked) askFingerprint() }, 250)
+        if (screen == Screen.LOCK) main.postDelayed({ if (screen == Screen.LOCK && !unlocked) listenForFinger() }, 250)
     }
+
+    override fun onPause() { super.onPause(); finger.stop() }
 
     override fun onStop() {
         super.onStop()
@@ -255,11 +257,12 @@ class SankaActivity : Activity() {
     }
 
     private fun show(s: Screen) {
+        if (s != Screen.LOCK) { finger.stop(); lockView = null }
         screen = s
         val r = root ?: return
         scroll = null
         r.removeAllViews()
-        if (s == Screen.SETUP || s == Screen.LOCK) r.addView(lockBackground(), FrameLayout.LayoutParams(-1, -1))
+        if (s == Screen.SETUP) r.addView(lockBackground(), FrameLayout.LayoutParams(-1, -1))
         r.addView(when (s) {
             Screen.SETUP -> setupScreen()
             Screen.LOCK -> lockScreen()
@@ -327,25 +330,69 @@ class SankaActivity : Activity() {
         pin.fingerprint && getSystemService(BiometricManager::class.java)
             ?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
 
+    // ------------------------------------------------------------------ lock screen: the point and the ten dots
+
+    private val finger by lazy { FingerListener(this) }
+    private var lockView: CircuitLock? = null
+    private var typed = ""
+    private var checking = false
+    private val forget = Runnable { typed = "" } // a half-typed PIN is dropped after a pause
+
     private fun lockScreen(): View {
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
-        val title = brand("Enter your PIN")
-        col.addView(title, LinearLayout.LayoutParams(-2, -2).apply { topMargin = insetTop + dp(40); bottomMargin = dp(30) })
-        lateinit var pad: PinPad
-        pad = PinPad(this, fingerprintAvailable(), { askFingerprint() }) { entered ->
-            val sub = (title as LinearLayout).getChildAt(2) as TextView
-            val now = SystemClock.elapsedRealtime()
-            if (now < lockedUntil) { sub.text = "Too many tries. Wait ${(lockedUntil - now) / 1000 + 1} s"; pad.shake(); return@PinPad }
-            if (pin.check(entered)) { failures = 0; unlocked = true; openVault() }
-            else {
-                failures++
-                if (failures % 5 == 0) lockedUntil = now + 30_000L * (failures / 5)
-                sub.text = if (now < lockedUntil) "Too many tries. Wait ${(lockedUntil - now) / 1000} s" else "Wrong PIN"
-                pad.shake()
+        val frame = FrameLayout(this)
+        val lv = CircuitLock(this).apply {
+            sensorX = prefs.getFloat("sensorX", 0.5f); sensorY = prefs.getFloat("sensorY", 0.832f)
+            numbers = prefs.getBoolean("dotNumbers", true)
+            onDigit = { ch -> digit(ch) }
+            onPoint = { if (!finger.listening) askFingerprint() }
+        }
+        lockView = lv; typed = ""
+        frame.addView(lv, FrameLayout.LayoutParams(-1, -1))
+        frame.addView(ImageView(this).apply { setImageResource(R.drawable.ic_mark); contentDescription = "Sanka" },
+            FrameLayout.LayoutParams(dp(46), dp(46)).apply { leftMargin = dp(28); topMargin = insetTop + dp(44) })
+        main.post { listenForFinger() }
+        return frame
+    }
+
+    private fun digit(ch: Char) {
+        val lv = lockView ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (now < lockedUntil) { lv.wrong(); Toast.makeText(this, "Too many tries. Wait ${(lockedUntil - now) / 1000 + 1} s", Toast.LENGTH_SHORT).show(); return }
+        if (checking || typed.length >= 8) return
+        typed += ch
+        main.removeCallbacks(forget); main.postDelayed(forget, 4000)
+        val known = pin.length
+        // With a known length we check once, at that length; otherwise every length from 4 to 8.
+        if ((known > 0 && typed.length != known) || typed.length < 4) return
+        val attempt = typed
+        checking = true
+        io.execute {
+            val ok = pin.check(attempt)
+            main.post {
+                checking = false
+                if (lockView !== lv) return@post
+                if (ok) {
+                    if (pin.length == 0) pin.length = attempt.length
+                    main.removeCallbacks(forget); typed = ""; failures = 0; finger.stop()
+                    lv.light { unlocked = true; openVault() }
+                } else if (known > 0 || attempt.length >= 8) {
+                    typed = ""; failures++
+                    if (failures % 5 == 0) lockedUntil = SystemClock.elapsedRealtime() + 30_000L * (failures / 5)
+                    lv.wrong()
+                }
             }
         }
-        col.addView(pad)
-        return col
+    }
+
+    /** Listens for the finger quietly (only the phone's own small sensor icon shows); see [FingerListener]. */
+    private fun listenForFinger() {
+        if (screen != Screen.LOCK || unlocked || !pin.fingerprint || !finger.usable) return
+        if (finger.listening) return
+        val started = finger.start(
+            ok = { val lv = lockView; failures = 0; if (lv != null) lv.light { unlocked = true; openVault() } else { unlocked = true; openVault() } },
+            miss = { lockView?.pointMiss() },
+            stopped = { msg -> if (msg.isNotBlank()) Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() })
+        if (!started && prefs.getBoolean("fpAuto", true)) askFingerprint()
     }
 
     private fun askFingerprint() {
@@ -920,20 +967,44 @@ class SankaActivity : Activity() {
     private fun settingsMenu(anchor: View) {
         val fpOk = getSystemService(BiometricManager::class.java)
             ?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
-        val labels = mutableListOf("Change PIN", "Lock screen background", "Find duplicates")
+        val labels = mutableListOf("Change PIN", "Line up the fingerprint point", "Find duplicates",
+            if (prefs.getBoolean("dotNumbers", true)) "Numbers beside the dots: on" else "Numbers beside the dots: off")
         if (fpOk) labels.add(if (pin.fingerprint) "Fingerprint unlock: on" else "Fingerprint unlock: off")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> { unlocked = true; show(Screen.SETUP) }
-                    1 -> dialog().setTitle("Lock screen background").setItems(arrayOf("Aurora (moving glow)", "One of my pictures, blurred")) { _, w ->
-                        if (w == 0) { prefs.edit().remove("lockBg").apply(); Toast.makeText(this, "Aurora it is", Toast.LENGTH_SHORT).show() }
-                        else { pickingLockBg = true; selected.clear(); rerender(); Toast.makeText(this, "Tap the picture you want behind the lock screen", Toast.LENGTH_LONG).show() }
-                    }.show()
+                    1 -> lineUpSensor()
                     2 -> { val g = vault?.duplicateGroups().orEmpty(); if (g.isEmpty()) Toast.makeText(this, "No duplicates", Toast.LENGTH_SHORT).show() else openDupes(g) }
-                    3 -> { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
+                    3 -> { val on = !prefs.getBoolean("dotNumbers", true); prefs.edit().putBoolean("dotNumbers", on).apply()
+                        Toast.makeText(this, if (on) "Numbers shown beside the dots" else "Dots only, no numbers", Toast.LENGTH_SHORT).show() }
+                    4 -> { pin.fingerprint = !pin.fingerprint; Toast.makeText(this, if (pin.fingerprint) "Fingerprint on" else "Fingerprint off", Toast.LENGTH_SHORT).show() }
                 }
             }.show()
+    }
+
+    /**
+     * Shows the lock screen's point so you can drag it onto the fingerprint sensor. Sanka listens for the finger
+     * meanwhile, so the phone shows its own sensor icon to line up with.
+     */
+    private fun lineUpSensor() {
+        val r = root ?: return
+        val frame = FrameLayout(this)
+        val lv = CircuitLock(this).apply {
+            sensorX = prefs.getFloat("sensorX", 0.5f); sensorY = prefs.getFloat("sensorY", 0.832f)
+            numbers = prefs.getBoolean("dotNumbers", true); adjusting = true
+            onMoved = { x, y -> prefs.edit().putFloat("sensorX", x).putFloat("sensorY", y).apply() }
+        }
+        frame.addView(lv, FrameLayout.LayoutParams(-1, -1))
+        frame.addView(label("Drag the point onto your phone's fingerprint sensor.\nIts sensor icon shows when you touch it lightly.", 14f, 0xCCFFFFFF.toInt()).apply { setPadding(dp(28), insetTop + dp(48), dp(28), 0) },
+            FrameLayout.LayoutParams(-1, -2))
+        frame.addView(label("Done", 16f, BG, bold = true).apply {
+            gravity = Gravity.CENTER; background = pill(Color.WHITE, dpf(26f))
+            setOnClickListener { finger.stop(); r.removeView(frame) }
+        }, FrameLayout.LayoutParams(dp(120), dp(52), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = insetTop + dp(120) })
+        frame.isClickable = true
+        r.addView(frame, FrameLayout.LayoutParams(-1, -1))
+        if (finger.usable) finger.start(ok = {}, miss = {}, stopped = {})
     }
 
     private fun thumbInto(cell: Cell, key: String, load: () -> Bitmap?) {

@@ -75,6 +75,12 @@ Each release also has `pro-camera.apk`, a manual camera with Blackmagic-style co
 
 Each release also has `sanka.apk`, a locked place for hidden photos and videos:
 
+- **Lock screen:** matt black with grain and only the Sanka mark. Ten dots on the right at thumb height stand for
+  1, 2, 3 … 9, 0 from top to bottom; tap your PIN on them (no keypad, no count shown; it opens as soon as the PIN is
+  right). The point near the bottom sits over the fingerprint sensor: rest your finger there and the circuit lights
+  up from the point to every dot. Sanka listens for the finger without a pop-up; only the phone's own sensor icon
+  shows. *Settings → Line up the fingerprint point* lets you drag the point exactly onto your sensor, and the numbers
+  beside the dots can be switched off
 - Locks with a PIN (4–8 digits) or fingerprint, and locks again as soon as you leave it.
   Screenshots and the recent-apps preview are blocked
 - **Hide photos & videos:** choose them from your gallery; they're copied in, encrypted (AES-256, key kept in the

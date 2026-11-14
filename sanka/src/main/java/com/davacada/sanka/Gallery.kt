@@ -143,8 +143,13 @@ class Pin(ctx: Context) {
 
     fun set(pin: String) {
         val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-        prefs.edit().putString("pinSalt", b64(salt)).putString("pinHash", b64(hash(pin, salt))).apply()
+        prefs.edit().putString("pinSalt", b64(salt)).putString("pinHash", b64(hash(pin, salt))).putInt("pinLen", pin.length).apply()
     }
+
+    /** How many digits the PIN has (0 = not known yet, for PINs set before this was remembered). */
+    var length: Int
+        get() = prefs.getInt("pinLen", 0)
+        set(v) { prefs.edit().putInt("pinLen", v).apply() }
 
     fun check(pin: String): Boolean {
         val salt = prefs.getString("pinSalt", null)?.let { unb64(it) } ?: return false
