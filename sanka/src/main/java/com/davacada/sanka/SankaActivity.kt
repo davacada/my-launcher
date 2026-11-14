@@ -54,7 +54,7 @@ class SankaActivity : Activity() {
     private val io = Executors.newFixedThreadPool(3)
     private val importer = Executors.newSingleThreadExecutor() // imports one at a time, so nothing is copied twice
     private var importing = false
-    private val looker = Executors.newSingleThreadExecutor() // groups pictures by similarity, without holding up imports
+    private val looker = Executors.newSingleThreadExecutor { r -> Thread(r, "sanka-similar").apply { priority = Thread.MIN_PRIORITY } } // groups pictures by similarity, without holding up imports
     private var pickingLockBg = false
     private lateinit var pin: Pin
     private var vault: Vault? = null
@@ -66,7 +66,15 @@ class SankaActivity : Activity() {
     private var insetTop = 0
     private var insetBottom = 0
 
-    private val thumbs = LruCache<String, Bitmap>(240)
+    /** Small pictures in memory, by size (a quarter of what the app may use), cleared when Sanka locks. */
+    private val thumbs = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 4 / 1024).toInt()) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
+    }
+    /** Folder covers stay in memory across locks (only while Sanka runs), so the folders appear at once after unlocking. */
+    private val covers = LruCache<String, Bitmap>(64)
+    private val thumbIo = Executors.newFixedThreadPool(4) { r -> Thread(r, "sanka-thumbs").apply { priority = Thread.NORM_PRIORITY + 1 } }
+    private val coverIo = Executors.newFixedThreadPool(2) { r -> Thread(r, "sanka-covers").apply { priority = Thread.MAX_PRIORITY - 1 } }
+    private val waiting = HashMap<String, MutableList<Cell>>() // pictures being read, and the tiles waiting for them (main thread only)
     private var root: FrameLayout? = null
 
     // vault grid
@@ -218,7 +226,7 @@ class SankaActivity : Activity() {
         if (!awayForSystem && pin.isSet) lock()
     }
 
-    override fun onDestroy() { releasePlayer(); io.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { releasePlayer(); io.shutdownNow(); thumbIo.shutdownNow(); coverIo.shutdownNow(); looker.shutdownNow(); super.onDestroy() }
 
     private fun lock() {
         closeSheet()
@@ -766,7 +774,7 @@ class SankaActivity : Activity() {
         val item = if (nth < 0) v.coverOf(f) else v.inFolder(f.id).filter { it.id != v.coverOf(f)?.id }.getOrNull(nth)
         val cell = Cell(this, square = false, radius = radius)
         cell.set(item?.id ?: "empty:" + f.id, 0, false, false, false) // the key must match thumbInto's, or the picture never lands
-        if (item != null) thumbInto(cell, item.id) { v.thumb(item) }
+        if (item != null) thumbInto(cell, item.id, cover = true) { v.thumb(item) }
         else if (nth < 0) cell.addView(ImageView(this).apply { setImageResource(R.drawable.ic_folder_move); alpha = 0.3f }, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER))
         return cell
     }
@@ -998,7 +1006,7 @@ class SankaActivity : Activity() {
         val cover = v.coverOf(f)
         val cell = Cell(context, square = true, radius = 20f)
         cell.set(cover?.id ?: "empty:" + f.id, 0, false, false, false)
-        if (cover != null) thumbInto(cell, cover.id) { v.thumb(cover) }
+        if (cover != null) thumbInto(cell, cover.id, cover = true) { v.thumb(cover) }
         else cell.addView(ImageView(context).apply { setImageResource(R.drawable.ic_folder_move); alpha = 0.3f },
             FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER))
         addView(cell)
@@ -1239,7 +1247,7 @@ class SankaActivity : Activity() {
         val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         btns.addView(glassButton(null, "Cancel") { closeSheet() }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { marginEnd = dp(10) })
         btns.addView(glassButton(R.drawable.ic_trash, "Delete", 0xFFFF6B6B.toInt()) {
-            closeSheet(); thumbs.evictAll(); vault?.deleteFolder(f.id); folderId = null; selected.clear(); show(Screen.VAULT)
+            closeSheet(); thumbs.evictAll(); covers.evictAll(); vault?.deleteFolder(f.id); folderId = null; selected.clear(); show(Screen.VAULT)
         }, LinearLayout.LayoutParams(0, dp(50), 1f))
         col.addView(btns, LinearLayout.LayoutParams(-1, -2))
         openSheet(col, 0x99)
@@ -1498,13 +1506,23 @@ class SankaActivity : Activity() {
         if (finger.usable) finger.start(ok = {}, miss = {}, stopped = {})
     }
 
-    private fun thumbInto(cell: Cell, key: String, load: () -> Bitmap?) {
-        val cached = thumbs.get(key)
-        if (cached != null) { cell.image.setImageBitmap(cached); return }
-        io.execute {
-            val b = try { load() } catch (e: Exception) { null } ?: return@execute
-            thumbs.put(key, b)
-            main.post { if (cell.boundKey == key) cell.image.setImageBitmap(b) }
+    /**
+     * Puts a picture into [cell]: from memory if it's there, otherwise read in the background. A picture already
+     * being read isn't read twice; every tile waiting for it gets it. Folder covers ([cover]) jump the queue.
+     */
+    private fun thumbInto(cell: Cell, key: String, cover: Boolean = false, load: () -> Bitmap?) {
+        val cached = thumbs.get(key) ?: covers.get(key)
+        if (cached != null) { cell.image.setImageBitmap(cached); if (cover) covers.put(key, cached); return }
+        val list = waiting[key]
+        if (list != null) { list.add(cell); return }
+        waiting[key] = mutableListOf(cell)
+        (if (cover) coverIo else thumbIo).execute {
+            val b = try { load() } catch (e: Exception) { null }
+            if (b != null) { thumbs.put(key, b); if (cover) covers.put(key, b) }
+            main.post {
+                val cells = waiting.remove(key) ?: return@post
+                if (b != null) cells.forEach { c -> if (c.boundKey == key) c.image.setImageBitmap(b) }
+            }
         }
     }
 
