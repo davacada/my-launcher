@@ -24,7 +24,7 @@ import kotlin.math.sqrt
  * The microphone is opened once; the speech recogniser is fed a copy of the same sound
  * (Android 13+), so recording and transcribing never fight over the mic.
  */
-class Recorder(private val ctx: Context, private val out: File, private var language: String) {
+class Recorder(private val ctx: Context, private val out: File, private var language: String, transcribe: Boolean = true) {
     interface Listener {
         fun level(rms: Float)
         fun partial(text: String)
@@ -48,7 +48,7 @@ class Recorder(private val ctx: Context, private val out: File, private var lang
     private var sessionStart = 0L
     private var lastPartial = ""
     private val canFeed = Build.VERSION.SDK_INT >= 33
-    private var speechOn = true
+    private var speechOn = transcribe
 
     companion object { const val RATE = 48000 }
 
@@ -197,8 +197,9 @@ class Recorder(private val ctx: Context, private val out: File, private var lang
                 listener?.transcribing(false, "This language isn't downloaded for offline speech"); speechOn = false; return
             }
             if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) { listener?.transcribing(false, "Speech needs the microphone permission"); speechOn = false; return }
-            if (++errors > 6) { listener?.transcribing(false, "Speech stopped; the recording goes on"); speechOn = false; return }
-            main.postDelayed({ startSpeech() }, if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 600L else 150L)
+            // keep trying for as long as the recording runs: only Stop ends it
+            errors++
+            main.postDelayed({ startSpeech() }, if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 600L else minOf(150L * errors, 2000L))
         }
         override fun onEvent(eventType: Int, params: Bundle?) {}
     }

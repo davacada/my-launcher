@@ -3,6 +3,10 @@
 
     <!-- Recording song ideas (and writing the words out). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Keep recording when the screen locks or you switch apps, with a "Recording" notification. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
         <intent>
@@ -28,6 +32,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".RecService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- Files you share from Letra (PDFs, recordings); only the app you share with can read them. -->
         <provider

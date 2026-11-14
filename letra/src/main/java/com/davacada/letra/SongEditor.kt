@@ -340,7 +340,7 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
             a.tool(R.drawable.i_chord, "Chords", Look.TERRACOTTA, chordMode) { chordMode = !chordMode; edits.values.forEach { (it as? LyricEdit)?.chordMode = chordMode }; if (chordMode) { a.hideKeyboard(); a.toast("Tap a word to put a chord over it") }; renderTools() },
             a.tool(R.drawable.i_rhyme, "Rhymes", Look.TERRACOTTA, rhymesOn) { rhymesOn = !rhymesOn; rhymeStrip.visibility = if (rhymesOn) View.VISIBLE else View.GONE; if (rhymesOn) updateRhymes(); renderTools() },
             a.tool(R.drawable.i_metro, if (Click.running) "${n.bpm.takeIf { it > 0 } ?: 90} bpm" else "Click", Look.TERRACOTTA, Click.running) { toggleClick() },
-            a.tool(R.drawable.i_mic, "Record", Look.RED) { a.withMic { startRecording() } },
+            a.tool(R.drawable.i_mic, "Record", Look.RED) { recordChoice() },
         ))
     }
 
@@ -603,7 +603,34 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
 
     // ---------------------------------------------------------------- recording
 
-    private fun startRecording() {
+    /** Two ways to record: writing the words out as you sing, or singing over the lyrics you already have. */
+    private fun recordChoice() {
+        commit()
+        val hasLyrics = n.lines.any { !it.section && it.text.isNotBlank() }
+        a.sheet("Record", listOf(
+            act(R.drawable.i_text, "Record and transcribe · the words are written out as you sing") { a.closeSheet(); a.withMic { startRecording(false) } },
+            act(R.drawable.i_song, if (hasLyrics) "Record to the lyrics · see your lyrics while you record" else "Record to the lyrics · (write some lyrics first)") {
+                a.closeSheet()
+                if (hasLyrics) a.withMic { startRecording(true) } else a.toast("This song has no lyrics yet")
+            },
+        ))
+    }
+
+    /** The song as you see it while recording to it: sections, chords over the words, big and easy to read. */
+    private fun lyricsSheet(): View {
+        val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(18), a.dp(14), a.dp(14), a.dp(40)) }
+        n.lines.forEach { l ->
+            if (l.section) box.addView(a.text(l.text.uppercase(), 12f, Look.TERRACOTTA, true).apply { letterSpacing = 0.12f; setPadding(a.dp(2), a.dp(18), 0, a.dp(4)) })
+            else if (l.text.isNotBlank() || l.chords.isNotEmpty()) box.addView(LyricEdit(a, l).apply {
+                setQuiet(l.text); textSize = 21f; typeface = Typeface.create("serif", Typeface.NORMAL)
+                keyListener = null; isFocusable = false; isCursorVisible = false; isLongClickable = false
+                setPadding(a.dp(2), paddingTop, a.dp(2), paddingBottom); layoutChords()
+            })
+        }
+        return ScrollView(a).apply { background = pill(Look.CARD, a.dpf(20f)); addView(box); isVerticalScrollBarEnabled = false }
+    }
+
+    private fun startRecording(withLyrics: Boolean) {
         commit(); a.store.save(n)
         stopPlaying()
         if (Click.running) Click.stop()
@@ -612,7 +639,7 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
         val file = File(a.store.recDir, name)
         val prefs = a.getSharedPreferences("letra", Context.MODE_PRIVATE)
         var lang = prefs.getString("lang", if (Locale.getDefault().language == "es") "es-ES" else "en-US")!!
-        val r = Recorder(a, file, lang)
+        val r = Recorder(a, file, lang, transcribe = !withLyrics)
         val heard = ArrayList<Heard>(); val flags = ArrayList<Long>()
 
         val v = FrameLayout(a).apply { setBackgroundColor(Look.SAND); foreground = Look.grain(a); isClickable = true }
@@ -637,13 +664,13 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
         val wave = Wave(a)
         col.addView(wave, LinearLayout.LayoutParams(-1, a.dp(64)))
 
-        col.addView(a.text("WORDS AS YOU SING", 11f, Look.SUB, true).apply { letterSpacing = 0.12f; setPadding(0, a.dp(20), 0, a.dp(8)) })
+        col.addView(a.text(if (withLyrics) "YOUR LYRICS" else "WORDS AS YOU SING", 11f, Look.SUB, true).apply { letterSpacing = 0.12f; setPadding(0, a.dp(20), 0, a.dp(8)) })
         val words = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(16), a.dp(12), a.dp(16), a.dp(12)) }
         val partial = a.text("", 17f, Look.SUB).apply { typeface = Typeface.create("serif", Typeface.ITALIC) }
         val note = a.text("Listening…", 13f, Look.FAINT)
         words.addView(note); words.addView(partial)
         val wordsScroll = ScrollView(a).apply { background = pill(Look.CARD, a.dpf(20f)); addView(words); isVerticalScrollBarEnabled = false }
-        col.addView(wordsScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(if (withLyrics) lyricsSheet() else wordsScroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
         val btns = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, a.dp(18), 0, 0) }
         val flagB = a.bigButton("Flag", R.drawable.i_flag, Look.RED, false) {
@@ -657,7 +684,7 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
             ((pauseB.getChildAt(0)) as ImageView).setImageResource(if (r.isPaused) R.drawable.i_play else R.drawable.i_pausefill)
             state.text = if (r.isPaused) "Paused" else "Recording"
         }
-        val stopB = a.bigButton("Save", R.drawable.i_stopfill, Look.RED, true) { finishRecording(r, file, name, heard, flags) }
+        val stopB = a.bigButton("Stop", R.drawable.i_stopfill, Look.RED, true) { finishRecording(r, file, name, heard, flags) }
         btns.addView(flagB, LinearLayout.LayoutParams(0, a.dp(56), 1f).apply { marginEnd = a.dp(8) })
         btns.addView(pauseB, LinearLayout.LayoutParams(0, a.dp(56), 1.2f).apply { marginEnd = a.dp(8) })
         btns.addView(stopB, LinearLayout.LayoutParams(0, a.dp(56), 1.1f))
@@ -671,7 +698,8 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
                 r.setLanguage(lang); langUi()
             })
         }
-        langUi()
+        if (!withLyrics) langUi()
+        else { timer.textSize = 40f; wave.layoutParams = LinearLayout.LayoutParams(-1, a.dp(40)) }
 
         r.listener = object : Recorder.Listener {
             override fun level(rms: Float) { wave.push(rms); timer.text = fmtTime(r.elapsedMs); dotV.alpha = if (r.isPaused) 0.3f else if ((r.elapsedMs / 500) % 2 == 0L) 1f else 0.35f }
@@ -694,6 +722,7 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
         if (!r.start()) { a.toast("Couldn't open the microphone"); file.delete(); return }
         rec = r; recView = v
         recFinish = { finishRecording(r, file, name, heard, flags) }
+        RecService.start(a, n.displayTitle()) // keeps the microphone going if the screen locks or you switch apps
         a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         a.root.addView(v, FrameLayout.LayoutParams(-1, -1))
         v.requestApplyInsets()
@@ -702,6 +731,7 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
     private fun finishRecording(r: Recorder, file: File, name: String, heard: List<Heard>, flags: List<Long>) {
         r.listener = null
         val ms = r.stop()
+        RecService.stop(a)
         rec = null; recFinish = null
         recView?.let { a.root.removeView(it) }; recView = null
         a.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -713,15 +743,16 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
         a.main.postDelayed({ box.findViewWithTag<View>("takes")?.let { scroll.smoothScrollTo(0, it.top) } }, 200)
     }
 
-    /** Back while recording saves the take, the same as pressing Save. */
+    /** While recording, Back does nothing: only Stop ends the take. */
     override fun back(): Boolean {
-        val f = recFinish ?: return false
-        f(); return true
+        if (recFinish == null) return false
+        a.toast("Recording · press Stop to finish")
+        return true
     }
 
     override fun commit() { edits.forEach { (l, e) -> if (!e.text.contains('\n')) l.text = e.text.toString() } }
     override fun focusFirst() { val f = n.lines.firstOrNull { !it.section } ?: return; edits[f]?.let { a.showKeyboard(it) } }
-    override fun release() { super.release(); stopPlaying(); Click.stop(); rec?.stop(); rec = null; recView?.let { a.root.removeView(it) } }
+    override fun release() { super.release(); stopPlaying(); Click.stop(); recFinish?.invoke() } // a take in progress is kept
 }
 
 /** The rolling level meter on the recording screen. */

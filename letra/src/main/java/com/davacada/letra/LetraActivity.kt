@@ -429,14 +429,15 @@ class LetraActivity : Activity() {
     fun hideKeyboard() { currentFocus?.let { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken, 0) } }
 
     fun withMic(then: () -> Unit) {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) then()
-        else { micThen = then; requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 7) }
+        val need = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (need.isEmpty()) then()
+        else { micThen = then; requestPermissions(need.toTypedArray(), 7) }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 7) {
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) micThen?.invoke()
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) micThen?.invoke()
             else toast("Letra needs the microphone to record")
             micThen = null
         }

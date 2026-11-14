@@ -131,9 +131,11 @@ Each release also has `letra.apk`, a sandstone notebook with a mode for each kin
 - **Song:** sections (verse, chorus, bridge… or repeat one), chords placed over the exact syllable (tap *Chords*,
   then a word), key / transpose / capo / tempo with a click, syllable counts per line, coloured dots for lines that
   rhyme, and rhyme suggestions in English and Spanish that work offline
-- **Recording in Song mode:** *Record* captures a take and writes out the words as you sing (Android 13+, using the
-  phone's speech recognition; choose English or Español). Flag moments, then play takes back, tap a line to jump
-  there, and *Add words to the song*
+- **Recording in Song mode:** *Record* offers two ways: *Record and transcribe* writes out the words as you sing
+  (Android 13+, using the phone's speech recognition; English or Español), and *Record to the lyrics* shows your
+  lyrics with their chords, big, while you record over them. A take only ends when you press Stop: Back doesn't stop
+  it, and it keeps recording if the screen locks or you switch apps (a "Recording" notification shows). Flag moments,
+  then play takes back, tap a line to jump there, and *Add words to the song*
 - **Script:** screenplay elements (scene, action, character, parenthetical, dialogue, transition); Enter moves to the
   element that usually comes next, and the names you've used become one-tap chips
 - **Share:** songs as a chord-sheet PDF, lyrics with or without chords, a recording, or a Letra file; scripts as a
