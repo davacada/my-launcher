@@ -509,11 +509,42 @@ class SankaActivity : Activity() {
         else -> byCreated(list)
     }
 
+    /** The Order sheet: four ways to order pictures, the one in use highlighted. */
     private fun sortMenu() {
-        val modes = listOf("date" to "By date created (newest first)", "newest" to "Newest added to Sanka first", "format" to "By format: vertical, then horizontal",
-            "similar" to "By similarity: look-alikes, then scenes")
-        val labels = modes.map { (k, l) -> (if (sortMode == k) "✓  " else "     ") + l }.toTypedArray()
-        dialog().setTitle("Order").setItems(labels) { _, which -> sortMode = modes[which].first; rerender() }.show()
+        val modes = listOf(
+            Triple("date", R.drawable.ic_s_calendar, "By date created" to "When each file was made, newest first"),
+            Triple("newest", R.drawable.ic_s_clock, "Newest added" to "What came into Sanka last, first"),
+            Triple("format", R.drawable.ic_s_format, "By format" to "Vertical, then horizontal, then square"),
+            Triple("similar", R.drawable.ic_s_similar, "By similarity" to "Look-alikes first, then scenes"))
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(label("Order", 20f, bold = true).apply { setPadding(dp(4), 0, 0, dp(2)) })
+        col.addView(label(if (screen == Screen.FOLDER) "How pictures in this folder are laid out (folders use it too)" else "How folders and pictures are ordered", 13f, SUBTLE).apply { setPadding(dp(4), 0, 0, dp(12)) })
+        modes.forEach { (k, icon, names) ->
+            val on = sortMode == k
+            col.addView(sheetRow(icon, names.first, names.second, on, if (on) ImageView(this).apply { setImageResource(R.drawable.ic_check); setColorFilter(ACCENT); layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)) } else null) {
+                sortMode = k; closeSheet(); rerender()
+            }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        }
+        openSheet(col, 0x40)
+    }
+
+    /** A row inside a sheet: icon box, title, a line under it, and an optional mark on the right. */
+    private fun sheetRow(icon: Int, title: String, sub: String, on: Boolean, right: View?, color: Int = Color.WHITE, onClick: () -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(12), dp(10), dp(14), dp(10))
+        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x1FFFFFFF),
+            pill(if (on) 0x24C9A2FF else 0x0DFFFFFF, dpf(18f), dp(if (on) 2 else 1), if (on) ACCENT else 0x14FFFFFF), pill(Color.WHITE, dpf(18f)))
+        addView(ImageView(context).apply {
+            setImageResource(icon); setColorFilter(if (on) BG else color); setPadding(dp(9), dp(9), dp(9), dp(9))
+            background = pill(if (on) ACCENT else 0x14FFFFFF, dpf(12f))
+        }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(14) })
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label(title, 15f, color, bold = true))
+            if (sub.isNotEmpty()) addView(label(sub, 12.5f, SUBTLE))
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        if (right != null) addView(right)
+        setOnClickListener { onClick() }
     }
 
     /** The collage in the chosen order. By format it's split into Vertical / Horizontal / Square; by date, files without a date come last. */
@@ -1009,9 +1040,6 @@ class SankaActivity : Activity() {
             addView(iconButton(if (selected.isEmpty()) R.drawable.ic_back else R.drawable.ic_close, if (selected.isEmpty()) "Back to folders" else "Cancel selection") {
                 if (selected.isNotEmpty() || pickingCover) { selected.clear(); pickingCover = false; rerender() } else { folderId = null; show(Screen.VAULT) }
             }, LinearLayout.LayoutParams(dp(44), dp(44)))
-            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(iconButton(R.drawable.ic_sort, "Order") { sortMenu() }, LinearLayout.LayoutParams(dp(44), dp(44)))
-            addView(iconButton(R.drawable.ic_more, "Folder options") { folderMenu(f) }, LinearLayout.LayoutParams(dp(44), dp(44)))
         }
         hero.addView(topRow, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         hero.addView(LinearLayout(this).apply {
@@ -1033,10 +1061,10 @@ class SankaActivity : Activity() {
             selected.isNotEmpty() -> selectionButtons(items, true)
             pickingCover -> listOf(glassButton(R.drawable.ic_close, "Cancel") { pickingCover = false; rerender() })
             else -> listOfNotNull(
+                compactButton(R.drawable.ic_sort, "Order") { sortMenu() },
+                if (items.isNotEmpty()) compactButton(R.drawable.ic_image, "Cover") { pickingCover = true; selected.clear(); rerender() } else null,
                 glassButton(R.drawable.ic_add, "Add", filled = true) { addTarget = f.id; openAdd() },
-                if (items.isNotEmpty()) glassButton(R.drawable.ic_image, "Change cover") {
-                    pickingCover = true; selected.clear(); rerender()
-                } else null)
+                compactButton(R.drawable.ic_more, "Options") { folderMenu(f) })
         })
         return frame
     }
@@ -1187,18 +1215,35 @@ class SankaActivity : Activity() {
     private fun newFolderDialog(then: (Folder) -> Unit) =
         nameDialog("New folder", "", "Create") { name -> vault?.newFolder(name)?.let(then) }
 
+    /** Folder options as a sheet: rename, cover, delete. */
     private fun folderMenu(f: Folder) {
-        dialog().setTitle(f.name).setItems(arrayOf("Rename", "Change cover", "Delete folder")) { _, which ->
-            when (which) {
-                0 -> nameDialog("Rename folder", f.name, "Save") { n -> vault?.renameFolder(f.id, n); rerender() }
-                1 -> { folderId = f.id; selected.clear(); pickingCover = vault?.inFolder(f.id)?.isNotEmpty() == true; show(Screen.FOLDER) }
-                2 -> dialog().setTitle("Delete \"${f.name}\"?")
-                    .setMessage(vault?.inFolder(f.id)?.size.let { n -> if (n == null || n == 0) "The folder is empty." else "The folder and the $n item${if (n == 1) "" else "s"} in it will be deleted for good. They can't be recovered; unhide anything you want to keep first." })
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete folder") { _, _ -> thumbs.evictAll(); vault?.deleteFolder(f.id); folderId = null; selected.clear(); show(Screen.VAULT) }
-                    .show()
-            }
-        }.show()
+        val n = vault?.inFolder(f.id)?.size ?: 0
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(label(f.name, 20f, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(4), 0, 0, dp(2)) })
+        col.addView(label(if (n == 0) "Empty" else "$n item${if (n == 1) "" else "s"}", 13f, SUBTLE).apply { setPadding(dp(4), 0, 0, dp(12)) })
+        fun add(v: View) = col.addView(v, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        add(sheetRow(R.drawable.ic_s_edit, "Rename", "", false, null) { closeSheet(); nameDialog("Rename folder", f.name, "Save") { nm -> vault?.renameFolder(f.id, nm); rerender() } })
+        if (n > 0) add(sheetRow(R.drawable.ic_image, "Change cover", "Tap the picture you want on the front", false, null) {
+            closeSheet(); folderId = f.id; selected.clear(); pickingCover = true; show(Screen.FOLDER) })
+        add(sheetRow(R.drawable.ic_add, "Hide photos & videos here", "Straight into this folder", false, null) { closeSheet(); addTarget = f.id; openAdd() })
+        add(sheetRow(R.drawable.ic_trash, "Delete folder", if (n == 0) "It's empty" else "And the $n item${if (n == 1) "" else "s"} in it, for good", false, null, 0xFFFF6B6B.toInt()) { confirmDeleteFolder(f, n) })
+        openSheet(col, 0x66)
+    }
+
+    private fun confirmDeleteFolder(f: Folder, n: Int) {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+        col.addView(ImageView(this).apply { setImageResource(R.drawable.ic_trash); setColorFilter(0xFFFF6B6B.toInt()); setPadding(dp(16), dp(16), dp(16), dp(16)); background = oval(0x26FF6B6B) },
+            LinearLayout.LayoutParams(dp(64), dp(64)))
+        col.addView(label("Delete “${f.name}”?", 20f, bold = true).apply { gravity = Gravity.CENTER; setPadding(0, dp(14), 0, dp(6)) })
+        col.addView(label(if (n == 0) "The folder is empty." else "The folder and the $n item${if (n == 1) "" else "s"} in it will be deleted for good. They can't be recovered; unhide anything you want to keep first.",
+            13.5f, SUBTLE).apply { gravity = Gravity.CENTER; setLineSpacing(0f, 1.3f); setPadding(dp(8), 0, dp(8), dp(20)) })
+        val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        btns.addView(glassButton(null, "Cancel") { closeSheet() }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { marginEnd = dp(10) })
+        btns.addView(glassButton(R.drawable.ic_trash, "Delete", 0xFFFF6B6B.toInt()) {
+            closeSheet(); thumbs.evictAll(); vault?.deleteFolder(f.id); folderId = null; selected.clear(); show(Screen.VAULT)
+        }, LinearLayout.LayoutParams(0, dp(50), 1f))
+        col.addView(btns, LinearLayout.LayoutParams(-1, -2))
+        openSheet(col, 0x99)
     }
 
     /** Asks which folder (or none, or a new one), then calls [done] with its id ("" = not in a folder). */
