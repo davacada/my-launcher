@@ -765,7 +765,7 @@ class SankaActivity : Activity() {
         val v = vault!!
         val item = if (nth < 0) v.coverOf(f) else v.inFolder(f.id).filter { it.id != v.coverOf(f)?.id }.getOrNull(nth)
         val cell = Cell(this, square = false, radius = radius)
-        cell.set("cover:" + (item?.id ?: f.id) + ":" + nth, 0, false, false, false)
+        cell.set(item?.id ?: "empty:" + f.id, 0, false, false, false) // the key must match thumbInto's, or the picture never lands
         if (item != null) thumbInto(cell, item.id) { v.thumb(item) }
         else if (nth < 0) cell.addView(ImageView(this).apply { setImageResource(R.drawable.ic_folder_move); alpha = 0.3f }, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER))
         return cell
@@ -902,11 +902,10 @@ class SankaActivity : Activity() {
         io.execute {
             val v = vault ?: return@execute
             val item = v.items.firstOrNull { it.id == id }
-            val b = item?.let { if (it.isVideo) v.thumb(it) else v.photo(it, 1080) ?: v.thumb(it) }
-            main.post {
-                if (b != null) { img.setImageBitmap(b); img.animate().alpha(1f).setDuration(350).start() }
-                else prefs.edit().remove("homeBg").apply()
-            }
+            if (item == null) { main.post { prefs.edit().remove("homeBg").apply() }; return@execute }
+            // the small picture first (instant), then the sharp one
+            (thumbs.get(item.id) ?: v.thumb(item))?.let { t -> main.post { if (img.drawable == null) { img.setImageBitmap(t); img.animate().alpha(1f).setDuration(250).start() } } }
+            if (!item.isVideo) v.photo(item, 1080)?.let { b -> main.post { img.setImageBitmap(b); img.alpha = 1f } }
         }
         return frame
     }
@@ -998,7 +997,7 @@ class SankaActivity : Activity() {
         val inside = v.inFolder(f.id)
         val cover = v.coverOf(f)
         val cell = Cell(context, square = true, radius = 20f)
-        cell.set("cover:" + (cover?.id ?: f.id), 0, false, false, false)
+        cell.set(cover?.id ?: "empty:" + f.id, 0, false, false, false)
         if (cover != null) thumbInto(cell, cover.id) { v.thumb(cover) }
         else cell.addView(ImageView(context).apply { setImageResource(R.drawable.ic_folder_move); alpha = 0.3f },
             FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER))
@@ -1405,7 +1404,7 @@ class SankaActivity : Activity() {
             val pics = (v?.items.orEmpty().filter { it.id == current } + v?.items.orEmpty().filter { !it.isVideo && it.id != current }.sortedByDescending { it.added }.take(14))
             pics.forEach { item ->
                 val cell = Cell(this, square = false, radius = 14f)
-                cell.set("bg:" + item.id, 0, false, false, false)
+                cell.set(item.id, 0, false, false, false)
                 if (item.id == current) cell.foreground = pill(0, dpf(14f), dp(3), ACCENT)
                 thumbInto(cell, item.id) { v?.thumb(item) }
                 cell.setOnClickListener { prefs.edit().putString("homeBg", item.id).apply(); show(Screen.VAULT); build() }
