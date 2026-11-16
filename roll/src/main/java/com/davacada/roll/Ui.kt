@@ -36,16 +36,17 @@ object C {
 fun Context.dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 fun Context.dpf(v: Float) = v * resources.displayMetrics.density
 
-/** The background: near-black with a fine, visible grain. */
+/** The background: matt black with a fine grain, one speck per screen pixel. */
 fun Context.grain(): Drawable {
-    val n = 192
+    val n = 256
     val r = Random(9)
     val px = IntArray(n * n) {
         val v = r.nextFloat()
-        when { v > 0.55f -> Color.argb(20 + r.nextInt(26), 255, 255, 255); v < 0.2f -> Color.argb(r.nextInt(50), 0, 0, 0); else -> 0 }
+        when { v > 0.72f -> Color.argb(9 + r.nextInt(14), 255, 255, 255); v < 0.3f -> Color.argb(30 + r.nextInt(60), 0, 0, 0); else -> 0 }
     }
-    val tile = BitmapDrawable(resources, Bitmap.createBitmap(px, n, n, Bitmap.Config.ARGB_8888)).apply { setTileModeXY(Shader.TileMode.REPEAT, Shader.TileMode.REPEAT) }
-    return LayerDrawable(arrayOf(GradientDrawable().apply { setColor(C.BLACK) }, tile))
+    val bm = Bitmap.createBitmap(px, n, n, Bitmap.Config.ARGB_8888).apply { density = resources.displayMetrics.densityDpi }
+    val tile = BitmapDrawable(resources, bm).apply { setTileModeXY(Shader.TileMode.REPEAT, Shader.TileMode.REPEAT) }
+    return LayerDrawable(arrayOf(GradientDrawable().apply { setColor(0xFF030303.toInt()) }, tile))
 }
 
 fun pill(color: Int, radius: Float, stroke: Int = 0, strokeColor: Int = 0) = GradientDrawable().apply {
@@ -98,4 +99,70 @@ fun Context.slider(name: String, value: Float, min: Float, max: Float, onMove: (
 fun fmt(ms: Long, tenths: Boolean = false): String {
     val s = ms / 1000
     return if (tenths) "%02d:%02d.%d".format(s / 60, s % 60, (ms % 1000) / 100) else "%d:%02d".format(s / 60, s % 60)
+}
+
+/**
+ * A Lightroom-style slider: name on the left, value on the right, a thin track underneath (optionally a colour
+ * gradient, e.g. blue to yellow for Temp), the zero point marked. Double-tap to reset.
+ */
+class LrSlider(ctx: Context, val name: String, var value: Float, private val min: Float, private val max: Float,
+               private val gradient: IntArray?, private val format: (Float) -> String, private val onMove: (Float) -> Unit) : View(ctx) {
+    private val d = resources.displayMetrics.density
+    private val label = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = C.TEXT; textSize = 13.5f * d }
+    private val num = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = C.TEXT; textSize = 12.5f * d; typeface = Typeface.MONOSPACE; textAlign = android.graphics.Paint.Align.RIGHT }
+    private val track = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = 0x33FFFFFF; strokeWidth = 2.5f * d; strokeCap = android.graphics.Paint.Cap.ROUND }
+    private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = C.AMBER; strokeWidth = 2.5f * d; strokeCap = android.graphics.Paint.Cap.ROUND }
+    private val knob = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; setShadowLayer(3f * d, 0f, 1f * d, 0x80000000.toInt()) }
+    private val zero = android.graphics.Paint().apply { color = 0x66FFFFFF }
+    private val pad = 4f * d
+    private var lastTap = 0L
+
+    init { setLayerType(LAYER_TYPE_SOFTWARE, null) }
+    override fun onMeasure(w: Int, h: Int) = setMeasuredDimension(MeasureSpec.getSize(w), (54 * d).toInt())
+
+    private fun xOf(v: Float) = pad + (width - 2 * pad) * (v - min) / (max - min)
+
+    override fun onDraw(c: android.graphics.Canvas) {
+        val changed = value != (if (min < 0) 0f else min)
+        label.color = if (changed) C.TEXT else C.SUB
+        c.drawText(name, pad, 18 * d, label)
+        num.color = if (changed) C.AMBER else C.SUB
+        c.drawText(format(value), width - pad, 18 * d, num)
+        val y = 38 * d
+        if (gradient != null) {
+            track.shader = android.graphics.LinearGradient(pad, 0f, width - pad, 0f, gradient, null, Shader.TileMode.CLAMP)
+            c.drawLine(pad, y, width - pad, y, track); track.shader = null
+        } else {
+            c.drawLine(pad, y, width - pad, y, track)
+            val from = if (min < 0) xOf(0f) else xOf(min)
+            c.drawLine(from, y, xOf(value), y, fill)
+        }
+        if (min < 0) c.drawRect(xOf(0f) - 0.75f * d, y - 6 * d, xOf(0f) + 0.75f * d, y - 3.5f * d, zero)
+        c.drawCircle(xOf(value), y, 8 * d, knob)
+    }
+
+    override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+        when (e.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastTap < 300) { value = if (min < 0) 0f else min; onMove(value); invalidate(); lastTap = 0; return true }
+                lastTap = now
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                val v = (min + (e.x - pad) / (width - 2 * pad) * (max - min)).coerceIn(min, max)
+                value = if (min < 0 && kotlin.math.abs(v) < (max - min) * 0.015f) 0f else v   // snaps to zero
+                onMove(value); invalidate()
+            }
+        }
+        return true
+    }
+}
+
+/** Big centred value with a title above (sheets: speed, volume). */
+fun Context.headline(title: String, sub: String? = null): View = LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL
+    addView(context.text(title, 22f, C.TEXT, true))
+    if (sub != null) addView(context.text(sub, 12.5f, C.SUB).apply { setPadding(0, dp(3), 0, 0) })
+    setPadding(dp(4), 0, dp(4), dp(16))
 }

@@ -47,8 +47,11 @@ class Timeline(ctx: Context) : View(ctx) {
     private val clipH get() = dp(64f)
     private val handleW get() = dp(12f)
 
-    private val ruler = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C.FAINT; textSize = dp(10f); typeface = Typeface.MONOSPACE }
-    private val tick = Paint().apply { color = 0x33FFFFFF }
+    // the timeline has its own colour: deep steel blue, so the tracks stand apart from the black app
+    private val panel = Paint().apply { color = 0xFF0A1218.toInt() }
+    private val lane = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF132029.toInt() }
+    private val ruler = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF6C8797.toInt(); textSize = dp(10f); typeface = Typeface.MONOSPACE }
+    private val tick = Paint().apply { color = 0x4D6C8797 }
     private val frameBg = Paint().apply { color = 0xFF1A1A1A.toInt() }
     private val amber = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C.AMBER }
     private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C.AMBER; style = Paint.Style.STROKE; strokeWidth = dp(2.5f) }
@@ -73,6 +76,8 @@ class Timeline(ctx: Context) : View(ctx) {
     override fun onDraw(c: Canvas) {
         val p = project ?: return
         val x0 = edgeX
+        c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), panel)
+        c.drawRoundRect(dp(6f), clipTop - dp(4f), width - dp(6f), clipTop + clipH + dp(4f), dp(10f), dp(10f), lane)
         // ruler
         val step = when { pxPerMs * 1000 > dp(90f) -> 1000L; pxPerMs * 2000 > dp(70f) -> 2000L; pxPerMs * 5000 > dp(60f) -> 5000L; else -> 10000L }
         var t = 0L

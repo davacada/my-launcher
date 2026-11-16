@@ -68,12 +68,27 @@ object Looks {
             if (look != null) look.f(c) else if (cube != null) cube.apply(c)
             for (i in 0..2) c[i] = o[i] + (c[i] - o[i]) * g.strength
             for (i in 0..2) c[i] *= expo
+            light(c, g)
             if (g.contrast != 0f) curve(c, 1f + g.contrast * 0.6f, 0.5f)
+            if (g.vibrance != 0f) { val mx = maxOf(c[0], c[1], c[2]); val mn = minOf(c[0], c[1], c[2]); val s0 = if (mx > 0f) (mx - mn) / mx else 0f; sat(c, 1f + g.vibrance * (1f - s0) * 0.9f) }
             if (g.saturation != 0f) sat(c, 1f + g.saturation)
             if (warm != 0f) { c[0] += warm; c[2] -= warm }
+            if (g.tint != 0f) { c[1] -= g.tint * 0.06f; c[0] += g.tint * 0.025f; c[2] += g.tint * 0.025f }
             val rr = (c[0].coerceIn(0f, 1f) * 255 + 0.5f).toInt(); val g2 = (c[1].coerceIn(0f, 1f) * 255 + 0.5f).toInt(); val bb = (c[2].coerceIn(0f, 1f) * 255 + 0.5f).toInt()
             (0xFF shl 24) or (rr shl 16) or (g2 shl 8) or bb
         } } }
+    }
+
+    private fun smooth(a: Float, b: Float, x: Float): Float { val t = ((x - a) / (b - a)).coerceIn(0f, 1f); return t * t * (3 - 2 * t) }
+
+    /** Lightroom-style Light sliders: highlights and shadows move their own tones; whites and blacks the ends. */
+    private fun light(c: FloatArray, g: Grade) {
+        if (g.highlights == 0f && g.shadows == 0f && g.whites == 0f && g.blacks == 0f) return
+        val l = luma(c).coerceIn(0f, 1f)
+        val d = g.highlights * 0.28f * smooth(0.45f, 1f, l) + g.shadows * 0.3f * (1f - smooth(0f, 0.55f, l))
+        for (i in 0..2) c[i] += d
+        if (g.whites != 0f) { val wp = 1f - g.whites * 0.2f; for (i in 0..2) c[i] = c[i] / wp }
+        if (g.blacks != 0f) { val bp = -g.blacks * 0.08f; for (i in 0..2) c[i] = (c[i] - bp) / (1f - bp) }
     }
 
     fun grainOf(g: Grade) = if (g.grain >= 0f) g.grain else (byId(g.look)?.grain ?: 0f)

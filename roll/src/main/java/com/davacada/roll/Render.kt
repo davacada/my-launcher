@@ -62,8 +62,7 @@ object Render {
     /** The grade as video effects: one colour lookup table, then grain and vignette. */
     fun gradeEffects(ctx: Context, g: Grade, lutDir: File): List<Effect> {
         val out = ArrayList<Effect>()
-        val identity = g.look == "none" && g.exposure == 0f && g.contrast == 0f && g.saturation == 0f && g.warmth == 0f
-        if (!identity) out.add(SingleColorLut.createFromCube(Looks.lut(g, lutDir)))
+        if (!g.neutral) out.add(SingleColorLut.createFromCube(Looks.lut(g, lutDir)))
         val gr = Looks.grainOf(g); val vi = Looks.vignetteOf(g)
         if (gr > 0.001f || vi > 0.001f) out.add(GrainEffect(gr, vi))
         return out

@@ -157,8 +157,11 @@ Each release also has `letra.apk`, a sandstone notebook with a mode for each kin
   mute, copy, delete, move earlier/later (hold a clip), frame shape (original, 9:16, 1:1, 4:5, 16:9), undo and redo
 - **Film looks:** film stocks (Portra 400 and 160, Gold 200, Ektar 100, Superia 400, Velvia 50, CineStill 800T),
   black & white (Tri-X, HP5, Delta 3200) and camera looks (Super 8, VHS, Hi8, 16mm Bolex, Cine 709, Blockbuster), each
-  with strength, grain and vignette; import your own **.cube LUTs**; **Adjust** has exposure, contrast, saturation and
-  warmth. Hold the preview to see it without the look
+  with strength, grain and vignette; import your own **.cube LUTs**. **Adjust** works like Lightroom: *Light*
+  (exposure in EV, contrast, highlights, shadows, whites, blacks), *Color* (temp and tint on colour tracks, vibrance,
+  saturation) and *Effects* (grain, vignette); double-tap a slider to reset it. Hold the preview to see the original
+- Menus slide up from the bottom (speed as a big number with a rail of speeds, frame shapes drawn to scale, volume
+  slider); the timeline has its own steel-blue colour
 - **Export:** MP4 video (720p, 1080p, 4K; 24, 25 or 30 fps; three quality levels), **GIF** (width, fps, length,
   loop/once/bounce) and **Telegram video stickers** (WEBM VP9, 512 px, 3 s, no sound, kept under 256 KB, sent straight
   to Telegram). Videos land in Movies/Roll, GIFs in Pictures/Roll

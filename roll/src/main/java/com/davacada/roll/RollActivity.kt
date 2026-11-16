@@ -1,7 +1,6 @@
 package com.davacada.roll
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -83,6 +82,7 @@ class RollActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            sheetView != null -> closeSheet()
             exportView != null -> { if (exporting == null) closeExport() else toast("Exporting · wait or tap Cancel") }
             panelOpen -> closePanel(false)
             project != null -> { store.save(project!!); releasePlayer(); project = null; home() }
@@ -146,25 +146,187 @@ class RollActivity : Activity() {
         }
     }
 
+    // ================================================================ sheets (every menu slides up from the bottom)
+
+    private var sheetView: View? = null
+    private var sheetClosed: (() -> Unit)? = null
+
+    private fun sheet(content: View, onClose: (() -> Unit)? = null) {
+        closeSheet()
+        val dim = FrameLayout(this).apply { setBackgroundColor(0xA6000000.toInt()); isClickable = true; setOnClickListener { closeSheet() } }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; isClickable = true
+            background = android.graphics.drawable.LayerDrawable(arrayOf<android.graphics.drawable.Drawable>(
+                android.graphics.drawable.GradientDrawable().apply { setColor(0xFF0D0D0D.toInt()); cornerRadii = floatArrayOf(dpf(28f), dpf(28f), dpf(28f), dpf(28f), 0f, 0f, 0f, 0f) },
+                android.graphics.drawable.GradientDrawable().apply { setColor(0); setStroke(dp(1), 0x14FFFFFF); cornerRadii = floatArrayOf(dpf(28f), dpf(28f), dpf(28f), dpf(28f), 0f, 0f, 0f, 0f) }))
+            setPadding(dp(20), dp(10), dp(20), insetBottom + dp(22))
+            addView(View(context).apply { background = pill(0x40FFFFFF, dpf(2f)) }, LinearLayout.LayoutParams(dp(38), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(16) })
+            addView(content)
+        }
+        card.setOnApplyWindowInsetsListener { v, ins ->
+            val ime = ins.getInsets(WindowInsets.Type.ime()).bottom
+            v.setPadding(dp(20), dp(10), dp(20), maxOf(insetBottom, ime) + dp(22)); ins
+        }
+        dim.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        root.addView(dim, FrameLayout.LayoutParams(-1, -1))
+        sheetView = dim; sheetClosed = onClose
+        card.translationY = dpf(400f); card.animate().translationY(0f).setDuration(230).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        card.requestApplyInsets()
+    }
+
+    private fun closeSheet() {
+        val v = sheetView ?: return
+        sheetView = null
+        val c = sheetClosed; sheetClosed = null
+        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
+        root.removeView(v); c?.invoke()
+    }
+
+    /** An action row in a sheet: icon, title, a line under it. */
+    private fun action(icon: Int, title: String, sub: String? = null, color: Int = C.TEXT, onClick: () -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(12), dp(4), dp(12)); background = ripple()
+        addView(ImageView(context).apply { setImageResource(icon); setColorFilter(color) }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(18) })
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(context.text(title, 16f, color, true))
+            if (sub != null) addView(context.text(sub, 12.5f, C.SUB).apply { setPadding(0, dp(2), 0, 0) })
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        setOnClickListener { onClick() }
+    }
+
+    private fun vcol() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
     private fun projectMenu(p: Project) {
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle(p.name)
-            .setItems(arrayOf("Rename", "Duplicate", "Delete")) { _, w ->
-                when (w) {
-                    0 -> rename(p) { home() }
-                    1 -> { val c = Project.from(p.json().put("id", java.util.UUID.randomUUID().toString()).put("name", p.name + " copy")); store.save(c); home() }
-                    2 -> AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Delete “${p.name}”?")
-                        .setMessage("Your original videos stay in the gallery; only the edit is deleted.")
-                        .setPositiveButton("Delete") { _, _ -> store.delete(p); home() }.setNegativeButton("Cancel", null).show()
-                }
-            }.show()
+        val col = vcol()
+        col.addView(headline(p.name, "${fmt(p.lengthMs)} · ${p.clips.size} clip${if (p.clips.size == 1) "" else "s"} · ${Looks.byId(p.grade.look)?.name ?: "no look"}"))
+        col.addView(action(R.drawable.i_edit, "Rename") { rename(p) { home() } })
+        col.addView(action(R.drawable.i_copy, "Duplicate", "A copy of the edit to try something else") {
+            closeSheet(); val c = Project.from(p.json().put("id", java.util.UUID.randomUUID().toString()).put("name", p.name + " copy")); store.save(c); home() })
+        col.addView(action(R.drawable.i_trash, "Delete", "Your videos stay in the gallery", 0xFFFF6B5E.toInt()) { confirm("Delete “${p.name}”?", "Only the edit is deleted. Your original videos stay where they are.", "Delete") { store.delete(p); home() } })
+        sheet(col)
+    }
+
+    private fun confirm(title: String, msg: String, yes: String, then: () -> Unit) {
+        val col = vcol()
+        col.addView(headline(title, msg))
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        r.addView(word("Cancel", false, 15f) { closeSheet() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(24) })
+        r.addView(text(yes, 15f, 0xFFFF6B5E.toInt(), true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { closeSheet(); then() } })
+        col.addView(r)
+        sheet(col)
     }
 
     private fun rename(p: Project, then: () -> Unit) {
-        val e = EditText(this).apply { setText(p.name); setSelection(p.name.length); setTextColor(C.TEXT) }
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Name")
-            .setView(FrameLayout(this).apply { setPadding(dp(20), dp(4), dp(20), 0); addView(e) })
-            .setPositiveButton("OK") { _, _ -> p.name = e.text.toString().ifBlank { p.name }; store.save(p); then() }
-            .setNegativeButton("Cancel", null).show()
+        val col = vcol()
+        col.addView(text("NAME", 11.5f, C.SUB, true).apply { letterSpacing = 0.14f })
+        val e = EditText(this).apply {
+            setText(p.name); setSelection(p.name.length); setTextColor(C.TEXT); textSize = 24f; typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            background = null; setPadding(0, dp(6), 0, dp(10)); isSingleLine = true
+            backgroundTintList = android.content.res.ColorStateList.valueOf(C.AMBER)
+        }
+        col.addView(e)
+        col.addView(View(this).apply { setBackgroundColor(C.AMBER) }, LinearLayout.LayoutParams(-1, dp(2)))
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(0, dp(14), 0, 0) }
+        r.addView(word("Cancel", false, 15f) { closeSheet() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(24) })
+        r.addView(text("Save", 15f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple()
+            setOnClickListener { p.name = e.text.toString().trim().ifBlank { p.name }; store.save(p); closeSheet(); then() } })
+        col.addView(r)
+        sheet(col)
+        e.requestFocus()
+        main.postDelayed({ (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showSoftInput(e, 0) }, 250)
+    }
+
+    /** Speed: a big number and a rail of speeds; changes as you tap. */
+    private fun speedMenu(i: Int) {
+        val p = project ?: return
+        snapshot()
+        val speeds = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 4f)
+        val col = vcol()
+        col.addView(text("SPEED", 11.5f, C.SUB, true).apply { letterSpacing = 0.14f })
+        val big = text("", 54f, C.AMBER, true, mono = true).apply { setPadding(0, dp(2), 0, dp(4)) }
+        val note = text("", 12.5f, C.SUB)
+        col.addView(big); col.addView(note)
+        val rail = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(18), 0, dp(6)) }
+        fun draw() {
+            val c = p.clips[i]
+            big.text = (if (c.speed == c.speed.toInt().toFloat()) c.speed.toInt().toString() else c.speed.toString()) + "×"
+            note.text = "Clip ${i + 1} lasts ${fmt(c.lengthMs, true)}" + if (c.speed < 1f) " · slow motion" else if (c.speed > 1f) " · faster" else ""
+            rail.removeAllViews()
+            speeds.forEach { sp ->
+                val on = sp == c.speed
+                rail.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(8), dp(4), dp(8), dp(4)); background = ripple()
+                    addView(context.text(if (sp == sp.toInt().toFloat()) sp.toInt().toString() else sp.toString().removePrefix("0"), 16f, if (on) C.AMBER else C.TEXT, on, mono = true))
+                    addView(View(context).apply { background = pill(if (on) C.AMBER else 0, dpf(2f)) }, LinearLayout.LayoutParams(dp(18), dp(3)).apply { topMargin = dp(6) })
+                    setOnClickListener { p.clips[i].speed = sp; store.save(p); reloadPlayer(keepTime = true); refresh(); draw() }
+                })
+            }
+        }
+        draw()
+        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(rail) })
+        sheet(col)
+    }
+
+    private fun volumeMenu(i: Int) {
+        val p = project ?: return
+        snapshot()
+        val col = vcol()
+        col.addView(headline("Clip ${i + 1} volume", "Drag, or double-tap the slider for 100%"))
+        col.addView(LrSlider(this, "Volume", p.clips[i].volume, 0f, 2f, null, { "${(it * 100).toInt()}%" }) { v -> p.clips[i].volume = v; clipParams() })
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(12), 0, 0) }
+        r.addView(action(R.drawable.i_mute, "Mute this clip") { p.clips[i].volume = 0f; clipParams(); closeSheet() }, LinearLayout.LayoutParams(0, -2, 1f))
+        r.addView(action(if (p.mute) R.drawable.i_volume else R.drawable.i_mute, if (p.mute) "Sound on for all" else "Mute the whole edit") { p.mute = !p.mute; clipParams(); closeSheet() }, LinearLayout.LayoutParams(0, -2, 1f))
+        col.addView(r)
+        sheet(col) { store.save(p); refresh() }
+    }
+
+    private fun soundMenu() {
+        val p = project ?: return
+        val col = vcol()
+        col.addView(headline("Sound", "Tap a clip to set its own volume"))
+        col.addView(action(if (p.mute) R.drawable.i_volume else R.drawable.i_mute, if (p.mute) "Turn the sound on" else "Mute the whole edit", if (p.mute) "Exports will have sound again" else "Exports will be silent") {
+            snapshot(); p.mute = !p.mute; store.save(p); clipParams(); refresh(); closeSheet() })
+        sheet(col)
+    }
+
+    private fun clipMenu(i: Int) {
+        val p = project ?: return
+        timeline?.selected = i; editBottomTools()
+        val c = p.clips[i]
+        val col = vcol()
+        col.addView(headline("Clip ${i + 1}", "${fmt(c.lengthMs, true)} · from ${fmt(c.startMs)} to ${fmt(c.endMs)} of the original"))
+        fun move(to: Int) { snapshot(); val x = p.clips.removeAt(i); p.clips.add(to, x); timeline?.selected = to; store.save(p); reloadPlayer(true); refresh(); closeSheet() }
+        if (i > 0) col.addView(action(R.drawable.i_left, "Move earlier") { move(i - 1) })
+        if (i < p.clips.size - 1) col.addView(action(R.drawable.i_right, "Move later") { move(i + 1) })
+        col.addView(action(R.drawable.i_speed, "Speed", "${c.speed}×") { closeSheet(); speedMenu(i) })
+        col.addView(action(R.drawable.i_volume, "Volume", "${(c.volume * 100).toInt()}%") { closeSheet(); volumeMenu(i) })
+        col.addView(action(R.drawable.i_copy, "Duplicate") { closeSheet(); duplicate(i) })
+        col.addView(action(R.drawable.i_trash, "Delete", null, 0xFFFF6B5E.toInt()) { closeSheet(); deleteClip(i) })
+        sheet(col)
+    }
+
+    /** Frame shapes drawn as their own outlines. */
+    private fun aspectMenu() {
+        val p = project ?: return
+        val opts = listOf(Triple("original", "Original", 0f), Triple("9:16", "9:16", 9f / 16f), Triple("4:5", "4:5", 0.8f), Triple("1:1", "1:1", 1f), Triple("16:9", "16:9", 16f / 9f))
+        val col = vcol()
+        col.addView(headline("Frame", "The shape of the finished video"))
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
+        opts.forEach { (k, l, ratio) ->
+            val on = p.aspect == k
+            val rr = if (ratio == 0f) p.clips.firstOrNull()?.let { if (it.w > 0 && it.h > 0) it.w.toFloat() / it.h else 16f / 9f } ?: (16f / 9f) else ratio
+            val box = 50f
+            val w = if (rr >= 1f) box else box * rr; val h = if (rr >= 1f) box / rr else box
+            r.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(6), dp(8), dp(6), dp(8)); background = ripple()
+                addView(FrameLayout(context).apply { addView(View(context).apply { background = pill(if (on) 0x26F2A541 else 0, dpf(5f), dp(2), if (on) C.AMBER else 0x80FFFFFF.toInt()) },
+                    FrameLayout.LayoutParams(dp(w.toInt()), dp(h.toInt()), Gravity.CENTER)) }, LinearLayout.LayoutParams(dp(54), dp(54)))
+                addView(context.text(l, 12.5f, if (on) C.AMBER else C.TEXT, on).apply { setPadding(0, dp(8), 0, 0) })
+                setOnClickListener { snapshot(); p.aspect = k; store.save(p); previewBox.requestLayout(); applyGrade(); closeSheet() }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        col.addView(r)
+        sheet(col)
     }
 
     // ================================================================ picking clips
@@ -294,7 +456,7 @@ class RollActivity : Activity() {
         tr.addView(bare(R.drawable.i_aspect, null, size = 20) { aspectMenu() })
         col.addView(tr)
         bottom = FrameLayout(this)
-        col.addView(bottom, LinearLayout.LayoutParams(-1, dp(250)))
+        col.addView(bottom, LinearLayout.LayoutParams(-1, dp(272)))
         screen.addView(col, FrameLayout.LayoutParams(-1, -1))
         editBottom()
         setupPlayer()
@@ -317,7 +479,7 @@ class RollActivity : Activity() {
         tl.onTrimmed = { i -> snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); reloadPlayer(keepTime = true); refreshTime() }
         tl.onAdd = { addingTo = p; pickVideos() }
         tl.onHold = { i -> clipMenu(i) }
-        col.addView(tl, LinearLayout.LayoutParams(-1, dp(120)))
+        col.addView(tl, LinearLayout.LayoutParams(-1, dp(118)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
         b.addView(col, FrameLayout.LayoutParams(-1, -1))
@@ -475,31 +637,6 @@ class RollActivity : Activity() {
         store.save(p); reloadPlayer(keepTime = true); refresh()
     }
 
-    private fun speedMenu(i: Int) {
-        val p = project ?: return
-        val speeds = listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f)
-        val cur = p.clips[i].speed
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Speed")
-            .setItems(speeds.map { (if (it == cur) "✓  " else "     ") + "${it}×" }.toTypedArray()) { _, w ->
-                snapshot(); p.clips[i].speed = speeds[w]; store.save(p); reloadPlayer(keepTime = true); refresh()
-            }.show()
-    }
-
-    private fun volumeMenu(i: Int) {
-        val p = project ?: return
-        val levels = listOf(0f to "Muted", 0.5f to "50%", 1f to "100%", 1.5f to "150%", 2f to "200%")
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Clip volume")
-            .setItems(levels.map { (v, l) -> (if (v == p.clips[i].volume) "✓  " else "     ") + l }.toTypedArray()) { _, w ->
-                snapshot(); p.clips[i].volume = levels[w].first; store.save(p); clipParams(); refresh()
-            }.show()
-    }
-
-    private fun soundMenu() {
-        val p = project ?: return
-        snapshot(); p.mute = !p.mute; store.save(p); clipParams(); refresh()
-        toast(if (p.mute) "Sound off for the whole edit" else "Sound on")
-    }
-
     private fun duplicate(i: Int) {
         val p = project ?: return
         snapshot(); p.clips.add(i + 1, p.clips[i].copy()); timeline?.selected = i + 1
@@ -510,29 +647,6 @@ class RollActivity : Activity() {
         val p = project ?: return
         snapshot(); p.clips.removeAt(i); timeline?.selected = -1
         store.save(p); reloadPlayer(keepTime = true); refresh()
-    }
-
-    private fun clipMenu(i: Int) {
-        val p = project ?: return
-        timeline?.selected = i; editBottomTools()
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Clip ${i + 1}")
-            .setItems(arrayOf("Move earlier", "Move later", "Duplicate", "Delete")) { _, w ->
-                when (w) {
-                    0 -> if (i > 0) { snapshot(); val c = p.clips.removeAt(i); p.clips.add(i - 1, c); timeline?.selected = i - 1; store.save(p); reloadPlayer(true); refresh() }
-                    1 -> if (i < p.clips.size - 1) { snapshot(); val c = p.clips.removeAt(i); p.clips.add(i + 1, c); timeline?.selected = i + 1; store.save(p); reloadPlayer(true); refresh() }
-                    2 -> duplicate(i)
-                    3 -> deleteClip(i)
-                }
-            }.show()
-    }
-
-    private fun aspectMenu() {
-        val p = project ?: return
-        val opts = listOf("original" to "Original", "9:16" to "9:16 · Reels, TikTok", "1:1" to "1:1 · Square", "4:5" to "4:5 · Portrait post", "16:9" to "16:9 · Wide")
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Frame")
-            .setItems(opts.map { (k, l) -> (if (p.aspect == k) "✓  " else "     ") + l }.toTypedArray()) { _, w ->
-                snapshot(); p.aspect = opts[w].first; store.save(p); previewBox.requestLayout(); applyGrade()
-            }.show()
     }
 
     // ================================================================ panels: film looks and adjust
@@ -632,16 +746,52 @@ class RollActivity : Activity() {
         }
     }
 
+    /** Adjust, laid out like Lightroom: Light, Color and Effects, each a set of fine sliders. */
+    private var adjTab = "light"
     private fun adjustPanel() {
         val p = project ?: return
+        val g = p.grade
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(4), dp(14), 0) }
-        s.addView(slider("Exposure", p.grade.exposure, -1f, 1f) { p.grade.exposure = it; applyGrade() })
-        s.addView(slider("Contrast", p.grade.contrast, -1f, 1f) { p.grade.contrast = it; applyGrade() })
-        s.addView(slider("Saturation", p.grade.saturation, -1f, 1f) { p.grade.saturation = it; applyGrade() })
-        s.addView(slider("Warmth", p.grade.warmth, -1f, 1f) { p.grade.warmth = it; applyGrade() })
-        s.addView(word("Reset", false, 13f) { p.grade.exposure = 0f; p.grade.contrast = 0f; p.grade.saturation = 0f; p.grade.warmth = 0f; applyGrade(); val keep = gradeBefore; panelOpen = false; adjustPanel(); gradeBefore = keep })
-        col.addView(ScrollView(this).apply { addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(10), 0, dp(14), dp(2)) }
+        listOf(Triple("light", R.drawable.i_sun, "Light"), Triple("color", R.drawable.i_drop, "Color"), Triple("effects", R.drawable.i_fx, "Effects")).forEach { (k, ic, l) ->
+            tabs.addView(bare(ic, l, if (adjTab == k) C.AMBER else C.SUB, 20) { adjTab = k; val keep = gradeBefore; panelOpen = false; adjustPanel(); gradeBefore = keep })
+        }
+        tabs.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        tabs.addView(word("Reset", false, 13f) {
+            when (adjTab) {
+                "light" -> { g.exposure = 0f; g.contrast = 0f; g.highlights = 0f; g.shadows = 0f; g.whites = 0f; g.blacks = 0f }
+                "color" -> { g.warmth = 0f; g.tint = 0f; g.vibrance = 0f; g.saturation = 0f }
+                else -> { g.grain = -1f; g.vignette = -1f }
+            }
+            applyGrade(); val keep = gradeBefore; panelOpen = false; adjustPanel(); gradeBefore = keep
+        })
+        col.addView(tabs)
+        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), dp(6)) }
+        val pm = { v: Float -> val n = (v * 100).toInt(); if (n > 0) "+$n" else "$n" }
+        fun add(name: String, value: Float, min: Float, max: Float, grad: IntArray?, f: (Float) -> String, set: (Float) -> Unit) =
+            s.addView(LrSlider(this, name, value, min, max, grad, f) { set(it); applyGrade() })
+        when (adjTab) {
+            "light" -> {
+                add("Exposure", g.exposure, -1f, 1f, null, { "%+.2f EV".format(it * 2f) }) { g.exposure = it }
+                add("Contrast", g.contrast, -1f, 1f, null, pm) { g.contrast = it }
+                add("Highlights", g.highlights, -1f, 1f, null, pm) { g.highlights = it }
+                add("Shadows", g.shadows, -1f, 1f, null, pm) { g.shadows = it }
+                add("Whites", g.whites, -1f, 1f, null, pm) { g.whites = it }
+                add("Blacks", g.blacks, -1f, 1f, null, pm) { g.blacks = it }
+            }
+            "color" -> {
+                add("Temp", g.warmth, -1f, 1f, intArrayOf(0xFF4A86D9.toInt(), 0xFFB7B7B7.toInt(), 0xFFE8C23A.toInt()), pm) { g.warmth = it }
+                add("Tint", g.tint, -1f, 1f, intArrayOf(0xFF4DBB5F.toInt(), 0xFFB7B7B7.toInt(), 0xFFD24FC4.toInt()), pm) { g.tint = it }
+                add("Vibrance", g.vibrance, -1f, 1f, null, pm) { g.vibrance = it }
+                add("Saturation", g.saturation, -1f, 1f, intArrayOf(0xFF8A8A8A.toInt(), 0xFFFF5A3C.toInt(), 0xFFFFC23C.toInt(), 0xFF3CC86E.toInt(), 0xFF3C8CFF.toInt(), 0xFFB45AFF.toInt()), pm) { g.saturation = it }
+            }
+            else -> {
+                add("Grain", Looks.grainOf(g), 0f, 1f, null, { "${(it * 100).toInt()}" }) { g.grain = it }
+                add("Vignette", Looks.vignetteOf(g), 0f, 1f, null, { "${(it * 100).toInt()}" }) { g.vignette = it }
+                s.addView(text("Double-tap a slider to reset it. Hold the picture to see the original.", 11.5f, C.FAINT).apply { setPadding(dp(4), dp(10), 0, 0) })
+            }
+        }
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
         col.addView(panelFooter(), LinearLayout.LayoutParams(-1, dp(46)))
         openPanel(col)
     }
@@ -656,7 +806,7 @@ class RollActivity : Activity() {
 
     /** The grade applied to a small picture on the CPU (for look thumbnails and project covers). */
     private fun gradePreview(src: Bitmap, g: Grade): Bitmap {
-        if (g.look == "none" && g.exposure == 0f && g.contrast == 0f && g.saturation == 0f && g.warmth == 0f) return src
+        if (g.neutral) return src
         val lut = Looks.lut(g, store.lutDir); val n = Looks.SIZE - 1
         val w = src.width; val h = src.height
         val px = IntArray(w * h); src.getPixels(px, 0, w, 0, 0, w, h)
@@ -685,57 +835,100 @@ class RollActivity : Activity() {
         renderExport()
     }
 
-    private fun closeExport() { exportView?.let { root.removeView(it) }; exportView = null }
+    private fun closeExport() { exportView?.let { root.removeView(it) }; exportView = null; exPreview = null }
+
+    private var exPreview: Bitmap? = null
 
     private fun renderExport(status: String? = null, progress: Int = -1, result: File? = null, resultMime: String? = null, savedUri: Uri? = null) {
         val v = exportView as? FrameLayout ?: return
         val p = project ?: return
         v.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, insetTop, 0, insetBottom) }
-        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(4), dp(10), dp(4)) }
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(4), dp(16), dp(4)) }
         top.addView(bare(R.drawable.i_back, null) { onBackPressed() })
-        top.addView(text("Export", 15f, C.TEXT, true))
+        top.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(context.text("Export", 19f, C.TEXT, true))
+            addView(context.text(p.name + " · " + fmt(p.lengthMs), 11.5f, C.SUB))
+        })
         col.addView(top)
-        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(20), 0, dp(20), dp(8)) }
-        listOf("video" to "Video", "gif" to "GIF", "sticker" to "Telegram sticker").forEach { (k, l) ->
-            tabs.addView(word(l, exFormat == k, 15f) { if (exporting == null) { exFormat = k; renderExport() } }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(18) })
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(10), dp(18), dp(10)) }
+        // format cards
+        val cards = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listOf(Triple("video", "MP4", "Video" to "up to 4K"), Triple("gif", "GIF", "Animation" to "loops anywhere"), Triple("sticker", "WEBM", "Telegram" to "512 px · 3 s")).forEachIndexed { i, (k, big, sub) ->
+            val on = exFormat == k
+            cards.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(14), dp(10), dp(14))
+                background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x22FFFFFF),
+                    pill(if (on) 0x1FF2A541 else 0xFF101010.toInt(), dpf(18f), dp(if (on) 2 else 1), if (on) C.AMBER else 0x14FFFFFF), pill(Color.WHITE, dpf(18f)))
+                addView(context.text(big, 20f, if (on) C.AMBER else C.TEXT, true, mono = true))
+                addView(context.text(sub.first, 13f, C.TEXT, true).apply { setPadding(0, dp(10), 0, 0) })
+                addView(context.text(sub.second, 11f, C.SUB))
+                setOnClickListener { if (exporting == null) { exFormat = k; renderExport() } }
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { if (i > 0) marginStart = dp(8) })
         }
-        col.addView(tabs)
-        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), 0) }
-        fun row(title: String, opts: List<String>, sel: Int, pick: (Int) -> Unit) {
-            body.addView(text(title.uppercase(), 11.5f, C.SUB, true).apply { letterSpacing = 0.12f; setPadding(0, dp(14), 0, dp(4)) })
+        body.addView(cards)
+        // preview of the frame under the playhead, in the export's shape
+        val shape = when (exFormat) { "sticker" -> if (stSquare) 1f else Render.ratio(p); else -> Render.ratio(p) }
+        val frame = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true; background = pill(0xFF141414.toInt(), dpf(14f)) }
+        val fh = dp(170); val fw = minOf(resources.displayMetrics.widthPixels - dp(36), (fh * shape).toInt())
+        body.addView(FrameLayout(this).apply { addView(frame, FrameLayout.LayoutParams(fw, if (fw < (fh * shape).toInt()) (fw / shape).toInt() else fh, Gravity.CENTER)) },
+            LinearLayout.LayoutParams(-1, fh).apply { topMargin = dp(16) })
+        exPreview?.let { frame.setImageBitmap(it) } ?: bg.execute {
+            val c = p.clips.getOrNull(p.at(timeline?.time() ?: 0).first)
+            val bm = c?.let { frameAt(it, it.startMs + 300, 360) }?.let { gradePreview(it, p.grade) }
+            main.post { exPreview = bm; frame.setImageBitmap(bm) }
+        }
+        /** A row of big values; the chosen one is amber with a bar under it. */
+        fun dial(title: String, opts: List<Pair<String, String>>, sel: Int, pick: (Int) -> Unit) {
+            body.addView(text(title.uppercase(), 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(2), dp(20), 0, dp(6)) })
             val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            opts.forEachIndexed { i, o -> r.addView(word(o, i == sel, 17f) { if (exporting == null) { pick(i); renderExport() } }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(18) }) }
+            opts.forEachIndexed { i, (big, unit) ->
+                val on = i == sel
+                r.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(4), dp(14), dp(4)); background = ripple()
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM
+                        addView(context.text(big, 22f, if (on) C.AMBER else C.TEXT, true, mono = true))
+                        if (unit.isNotEmpty()) addView(context.text(unit, 11f, if (on) C.AMBER else C.SUB, true).apply { setPadding(dp(2), 0, 0, dp(3)) })
+                    })
+                    addView(View(context).apply { background = pill(if (on) C.AMBER else 0, dpf(2f)) }, LinearLayout.LayoutParams(dp(22), dp(3)).apply { topMargin = dp(5) })
+                    setOnClickListener { if (exporting == null) { pick(i); renderExport() } }
+                })
+            }
             body.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(r) })
         }
         val t0 = timeline?.time() ?: 0L
-        val info: String
+        val chips: List<String>
         when (exFormat) {
             "gif" -> {
-                row("Width", listOf("320", "480", "720"), listOf(320, 480, 720).indexOf(gifW)) { gifW = listOf(320, 480, 720)[it] }
-                row("Frame rate", listOf("12", "15", "24", "25", "30"), listOf(12, 15, 24, 25, 30).indexOf(gifFps)) { gifFps = listOf(12, 15, 24, 25, 30)[it] }
-                row("Length (from the playhead)", listOf("3 s", "6 s", "10 s", "Whole"), listOf(3, 6, 10, 0).indexOf(gifSecs)) { gifSecs = listOf(3, 6, 10, 0)[it] }
-                row("Loop", listOf("Forever", "Once", "Bounce"), listOf("forever", "once", "bounce").indexOf(gifLoop)) { gifLoop = listOf("forever", "once", "bounce")[it] }
+                dial("Width", listOf("320" to "px", "480" to "px", "720" to "px"), listOf(320, 480, 720).indexOf(gifW)) { gifW = listOf(320, 480, 720)[it] }
+                dial("Frame rate", listOf(12, 15, 24, 25, 30).map { "$it" to "fps" }, listOf(12, 15, 24, 25, 30).indexOf(gifFps)) { gifFps = listOf(12, 15, 24, 25, 30)[it] }
+                dial("Length from ${fmt(t0)}", listOf("3" to "s", "6" to "s", "10" to "s", "All" to ""), listOf(3, 6, 10, 0).indexOf(gifSecs)) { gifSecs = listOf(3, 6, 10, 0)[it] }
+                dial("Loop", listOf("∞" to "forever", "1" to "once", "⇄" to "bounce"), listOf("forever", "once", "bounce").indexOf(gifLoop)) { gifLoop = listOf("forever", "once", "bounce")[it] }
                 val (w, h) = gifSize(p); val secs = gifRange(p).let { (a, b) -> (b - a) / 1000f }
-                info = "GIF · $w × $h · $gifFps fps · %.1f s · about %.1f MB".format(secs, w * h * gifFps * secs * 0.35f / 1_000_000f * (if (gifLoop == "bounce") 2 else 1))
+                chips = listOf("$w × $h", "%.1f s".format(secs), "≈ %.1f MB".format(w * h * gifFps * secs * 0.35f / 1_000_000f * (if (gifLoop == "bounce") 2 else 1)), "Pictures/Roll")
             }
             "sticker" -> {
-                row("Shape", listOf("Square 512", "Keep shape"), if (stSquare) 0 else 1) { stSquare = it == 0 }
-                row("Frame rate", listOf("24", "25", "30"), listOf(24, 25, 30).indexOf(stFps)) { stFps = listOf(24, 25, 30)[it] }
-                info = "WEBM · VP9 · no sound · 3 s from ${fmt(t0)} · kept under 256 KB"
+                dial("Shape", listOf("1:1" to "square", "▭" to "keep shape"), if (stSquare) 0 else 1) { stSquare = it == 0; exPreview = exPreview }
+                dial("Frame rate", listOf(24, 25, 30).map { "$it" to "fps" }, listOf(24, 25, 30).indexOf(stFps)) { stFps = listOf(24, 25, 30)[it] }
+                chips = listOf("VP9 · WEBM", "3 s from ${fmt(t0)}", "no sound", "≤ 256 KB")
             }
             else -> {
-                row("Resolution", listOf("720p", "1080p", "4K"), listOf(720, 1080, 2160).indexOf(exShort)) { exShort = listOf(720, 1080, 2160)[it] }
-                row("Frame rate", listOf("24", "25", "30"), listOf(24, 25, 30).indexOf(exFps)) { exFps = listOf(24, 25, 30)[it] }
-                row("Quality", listOf("Smaller", "Balanced", "Best"), exQuality) { exQuality = it }
+                dial("Resolution", listOf("720" to "p", "1080" to "p", "4K" to ""), listOf(720, 1080, 2160).indexOf(exShort)) { exShort = listOf(720, 1080, 2160)[it] }
+                dial("Frame rate", listOf(24, 25, 30).map { "$it" to "fps" }, listOf(24, 25, 30).indexOf(exFps)) { exFps = listOf(24, 25, 30)[it] }
+                dial("Quality", listOf("S" to "smaller", "M" to "balanced", "L" to "best"), exQuality) { exQuality = it }
                 val (w, h) = Render.size(p, exShort)
-                info = "MP4 · H.264 · $w × $h · about ${(videoBitrate(w, h) / 8f * p.lengthMs / 1000f / 1_000_000f).toInt()} MB · ${fmt(p.lengthMs)}"
+                chips = listOf("$w × $h", "H.264", "≈ ${(videoBitrate(w, h) / 8f * p.lengthMs / 1000f / 1_000_000f).toInt()} MB", if (p.mute) "no sound" else "with sound", "Movies/Roll")
             }
         }
-        body.addView(text(info, 12.5f, C.SUB).apply { setPadding(0, dp(18), 0, 0) })
-        col.addView(ScrollView(this).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        // progress / result / button
-        val foot = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), 0, dp(24), dp(26)) }
+        val chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(20), 0, 0) }
+        chips.forEach { c -> chipRow.addView(text(c, 11.5f, C.TEXT, mono = true).apply { setPadding(dp(10), dp(5), dp(10), dp(5)); background = pill(0xFF141414.toInt(), dpf(8f)) },
+            LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(6) }) }
+        body.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chipRow) })
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        // progress and the big button
+        val foot = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(6), dp(18), dp(20)) }
         if (status != null) {
             foot.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -744,23 +937,27 @@ class RollActivity : Activity() {
             })
             if (progress >= 0) foot.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
                 max = 100; this.progress = progress; progressTintList = android.content.res.ColorStateList.valueOf(C.AMBER); progressBackgroundTintList = android.content.res.ColorStateList.valueOf(0x22FFFFFF)
-            }, LinearLayout.LayoutParams(-1, dp(14)).apply { topMargin = dp(6) })
+            }, LinearLayout.LayoutParams(-1, dp(12)).apply { topMargin = dp(6); bottomMargin = dp(10) })
         }
-        val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(0, dp(14), 0, 0) }
-        if (exporting != null) btns.addView(bigWord("Cancel", R.drawable.i_close, C.SUB) { exporting?.cancel?.invoke(); exporting = null; renderExport("Cancelled") })
-        else if (result != null && resultMime != null) {
-            btns.addView(bigWord(if (exFormat == "sticker") "Send to Telegram" else "Share", R.drawable.i_share, C.AMBER) { shareFile(result, resultMime, savedUri) })
-        } else btns.addView(bigWord(if (exFormat == "sticker") "Make sticker" else "Save to gallery", R.drawable.i_export, C.AMBER) { startExport() })
-        foot.addView(btns)
+        when {
+            exporting != null -> foot.addView(cta("Cancel", R.drawable.i_close, false) { exporting?.cancel?.invoke(); exporting = null; renderExport("Cancelled") })
+            result != null && resultMime != null -> foot.addView(cta(if (exFormat == "sticker") "Send to Telegram" else "Share", R.drawable.i_share, true) { shareFile(result, resultMime, savedUri) })
+            else -> foot.addView(cta(when (exFormat) { "sticker" -> "Make sticker"; "gif" -> "Make GIF"; else -> "Export video" }, R.drawable.i_export, true) { startExport() })
+        }
         col.addView(foot)
         v.addView(col, FrameLayout.LayoutParams(-1, -1))
     }
 
-    private fun bigWord(label: String, icon: Int, color: Int, onClick: () -> Unit) = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(dp(16), dp(12), dp(16), dp(12)); background = ripple()
-        addView(ImageView(context).apply { setImageResource(icon); setColorFilter(color) }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(10) })
-        addView(context.text(label, 17f, color, true))
+    /** The one big button: amber, full width. */
+    private fun cta(label: String, icon: Int, filled: Boolean, onClick: () -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33000000),
+            pill(if (filled) C.AMBER else 0xFF161616.toInt(), dpf(28f)), pill(Color.WHITE, dpf(28f)))
+        val fg = if (filled) 0xFF0A0A0A.toInt() else C.TEXT
+        addView(ImageView(context).apply { setImageResource(icon); setColorFilter(fg) }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(10) })
+        addView(context.text(label, 16.5f, fg, true))
         setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(-1, dp(56))
     }
 
     private fun videoBitrate(w: Int, h: Int) = (w.toLong() * h * exFps * floatArrayOf(0.06f, 0.1f, 0.16f)[exQuality]).toInt().coerceIn(1_000_000, 80_000_000)

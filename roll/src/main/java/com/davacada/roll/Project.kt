@@ -41,14 +41,26 @@ class Grade(
     var exposure: Float = 0f,      // -1..1
     var contrast: Float = 0f,      // -1..1
     var saturation: Float = 0f,    // -1..1
-    var warmth: Float = 0f,        // -1..1
+    var warmth: Float = 0f,        // -1..1 (Temp)
+    var tint: Float = 0f,          // -1 green .. 1 magenta
+    var highlights: Float = 0f, var shadows: Float = 0f, var whites: Float = 0f, var blacks: Float = 0f,
+    var vibrance: Float = 0f,
 ) {
+    /** True when nothing changes the colours. */
+    val neutral get() = look == "none" && exposure == 0f && contrast == 0f && saturation == 0f && warmth == 0f && tint == 0f &&
+        highlights == 0f && shadows == 0f && whites == 0f && blacks == 0f && vibrance == 0f
+
     fun json(): JSONObject = JSONObject().put("look", look).put("str", strength.toDouble()).put("gr", grain.toDouble()).put("vi", vignette.toDouble())
         .put("ex", exposure.toDouble()).put("co", contrast.toDouble()).put("sa", saturation.toDouble()).put("wa", warmth.toDouble())
-    fun copyFrom(g: Grade) { look = g.look; strength = g.strength; grain = g.grain; vignette = g.vignette; exposure = g.exposure; contrast = g.contrast; saturation = g.saturation; warmth = g.warmth }
+        .put("ti", tint.toDouble()).put("hi", highlights.toDouble()).put("sh", shadows.toDouble()).put("wh", whites.toDouble()).put("bl", blacks.toDouble()).put("vb", vibrance.toDouble())
+    fun copyFrom(g: Grade) {
+        look = g.look; strength = g.strength; grain = g.grain; vignette = g.vignette; exposure = g.exposure; contrast = g.contrast; saturation = g.saturation; warmth = g.warmth
+        tint = g.tint; highlights = g.highlights; shadows = g.shadows; whites = g.whites; blacks = g.blacks; vibrance = g.vibrance
+    }
     companion object {
         fun from(o: JSONObject?) = if (o == null) Grade() else Grade(o.optString("look", "none"), o.optDouble("str", 1.0).toFloat(), o.optDouble("gr", -1.0).toFloat(),
-            o.optDouble("vi", -1.0).toFloat(), o.optDouble("ex").toFloat(), o.optDouble("co").toFloat(), o.optDouble("sa").toFloat(), o.optDouble("wa").toFloat())
+            o.optDouble("vi", -1.0).toFloat(), o.optDouble("ex", 0.0).toFloat(), o.optDouble("co", 0.0).toFloat(), o.optDouble("sa", 0.0).toFloat(), o.optDouble("wa", 0.0).toFloat(),
+            o.optDouble("ti", 0.0).toFloat(), o.optDouble("hi", 0.0).toFloat(), o.optDouble("sh", 0.0).toFloat(), o.optDouble("wh", 0.0).toFloat(), o.optDouble("bl", 0.0).toFloat(), o.optDouble("vb", 0.0).toFloat())
     }
 }
 
