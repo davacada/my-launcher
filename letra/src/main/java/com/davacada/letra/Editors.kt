@@ -88,6 +88,13 @@ open class LineEdit(ctx: Context) : EditText(ctx) {
 
     fun setQuiet(t: String) { busy = true; setText(t); busy = false }
 
+    /** Where the finger last went down on screen (for bubbles that pop up at the finger). */
+    var downRawX = 0f; var downRawY = 0f
+    override fun dispatchTouchEvent(e: android.view.MotionEvent): Boolean {
+        if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) { downRawX = e.rawX; downRawY = e.rawY }
+        return super.dispatchTouchEvent(e)
+    }
+
     override fun onCreateInputConnection(out: EditorInfo): InputConnection? {
         val ic = super.onCreateInputConnection(out) ?: return null
         out.imeOptions = out.imeOptions or EditorInfo.IME_FLAG_NO_ENTER_ACTION

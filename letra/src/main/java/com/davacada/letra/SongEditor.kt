@@ -174,21 +174,90 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
         focus?.let { f -> edits[f]?.let { e -> a.main.post { e.requestFocus(); e.setSelection(if (at < 0) e.text.length else at.coerceAtMost(e.text.length)); a.showKeyboard(e) } } }
     }
 
+    /** A section is a bubble: tap it once to remove it (with Undo), hold it to rename it. */
     private fun sectionRow(l: SongLine): View {
-        val e = LineEdit(a).apply {
-            setQuiet(l.text); hint = "Section"
-            textSize = 12.5f; letterSpacing = 0.12f; setTextColor(Look.TERRACOTTA); setHintTextColor(0x88B05E26.toInt())
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_WORDS
-            setPadding(a.dp(12), a.dp(5), a.dp(12), a.dp(5))
-            background = pill(0x1FB05E26, a.dpf(13f))
+        val t = a.text(l.text.ifBlank { "Section" }, 12.5f, Look.TERRACOTTA, true).apply {
+            letterSpacing = 0.12f; isAllCaps = true
+            setPadding(a.dp(12), a.dp(6), a.dp(12), a.dp(6))
+            background = ripple(pill(0x1FB05E26, a.dpf(13f)), pill(0xFFFFFFFF.toInt(), a.dpf(13f)))
+            contentDescription = "${l.text} section. Tap to remove, hold to rename"
         }
-        wire(e, l)
-        edits[l] = e
+        var rx = 0f; var ry = 0f
+        t.setOnTouchListener { _, e -> if (e.actionMasked == MotionEvent.ACTION_DOWN) { rx = e.rawX; ry = e.rawY }; false }
+        t.setOnClickListener { removeSection(l) }
+        t.setOnLongClickListener {
+            t.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            sectionBubble(rx, ry, "Rename this section") { name -> l.text = name; dirty(); render() }
+            true
+        }
         return LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL; setPadding(a.dp(6), a.dp(18), 0, a.dp(4))
-            addView(e, LinearLayout.LayoutParams(-2, -2))
+            addView(t, LinearLayout.LayoutParams(-2, -2))
         }
+    }
+
+    private fun removeSection(l: SongLine) {
+        commit()
+        val i = n.lines.indexOf(l); if (i < 0) return
+        n.lines.removeAt(i); dirty(); render()
+        a.undoBar("Removed “${l.text}”") { n.lines.add(i.coerceAtMost(n.lines.size), l); dirty(); render() }
+    }
+
+    /** Holding a lyric line: a bubble at your finger to start a section right above that line. */
+    private fun sectionHere(l: SongLine, rx: Float, ry: Float) {
+        sectionBubble(rx, ry, "Start a section here") { name ->
+            commit()
+            val i = n.lines.indexOf(l); if (i < 0) return@sectionBubble
+            val above = n.lines.getOrNull(i - 1)
+            if (above != null && above.section) above.text = name // right under a section: rename it rather than stack two
+            else n.lines.add(i, SongLine(true, name))
+            dirty(); render(l, 0)
+        }
+    }
+
+    private var bubble: android.widget.PopupWindow? = null
+
+    /** A small dark bubble of section names that pops up at the finger. */
+    private fun sectionBubble(rx: Float, ry: Float, title: String, pick: (String) -> Unit) {
+        bubble?.dismiss()
+        val verses = n.lines.count { it.section && it.text.startsWith("Verse") }
+        val names = listOf("Verse ${verses + 1}", "Pre-chorus", "Chorus", "Bridge", "Hook", "Intro", "Outro", "Coro", "Estribillo", "Puente") +
+            n.lines.filter { it.section && it.text.isNotBlank() }.map { it.text }.distinct().filter { !it.startsWith("Verse") }
+        val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; setPadding(a.dp(8), 0, a.dp(8), 0) }
+        lateinit var pw: android.widget.PopupWindow
+        (names.distinct() + "Name…").forEach { nm ->
+            row.addView(a.text(nm, 13.5f, Look.SAND, true).apply {
+                gravity = Gravity.CENTER; setPadding(a.dp(13), 0, a.dp(13), 0)
+                background = ripple(pill(0x2EF5EDDF, a.dpf(16f)), pill(0xFFFFFFFF.toInt(), a.dpf(16f)))
+                setOnClickListener {
+                    pw.dismiss()
+                    if (nm == "Name…") {
+                        val e = android.widget.EditText(a).apply { setTextColor(Look.UMBER); hint = "Section name" }
+                        android.app.AlertDialog.Builder(a, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert).setTitle(title)
+                            .setView(FrameLayout(a).apply { setPadding(a.dp(20), a.dp(4), a.dp(20), 0); addView(e) })
+                            .setPositiveButton("OK") { _, _ -> e.text.toString().trim().takeIf { it.isNotEmpty() }?.let(pick) }
+                            .setNegativeButton("Cancel", null).show()
+                    } else pick(nm)
+                }
+            }, LinearLayout.LayoutParams(-2, a.dp(34)).apply { marginEnd = a.dp(6) })
+        }
+        val card = LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(0, a.dp(10), 0, a.dp(10))
+            background = pill(0xF23D2F23.toInt(), a.dpf(20f)); elevation = a.dpf(10f)
+            addView(a.text(title.uppercase(), 10.5f, 0xB3F5EDDF.toInt(), true).apply { letterSpacing = 0.1f; setPadding(a.dp(16), 0, a.dp(16), a.dp(8)) })
+            addView(HorizontalScrollView(a).apply { isHorizontalScrollBarEnabled = false; addView(row) })
+        }
+        val w = (a.resources.displayMetrics.widthPixels - a.dp(24))
+        card.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.AT_MOST), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+        pw = android.widget.PopupWindow(card, minOf(card.measuredWidth, w), -2, true).apply {
+            elevation = a.dpf(10f); isOutsideTouchable = true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0))
+            animationStyle = android.R.style.Animation_Dialog
+        }
+        bubble = pw
+        val x = (rx - pw.width / 2f).toInt().coerceIn(a.dp(12), a.resources.displayMetrics.widthPixels - pw.width - a.dp(12))
+        val y = (ry - card.measuredHeight - a.dp(36)).toInt().coerceAtLeast(a.dp(40))
+        pw.showAtLocation(a.root, Gravity.NO_GRAVITY, x, y)
     }
 
     private fun lyricRow(l: SongLine): View {
@@ -199,6 +268,10 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
             this.chordMode = this@SongEditor.chordMode
             onChordTap = { ch, pos -> chordSheet(l, ch, pos) }
             layoutChords()
+        }
+        e.setOnLongClickListener {
+            e.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            sectionHere(l, e.downRawX, e.downRawY); true
         }
         wire(e, l)
         edits[l] = e
@@ -753,7 +826,7 @@ class SongEditor(a: LetraActivity, n: Note) : Editor(a, n) {
 
     override fun commit() { edits.forEach { (l, e) -> if (!e.text.contains('\n')) l.text = e.text.toString() } }
     override fun focusFirst() { val f = n.lines.firstOrNull { !it.section } ?: return; edits[f]?.let { a.showKeyboard(it) } }
-    override fun release() { super.release(); stopPlaying(); Click.stop(); recFinish?.invoke() } // a take in progress is kept
+    override fun release() { bubble?.dismiss(); super.release(); stopPlaying(); Click.stop(); recFinish?.invoke() } // a take in progress is kept
 }
 
 /** The rolling level meter on the recording screen. */

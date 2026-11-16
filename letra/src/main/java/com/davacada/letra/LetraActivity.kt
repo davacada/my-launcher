@@ -488,6 +488,27 @@ class LetraActivity : Activity() {
         root.removeView(o)
     }
 
+    private var undo: View? = null
+
+    /** A dark bar near the bottom: what just happened, and Undo (gone after a few seconds). */
+    fun undoBar(msg: String, onUndo: () -> Unit) {
+        undo?.let { root.removeView(it) }
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(18), 0, dp(6), 0); background = pill(0xF23D2F23.toInt(), dpf(22f)); elevation = dpf(8f)
+            addView(text(msg, 14f, Look.SAND), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(text("Undo", 14f, 0xFFF0B27A.toInt(), true).apply {
+                gravity = Gravity.CENTER; setPadding(dp(14), 0, dp(14), 0)
+                setOnClickListener { root.removeView(this@apply.parent as View); undo = null; onUndo() }
+            }, LinearLayout.LayoutParams(-2, dp(44)))
+        }
+        val lp = FrameLayout.LayoutParams(-1, dp(48), Gravity.BOTTOM).apply { setMargins(dp(16), 0, dp(16), screen.paddingBottom + dp(76)) }
+        root.addView(bar, lp)
+        undo = bar
+        bar.alpha = 0f; bar.animate().alpha(1f).setDuration(150).start()
+        main.postDelayed({ if (undo === bar) { root.removeView(bar); undo = null } }, 4500)
+    }
+
     fun toast(s: String) = android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show()
 
     fun showKeyboard(v: View) { v.requestFocus(); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(v, 0) }

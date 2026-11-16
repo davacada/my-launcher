@@ -128,7 +128,8 @@ Each release also has `letra.apk`, a sandstone notebook with a mode for each kin
 
 - **Note:** formatted text: bold, italic, headings, bullets; *To list* turns the lines into a checklist
 - **List:** checklists; ticked items move to *Completed*, with uncheck all, clear done and A–Z
-- **Song:** sections (verse, chorus, bridge… or repeat one), chords placed over the exact syllable (tap *Chords*,
+- **Song:** sections (verse, chorus, bridge… or repeat one; hold a lyric line and a bubble pops up to start a section
+  right there; tap a section once to remove it, with Undo; hold it to rename it), chords placed over the exact syllable (tap *Chords*,
   then a word), key / transpose / capo / tempo with a click, syllable counts per line, coloured dots for lines that
   rhyme, and rhyme suggestions in English and Spanish that work offline
 - **Recording in Song mode:** *Record* offers two ways: *Record and transcribe* writes out the words as you sing
