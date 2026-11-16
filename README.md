@@ -146,3 +146,19 @@ Each release also has `letra.apk`, a sandstone notebook with a mode for each kin
   they were
 - **Share:** songs as a chord-sheet PDF, lyrics with or without chords, a recording, or a Letra file; scripts as a
   screenplay PDF, Fountain, plain text or a scene list; notes and lists as text or PDF
+
+## Roll
+
+`roll.apk` is a video editor in matt black with grain (icon: a 35mm film reel):
+
+- **Projects:** *New project* picks clips from your phone; projects keep your edit (the videos stay where they are)
+- **Editor:** preview on top, a timeline of film-strip clips with a fixed playhead (swipe to scrub, pinch to zoom),
+  tap a clip to select it and drag its amber ends to trim. Split at the playhead, speed (0.25× to 4×), clip volume or
+  mute, copy, delete, move earlier/later (hold a clip), frame shape (original, 9:16, 1:1, 4:5, 16:9), undo and redo
+- **Film looks:** film stocks (Portra 400 and 160, Gold 200, Ektar 100, Superia 400, Velvia 50, CineStill 800T),
+  black & white (Tri-X, HP5, Delta 3200) and camera looks (Super 8, VHS, Hi8, 16mm Bolex, Cine 709, Blockbuster), each
+  with strength, grain and vignette; import your own **.cube LUTs**; **Adjust** has exposure, contrast, saturation and
+  warmth. Hold the preview to see it without the look
+- **Export:** MP4 video (720p, 1080p, 4K; 24, 25 or 30 fps; three quality levels), **GIF** (width, fps, length,
+  loop/once/bounce) and **Telegram video stickers** (WEBM VP9, 512 px, 3 s, no sound, kept under 256 KB, sent straight
+  to Telegram). Videos land in Movies/Roll, GIFs in Pictures/Roll

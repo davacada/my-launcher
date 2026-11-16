@@ -41,6 +41,7 @@ jobs:
           cp camera/build/outputs/apk/debug/camera-debug.apk pro-camera.apk
           cp sanka/build/outputs/apk/debug/sanka-debug.apk sanka.apk
           cp letra/build/outputs/apk/debug/letra-debug.apk letra.apk
+          cp roll/build/outputs/apk/debug/roll-debug.apk roll.apk
 
       - uses: actions/upload-artifact@v4
         with:
@@ -50,6 +51,7 @@ jobs:
             pro-camera.apk
             sanka.apk
             letra.apk
+            roll.apk
 
       - name: Publish as a release (easy to download on the phone)
         uses: softprops/action-gh-release@v2
@@ -61,4 +63,5 @@ jobs:
             pro-camera.apk
             sanka.apk
             letra.apk
+            roll.apk
           make_latest: true

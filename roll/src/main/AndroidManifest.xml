@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="Roll"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="true"
+        android:largeHeap="true"
+        android:theme="@style/RollTheme">
+        <activity
+            android:name=".RollActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Exports you share straight from Roll (e.g. a sticker to Telegram). -->
+        <provider
+            android:name=".ShareProvider"
+            android:authorities="com.davacada.roll.share"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>
