@@ -233,7 +233,7 @@ class SankaActivity : Activity() {
         blockShots()
         unlocked = false
         releasePlayer()
-        thumbs.evictAll()
+        thumbs.evictAll(); bgCache = null; heroCache = null
         selected.clear(); picked.clear(); pickingLockBg = false; pickingCover = false; resultOpen = false; dupesOpen = false
         if (pin.isSet) show(Screen.LOCK)
     }
@@ -265,7 +265,11 @@ class SankaActivity : Activity() {
     private fun rerender() {
         val y = scroll?.scrollY ?: 0
         show(screen)
-        scroll?.let { sv -> sv.post { sv.scrollTo(0, y) } }
+        scroll?.let { sv ->
+            sv.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+                override fun onPreDraw(): Boolean { sv.viewTreeObserver.removeOnPreDrawListener(this); sv.scrollTo(0, y); return true }
+            })
+        }
     }
 
     private fun show(s: Screen) {
@@ -273,6 +277,7 @@ class SankaActivity : Activity() {
         screen = s
         val r = root ?: return
         scroll = null
+        liveCells.clear(); selTitle = null; selBar = null; selButtons = null
         r.removeAllViews()
         if (s == Screen.SETUP) r.addView(lockBackground(), FrameLayout.LayoutParams(-1, -1))
         r.addView(when (s) {
@@ -457,7 +462,7 @@ class SankaActivity : Activity() {
         if (left != null) addView(left, LinearLayout.LayoutParams(dp(44), dp(44)))
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            addView(label(title, 24f, bold = true))
+            addView(label(title, 24f, bold = true).apply { tag = "title" })
             if (sub.isNotEmpty()) addView(label(sub, 13f, 0xB3FFFFFF.toInt()))
         }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(if (left == null) 0 else 4) })
         right.forEach { addView(it, LinearLayout.LayoutParams(dp(44), dp(44))) }
@@ -587,13 +592,15 @@ class SankaActivity : Activity() {
 
     // ------------------------------------------------------------------ by similarity
 
+    private var alikeMemo: Pair<Long, List<List<Item>>>? = null // comparing every picture is slow; done again only when they change
     @Volatile private var analysing = false
     @Volatile private var leftToLook = 0
 
     /** Look-alike sets first, then the rest grouped by scene (biggest first), small groups under Other. */
     private fun similarParts(all: List<Item>): List<Pair<String, List<Item>>> {
         val out = ArrayList<Pair<String, List<Item>>>()
-        val alike = Similar.lookAlikes(all)
+        val memoKey = all.sumOf { it.id.hashCode().toLong() * 31 + it.seen + it.ph.hashCode() }
+        val alike = alikeMemo?.takeIf { it.first == memoKey }?.second ?: Similar.lookAlikes(all).also { alikeMemo = memoKey to it }
         val inAlike = HashSet<String>()
         alike.forEach { g -> out.add("LOOK ALIKE" to byCreated(g)); g.forEach { inAlike.add(it.id) } }
         val rest = all.filter { it.id !in inAlike }
@@ -641,6 +648,7 @@ class SankaActivity : Activity() {
         list.forEachIndexed { i, item ->
             val cell = Cell(this, square = false, radius = 6f)
             cell.set(item.id, item.duration, item.isVideo, selected.isNotEmpty(), item.id in selected)
+            liveCells[item.id] = cell
             thumbInto(cell, item.id) { vault?.thumb(item) }
             cell.setOnClickListener {
                 when {
@@ -657,21 +665,21 @@ class SankaActivity : Activity() {
                         Toast.makeText(this, "Cover changed", Toast.LENGTH_SHORT).show()
                         show(Screen.FOLDER)
                     }
-                    selected.isNotEmpty() -> { if (!selected.remove(item.id)) selected.add(item.id); rerender() }
+                    selected.isNotEmpty() -> toggleSelect(item)
                     else -> { viewList = all; viewIndex = offset + i; show(Screen.VIEWER) }
                 }
             }
             cell.setOnLongClickListener {
                 it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-                pickingCover = false
-                if (!selected.remove(item.id)) selected.add(item.id); rerender(); true
+                if (pickingCover) { pickingCover = false; if (!selected.remove(item.id)) selected.add(item.id); rerender() } else toggleSelect(item)
+                true
             }
             j.addView(cell)
         }
         return j
     }
 
-    private fun bottomBar(frame: FrameLayout, buttons: List<View>) {
+    private fun bottomBar(frame: FrameLayout, buttons: List<View>): LinearLayout {
         frame.addView(View(this).apply {
             background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(BG, BG, 0))
         }, FrameLayout.LayoutParams(-1, insetBottom + dp(110), Gravity.BOTTOM))
@@ -679,8 +687,36 @@ class SankaActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
             background = pill(0xEB151A22.toInt(), dpf(32f)); setPadding(dp(8), dp(8), dp(8), dp(8)); elevation = dpf(8f)
         }
-        buttons.forEach { bar.addView(it, LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4); marginEnd = dp(4) }) }
+        fillBar(bar, buttons)
         frame.addView(bar, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = insetBottom + dp(20) })
+        return bar
+    }
+
+    private fun fillBar(bar: LinearLayout, buttons: List<View>) {
+        bar.removeAllViews()
+        buttons.forEach { bar.addView(it, LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4); marginEnd = dp(4) }) }
+    }
+
+    // ------------------------------------------------------------------ selecting without rebuilding the screen
+
+    private val liveCells = HashMap<String, Cell>()       // tiles on screen, by item id
+    private var selTitle: TextView? = null                  // the title that says "3 selected"
+    private var selBar: LinearLayout? = null
+    private var selButtons: (() -> List<View>)? = null      // what the bottom bar holds while selecting
+    private var selNormalTitle = ""
+
+    /**
+     * Ticks or unticks [item]. While a selection is going on, only the ticks, the title and the bottom bar change,
+     * so the screen doesn't flash or jump. Starting or ending a selection rebuilds it once.
+     */
+    private fun toggleSelect(item: Item) {
+        val wasEmpty = selected.isEmpty()
+        if (!selected.remove(item.id)) selected.add(item.id)
+        val bar = selBar; val buttons = selButtons
+        if (wasEmpty != selected.isEmpty() || bar == null || buttons == null) { rerender(); return }
+        liveCells[item.id]?.let { c -> c.set(item.id, item.duration, item.isVideo, true, item.id in selected) }
+        selTitle?.text = "${selected.size} selected"
+        fillBar(bar, buttons())
     }
 
     private fun selectionButtons(items: List<Item>, inFolder: Boolean): List<View> {
@@ -711,9 +747,11 @@ class SankaActivity : Activity() {
             v.inFolder(f.id).maxOfOrNull { if (byDate) whenOf(it) else it.added } ?: f.created
         }
         val sub = "${folders.size} folder${if (folders.size == 1) "" else "s"} · ${v.items.size} item${if (v.items.size == 1) "" else "s"}"
-        col.addView(header(if (selected.isEmpty()) "Sanka" else "${selected.size} selected", sub,
+        val hdr = header(if (selected.isEmpty()) "Sanka" else "${selected.size} selected", sub,
             if (selected.isEmpty()) null else iconButton(R.drawable.ic_close, "Cancel selection") { selected.clear(); rerender() },
-            emptyList()))
+            emptyList())
+        col.addView(hdr)
+        selTitle = hdr.findViewWithTag("title")
         if (shotsAllowed) col.addView(shotsBanner())
 
         if (v.items.isEmpty() && folders.isEmpty()) {
@@ -737,7 +775,8 @@ class SankaActivity : Activity() {
         }
         homeBackground()?.let { frame.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
-        bottomBar(frame, if (pickingLockBg) listOf(glassButton(R.drawable.ic_close, "Cancel choosing background") { pickingLockBg = false; rerender() })
+        if (selected.isNotEmpty() && !pickingLockBg) selButtons = { selectionButtons(loose, false) }
+        selBar = bottomBar(frame, if (pickingLockBg) listOf(glassButton(R.drawable.ic_close, "Cancel choosing background") { pickingLockBg = false; rerender() })
             else if (selected.isEmpty()) listOf(
                 compactButton(R.drawable.ic_sort, "Order") { sortMenu() },
                 compactButton(R.drawable.ic_lock, "Lock") { lock() },
@@ -907,17 +946,20 @@ class SankaActivity : Activity() {
         frame.addView(shade, FrameLayout.LayoutParams(-1, -1))
         bgImg = img; bgShade = shade
         applyBgLook()
+        bgCache?.let { (cid, bm) -> if (cid == id) { img.setImageBitmap(bm); img.alpha = 1f; return frame } }
         io.execute {
             val v = vault ?: return@execute
             val item = v.items.firstOrNull { it.id == id }
             if (item == null) { main.post { prefs.edit().remove("homeBg").apply() }; return@execute }
             // the small picture first (instant), then the sharp one
             (thumbs.get(item.id) ?: v.thumb(item))?.let { t -> main.post { if (img.drawable == null) { img.setImageBitmap(t); img.animate().alpha(1f).setDuration(250).start() } } }
-            if (!item.isVideo) v.photo(item, 1080)?.let { b -> main.post { img.setImageBitmap(b); img.alpha = 1f } }
+            if (!item.isVideo) v.photo(item, 1080)?.let { b -> main.post { bgCache = id to b; img.setImageBitmap(b); img.alpha = 1f } }
         }
         return frame
     }
 
+    private var bgCache: Pair<String, Bitmap>? = null  // the sharp background, so redrawing the screen doesn't fade it in again
+    private var heroCache: Pair<String, Bitmap>? = null
     private var bgImg: ImageView? = null
     private var bgShade: View? = null
     private val bgBlur get() = prefs.getFloat("homeBlurDp", 28f)
@@ -1033,9 +1075,11 @@ class SankaActivity : Activity() {
         val hero = FrameLayout(this)
         val heroImg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         hero.addView(heroImg, FrameLayout.LayoutParams(-1, -1))
-        if (cover != null) {
+        val hc = heroCache
+        if (cover != null && hc != null && hc.first == cover.id) heroImg.setImageBitmap(hc.second)
+        else if (cover != null) {
             thumbs.get(cover.id)?.let { heroImg.setImageBitmap(it) } ?: io.execute { v.thumb(cover)?.let { b -> main.post { if (heroImg.drawable == null) heroImg.setImageBitmap(b) } } }
-            if (!cover.isVideo) io.execute { v.photo(cover, 1600)?.let { b -> main.post { heroImg.setImageBitmap(b) } } }
+            if (!cover.isVideo) io.execute { v.photo(cover, 1600)?.let { b -> main.post { heroCache = cover.id to b; heroImg.setImageBitmap(b) } } }
         }
         hero.addView(View(this).apply {
             background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
@@ -1051,10 +1095,11 @@ class SankaActivity : Activity() {
         hero.addView(topRow, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         hero.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), 0, dp(20), dp(14))
-            addView(label(if (selected.isEmpty()) f.name else "${selected.size} selected", 30f, bold = true).apply { maxLines = 2 })
+            addView(label(if (selected.isEmpty()) f.name else "${selected.size} selected", 30f, bold = true).apply { maxLines = 2; tag = "title" })
             addView(label(if (pickingCover) "Tap the picture you want as the cover" else count(items), 13.5f, if (pickingCover) ACCENT else 0xFFCFD5DE.toInt()))
         }, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         col.addView(hero, LinearLayout.LayoutParams(-1, insetTop + dp(if (cover != null) 260 else 170)))
+        selTitle = hero.findViewWithTag("title")
 
         if (items.isEmpty()) {
             col.addView(label("This folder is empty.\nTap Add to hide photos and videos straight into it.", 14f, 0x99FFFFFF.toInt()).apply {
@@ -1063,7 +1108,8 @@ class SankaActivity : Activity() {
         } else col.addView(collage(items, 160))
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
 
-        bottomBar(frame, when {
+        if (selected.isNotEmpty() && !pickingLockBg) selButtons = { selectionButtons(items, true) }
+        selBar = bottomBar(frame, when {
             pickingLockBg -> listOf(glassButton(R.drawable.ic_close, "Cancel choosing background") { pickingLockBg = false; rerender() })
             selected.isNotEmpty() -> selectionButtons(items, true)
             pickingCover -> listOf(glassButton(R.drawable.ic_close, "Cancel") { pickingCover = false; rerender() })
