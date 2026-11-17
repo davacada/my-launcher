@@ -878,10 +878,10 @@ class RollActivity : Activity() {
 
     // ---------------------------------------------------------------- frames
 
-    private fun frameAt(c: Clip, ms: Long, h: Int): Bitmap? = try {
+    private fun frameAt(c: Clip, ms: Long, h: Int, exact: Boolean = false): Bitmap? = try {
         val mr = MediaMetadataRetriever(); mr.setDataSource(this, Uri.parse(c.uri))
         val w = if (c.w > 0 && c.h > 0) h * c.w / c.h else h
-        val b = mr.getScaledFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h); mr.release(); b
+        val b = mr.getScaledFrameAtTime(ms * 1000, if (exact) MediaMetadataRetriever.OPTION_CLOSEST else MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h); mr.release(); b
     } catch (e: Exception) { null }
 
     /** The grade applied to a small picture on the CPU (for look thumbnails and project covers). */
@@ -955,51 +955,51 @@ class RollActivity : Activity() {
         body.addView(FrameLayout(this).apply { addView(frame, FrameLayout.LayoutParams(fw, if (fw < (fh * shape).toInt()) (fw / shape).toInt() else fh, Gravity.CENTER)) },
             LinearLayout.LayoutParams(-1, fh).apply { topMargin = dp(16) })
         exPreview?.let { frame.setImageBitmap(it) } ?: bg.execute {
-            val c = p.clips.getOrNull(p.at(timeline?.time() ?: 0).first)
-            val bm = c?.let { frameAt(it, it.startMs + 300, 360) }?.let { gradePreview(it, p.grade) }
+            val (ci, off) = p.at(timeline?.time() ?: 0)
+            val c = p.clips.getOrNull(ci)
+            val bm = c?.let { frameAt(it, it.startMs + (off * it.speed).toLong(), 480, exact = true) }?.let { gradePreview(it, p.grade) }
             main.post { exPreview = bm; frame.setImageBitmap(bm) }
         }
-        /** A row of big values; the chosen one is amber with a bar under it. */
+        /** A row of choices: a big value, a small line under it, and an amber bar under the chosen one. */
         fun dial(title: String, opts: List<Pair<String, String>>, sel: Int, pick: (Int) -> Unit) {
-            body.addView(text(title.uppercase(), 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(2), dp(20), 0, dp(6)) })
+            body.addView(text(title.uppercase(), 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(2), dp(22), 0, dp(4)) })
             val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            opts.forEachIndexed { i, (big, unit) ->
+            opts.forEachIndexed { i, (big, small) ->
                 val on = i == sel
                 r.addView(LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(4), dp(14), dp(4)); background = ripple()
-                    addView(LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM
-                        addView(context.text(big, 22f, if (on) C.AMBER else C.TEXT, true, mono = true))
-                        if (unit.isNotEmpty()) addView(context.text(unit, 11f, if (on) C.AMBER else C.SUB, true).apply { setPadding(dp(2), 0, 0, dp(3)) })
-                    })
-                    addView(View(context).apply { background = pill(if (on) C.AMBER else 0, dpf(2f)) }, LinearLayout.LayoutParams(dp(22), dp(3)).apply { topMargin = dp(5) })
+                    orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(6), dp(20), dp(6)); background = ripple()
+                    addView(context.text(big, 20f, if (on) C.AMBER else C.TEXT, true).apply { maxLines = 1 }, LinearLayout.LayoutParams(-2, -2))
+                    if (small.isNotEmpty()) addView(context.text(small, 11f, if (on) C.AMBER else C.SUB).apply { maxLines = 1; setPadding(0, dp(2), 0, 0) }, LinearLayout.LayoutParams(-2, -2))
+                    addView(View(context).apply { background = pill(if (on) C.AMBER else 0, dpf(2f)) }, LinearLayout.LayoutParams(dp(24), dp(3)).apply { topMargin = dp(7) })
                     setOnClickListener { if (exporting == null) { pick(i); renderExport() } }
-                })
+                }, LinearLayout.LayoutParams(-2, -2))
             }
-            body.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(r) })
+            body.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(r, FrameLayout.LayoutParams(-2, -2)) })
         }
         val t0 = timeline?.time() ?: 0L
         val chips: List<String>
         when (exFormat) {
             "gif" -> {
-                dial("Width", listOf("320" to "px", "480" to "px", "720" to "px"), listOf(320, 480, 720).indexOf(gifW)) { gifW = listOf(320, 480, 720)[it] }
-                dial("Frame rate", listOf(12, 15, 24, 25, 30).map { "$it" to "fps" }, listOf(12, 15, 24, 25, 30).indexOf(gifFps)) { gifFps = listOf(12, 15, 24, 25, 30)[it] }
-                dial("Length from ${fmt(t0)}", listOf("3" to "s", "6" to "s", "10" to "s", "All" to ""), listOf(3, 6, 10, 0).indexOf(gifSecs)) { gifSecs = listOf(3, 6, 10, 0)[it] }
-                dial("Loop", listOf("∞" to "forever", "1" to "once", "⇄" to "bounce"), listOf("forever", "once", "bounce").indexOf(gifLoop)) { gifLoop = listOf("forever", "once", "bounce")[it] }
+                dial("Width", listOf("320 px" to "small", "480 px" to "chats", "720 px" to "sharp"), listOf(320, 480, 720).indexOf(gifW)) { gifW = listOf(320, 480, 720)[it] }
+                dial("Frame rate", listOf(12, 15, 24, 25, 30).map { "$it fps" to (if (it <= 15) "lighter" else "smoother") }, listOf(12, 15, 24, 25, 30).indexOf(gifFps)) { gifFps = listOf(12, 15, 24, 25, 30)[it] }
+                dial("Length", listOf("3 s" to "from ${fmt(t0)}", "6 s" to "from ${fmt(t0)}", "10 s" to "from ${fmt(t0)}", "All" to fmt(p.lengthMs)), listOf(3, 6, 10, 0).indexOf(gifSecs)) { gifSecs = listOf(3, 6, 10, 0)[it] }
+                dial("Loop", listOf("Forever" to "repeats", "Once" to "plays one time", "Bounce" to "forward, back"), listOf("forever", "once", "bounce").indexOf(gifLoop)) { gifLoop = listOf("forever", "once", "bounce")[it] }
                 val (w, h) = gifSize(p); val secs = gifRange(p).let { (a, b) -> (b - a) / 1000f }
                 chips = listOf("$w × $h", "%.1f s".format(secs), "≈ %.1f MB".format(w * h * gifFps * secs * 0.35f / 1_000_000f * (if (gifLoop == "bounce") 2 else 1)), "Pictures/Roll")
             }
             "sticker" -> {
-                dial("Shape", listOf("1:1" to "square", "▭" to "keep shape"), if (stSquare) 0 else 1) { stSquare = it == 0; exPreview = exPreview }
-                dial("Frame rate", listOf(24, 25, 30).map { "$it" to "fps" }, listOf(24, 25, 30).indexOf(stFps)) { stFps = listOf(24, 25, 30)[it] }
+                dial("Shape", listOf("Square" to "512 × 512", "Keep shape" to "512 on the long side"), if (stSquare) 0 else 1) { stSquare = it == 0 }
+                dial("Frame rate", listOf(24, 25, 30).map { "$it fps" to "" }, listOf(24, 25, 30).indexOf(stFps)) { stFps = listOf(24, 25, 30)[it] }
                 chips = listOf("VP9 · WEBM", "3 s from ${fmt(t0)}", "no sound", "≤ 256 KB")
             }
             else -> {
-                dial("Resolution", listOf("720" to "p", "1080" to "p", "4K" to ""), listOf(720, 1080, 2160).indexOf(exShort)) { exShort = listOf(720, 1080, 2160)[it] }
-                dial("Frame rate", listOf(24, 25, 30).map { "$it" to "fps" }, listOf(24, 25, 30).indexOf(exFps)) { exFps = listOf(24, 25, 30)[it] }
-                dial("Quality", listOf("S" to "smaller", "M" to "balanced", "L" to "best"), exQuality) { exQuality = it }
+                fun dims(sh: Int) = Render.size(p, sh).let { (a, b) -> "$a × $b" }
+                dial("Resolution", listOf("720p" to dims(720), "1080p" to dims(1080), "4K" to dims(2160)), listOf(720, 1080, 2160).indexOf(exShort)) { exShort = listOf(720, 1080, 2160)[it] }
+                dial("Frame rate", listOf(24 to "film", 25 to "PAL video", 30 to "phone video").map { (f, n) -> "$f fps" to n }, listOf(24, 25, 30).indexOf(exFps)) { exFps = listOf(24, 25, 30)[it] }
                 val (w, h) = Render.size(p, exShort)
-                chips = listOf("$w × $h", "H.264", "≈ ${(videoBitrate(w, h) / 8f * p.lengthMs / 1000f / 1_000_000f).toInt()} MB", if (p.mute) "no sound" else "with sound", "Movies/Roll")
+                val mb = { q: Int -> val keep = exQuality; exQuality = q; val m = (videoBitrate(w, h) / 8f * p.lengthMs / 1000f / 1_000_000f).toInt(); exQuality = keep; "≈ $m MB" }
+                dial("Quality", listOf("Small" to mb(0), "Balanced" to mb(1), "Best" to mb(2)), exQuality) { exQuality = it }
+                chips = listOf("H.264", "%.1f Mb/s".format(videoBitrate(w, h) / 1_000_000f), if (p.mute) "no sound" else "with sound", "saves to Movies/Roll")
             }
         }
         val chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(20), 0, 0) }
