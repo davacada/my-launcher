@@ -463,7 +463,7 @@ class RollActivity : Activity() {
     }
 
     private var showingOriginal = false
-    private val showOriginal = Runnable { showingOriginal = true; player?.setVideoEffects(baseEffects()); lookTag?.text = "ORIGINAL" }
+    private val showOriginal = Runnable { showingOriginal = true; setEffects(baseEffects()); lookTag?.text = "ORIGINAL" }
 
     /** The timeline and the tools under the preview. */
     private fun editBottom() {
@@ -519,7 +519,13 @@ class RollActivity : Activity() {
         pl.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { clipParams() }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playBtn?.setImageResource(if (isPlaying) R.drawable.i_pause else R.drawable.i_play); if (isPlaying) main.post(ticker) }
-            override fun onPlayerError(error: PlaybackException) { toast("Playback: ${error.errorCodeName}") }
+            override fun onPlayerError(error: PlaybackException) {
+                if (!noGrain && error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED) {
+                    noGrain = true; toast("Grain isn't supported on the preview here; showing the look without it")
+                    pl.setVideoEffects(baseEffects() + gradeEffectsSafe()); pl.prepare(); return
+                }
+                toast("Playback: ${error.errorCodeName}")
+            }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) { pl.pause(); pl.seekTo(0, 0) } }
         })
         loadItems(); pl.prepare()
@@ -591,10 +597,18 @@ class RollActivity : Activity() {
 
     // ---------------------------------------------------------------- grade
 
-    private fun gradeEffectsSafe(): List<Effect> = try { Render.gradeEffects(this, project!!.grade, store.lutDir) } catch (e: Exception) { emptyList() }
+    private var noGrain = false
+    private fun gradeEffectsSafe(): List<Effect> = try {
+        Render.gradeEffects(this, project!!.grade, store.lutDir).filter { !(noGrain && it is GrainEffect) }
+    } catch (e: Exception) { emptyList() }
 
-    private val gradeRun = Runnable {
-        player?.setVideoEffects(baseEffects() + gradeEffectsSafe()); updateLookTag()
+    private val gradeRun = Runnable { setEffects(baseEffects() + gradeEffectsSafe()); updateLookTag() }
+
+    /** Changes the look on the preview and redraws the paused frame, so you see it the moment you choose it. */
+    private fun setEffects(list: List<Effect>) {
+        val pl = player ?: return
+        pl.setVideoEffects(list)
+        if (!pl.isPlaying) { val i = pl.currentMediaItemIndex; val pos = pl.currentPosition; main.postDelayed({ player?.seekTo(i, pos) }, 60) }
     }
     private fun applyGrade() { main.removeCallbacks(gradeRun); main.postDelayed(gradeRun, 90) }
 

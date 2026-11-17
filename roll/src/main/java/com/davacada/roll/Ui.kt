@@ -23,7 +23,7 @@ import kotlin.random.Random
 
 /** Matt black with grain, warm off-white text, amber for what's active. No boxes around buttons. */
 object C {
-    const val BLACK = 0xFF050505.toInt()
+    const val BLACK = 0xFF000000.toInt()
     const val TEXT = 0xFFEFE8DF.toInt()
     const val SUB = 0xFF9A9086.toInt()
     const val FAINT = 0xFF6B6259.toInt()
@@ -42,11 +42,11 @@ fun Context.grain(): Drawable {
     val r = Random(9)
     val px = IntArray(n * n) {
         val v = r.nextFloat()
-        when { v > 0.72f -> Color.argb(9 + r.nextInt(14), 255, 255, 255); v < 0.3f -> Color.argb(30 + r.nextInt(60), 0, 0, 0); else -> 0 }
+        when { v > 0.8f -> Color.argb(5 + r.nextInt(9), 255, 255, 255); else -> 0 }
     }
     val bm = Bitmap.createBitmap(px, n, n, Bitmap.Config.ARGB_8888).apply { density = resources.displayMetrics.densityDpi }
     val tile = BitmapDrawable(resources, bm).apply { setTileModeXY(Shader.TileMode.REPEAT, Shader.TileMode.REPEAT) }
-    return LayerDrawable(arrayOf(GradientDrawable().apply { setColor(0xFF030303.toInt()) }, tile))
+    return LayerDrawable(arrayOf(GradientDrawable().apply { setColor(0xFF000000.toInt()) }, tile))
 }
 
 fun pill(color: Int, radius: Float, stroke: Int = 0, strokeColor: Int = 0) = GradientDrawable().apply {
@@ -141,21 +141,30 @@ class LrSlider(ctx: Context, val name: String, var value: Float, private val min
         c.drawCircle(xOf(value), y, 8 * d, knob)
     }
 
+    private var dragging = false
+    private var startX = 0f; private var startV = 0f
+
+    /** Only a touch on the knob grabs the slider; anywhere else the list scrolls as normal. */
     override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
         when (e.actionMasked) {
             android.view.MotionEvent.ACTION_DOWN -> {
-                parent?.requestDisallowInterceptTouchEvent(true)
+                val kx = xOf(value); val ky = 38 * d
+                if (kotlin.math.abs(e.x - kx) > 26 * d || kotlin.math.abs(e.y - ky) > 24 * d) { dragging = false; return false }
                 val now = android.os.SystemClock.uptimeMillis()
-                if (now - lastTap < 300) { value = if (min < 0) 0f else min; onMove(value); invalidate(); lastTap = 0; return true }
+                if (now - lastTap < 300) { value = if (min < 0) 0f else min; onMove(value); invalidate(); lastTap = 0; dragging = false; return true }
                 lastTap = now
+                dragging = true; startX = e.x; startV = value
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
             }
-            android.view.MotionEvent.ACTION_MOVE -> {
-                val v = (min + (e.x - pad) / (width - 2 * pad) * (max - min)).coerceIn(min, max)
-                value = if (min < 0 && kotlin.math.abs(v) < (max - min) * 0.015f) 0f else v   // snaps to zero
+            android.view.MotionEvent.ACTION_MOVE -> if (dragging) {
+                val v = (startV + (e.x - startX) / (width - 2 * pad) * (max - min)).coerceIn(min, max)
+                value = if (min < 0 && kotlin.math.abs(v) < (max - min) * 0.012f) 0f else v   // snaps to zero
                 onMove(value); invalidate()
             }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { dragging = false; parent?.requestDisallowInterceptTouchEvent(false) }
         }
-        return true
+        return dragging
     }
 }
 
