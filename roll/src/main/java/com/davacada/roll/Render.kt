@@ -63,8 +63,12 @@ object Render {
     fun gradeEffects(ctx: Context, g: Grade, lutDir: File): List<Effect> {
         val out = ArrayList<Effect>()
         if (!g.neutral) out.add(SingleColorLut.createFromCube(Looks.lut(g, lutDir)))
-        val gr = Looks.grainOf(g); val vi = Looks.vignetteOf(g)
-        if (gr > 0.001f || vi > 0.001f) out.add(GrainEffect(gr, vi))
+        // overlays (Media3's own overlay drawing): the chosen overlay, then vignette, then grain on top
+        val layers = ArrayList<androidx.media3.effect.TextureOverlay>()
+        if (g.overlay != "none" && Overlays.byId(g.overlay) != null && g.overlayAmount > 0.01f) layers.add(FrameOverlay(g.overlay, g.overlayAmount))
+        val vi = Looks.vignetteOf(g); if (vi > 0.01f) layers.add(FrameOverlay("vignette", vi))
+        val gr = Looks.grainOf(g); if (gr > 0.01f) layers.add(FrameOverlay("grain", gr))
+        if (layers.isNotEmpty()) out.add(androidx.media3.effect.OverlayEffect(layers))
         return out
     }
 

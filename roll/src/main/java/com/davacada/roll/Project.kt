@@ -45,22 +45,31 @@ class Grade(
     var tint: Float = 0f,          // -1 green .. 1 magenta
     var highlights: Float = 0f, var shadows: Float = 0f, var whites: Float = 0f, var blacks: Float = 0f,
     var vibrance: Float = 0f,
+    var overlay: String = "none",  // an Overlays id
+    var overlayAmount: Float = 0.8f,
+    /** Colour mix: hue, saturation, luminance (-1..1) for red, orange, yellow, green, aqua, blue, purple, magenta. */
+    val mix: FloatArray = FloatArray(24),
 ) {
+    val mixed get() = mix.any { it != 0f }
     /** True when nothing changes the colours. */
     val neutral get() = look == "none" && exposure == 0f && contrast == 0f && saturation == 0f && warmth == 0f && tint == 0f &&
-        highlights == 0f && shadows == 0f && whites == 0f && blacks == 0f && vibrance == 0f
+        highlights == 0f && shadows == 0f && whites == 0f && blacks == 0f && vibrance == 0f && !mixed
 
     fun json(): JSONObject = JSONObject().put("look", look).put("str", strength.toDouble()).put("gr", grain.toDouble()).put("vi", vignette.toDouble())
         .put("ex", exposure.toDouble()).put("co", contrast.toDouble()).put("sa", saturation.toDouble()).put("wa", warmth.toDouble())
         .put("ti", tint.toDouble()).put("hi", highlights.toDouble()).put("sh", shadows.toDouble()).put("wh", whites.toDouble()).put("bl", blacks.toDouble()).put("vb", vibrance.toDouble())
+        .put("ov", overlay).put("ova", overlayAmount.toDouble()).put("mix", JSONArray().apply { mix.forEach { put(it.toDouble()) } })
     fun copyFrom(g: Grade) {
         look = g.look; strength = g.strength; grain = g.grain; vignette = g.vignette; exposure = g.exposure; contrast = g.contrast; saturation = g.saturation; warmth = g.warmth
         tint = g.tint; highlights = g.highlights; shadows = g.shadows; whites = g.whites; blacks = g.blacks; vibrance = g.vibrance
+        overlay = g.overlay; overlayAmount = g.overlayAmount; g.mix.copyInto(mix)
     }
     companion object {
         fun from(o: JSONObject?) = if (o == null) Grade() else Grade(o.optString("look", "none"), o.optDouble("str", 1.0).toFloat(), o.optDouble("gr", -1.0).toFloat(),
             o.optDouble("vi", -1.0).toFloat(), o.optDouble("ex", 0.0).toFloat(), o.optDouble("co", 0.0).toFloat(), o.optDouble("sa", 0.0).toFloat(), o.optDouble("wa", 0.0).toFloat(),
-            o.optDouble("ti", 0.0).toFloat(), o.optDouble("hi", 0.0).toFloat(), o.optDouble("sh", 0.0).toFloat(), o.optDouble("wh", 0.0).toFloat(), o.optDouble("bl", 0.0).toFloat(), o.optDouble("vb", 0.0).toFloat())
+            o.optDouble("ti", 0.0).toFloat(), o.optDouble("hi", 0.0).toFloat(), o.optDouble("sh", 0.0).toFloat(), o.optDouble("wh", 0.0).toFloat(), o.optDouble("bl", 0.0).toFloat(), o.optDouble("vb", 0.0).toFloat(),
+            o.optString("ov", "none"), o.optDouble("ova", 0.8).toFloat(),
+            FloatArray(24).also { m -> o.optJSONArray("mix")?.let { a -> for (i in 0 until minOf(24, a.length())) m[i] = a.optDouble(i).toFloat() } })
     }
 }
 

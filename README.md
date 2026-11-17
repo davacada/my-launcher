@@ -159,7 +159,11 @@ Each release also has `letra.apk`, a sandstone notebook with a mode for each kin
   black & white (Tri-X, HP5, Delta 3200) and camera looks (Super 8, VHS, Hi8, 16mm Bolex, Cine 709, Blockbuster), each
   with strength, grain and vignette; import your own **.cube LUTs**. **Adjust** works like Lightroom: *Light*
   (exposure in EV, contrast, highlights, shadows, whites, blacks), *Color* (temp and tint on colour tracks, vibrance,
-  saturation) and *Effects* (grain, vignette); double-tap a slider to reset it. Hold the preview to see the original
+  saturation), *Mix* (hue, saturation and luminance for each of red, orange, yellow, green, aqua, blue, purple and
+  magenta) and *Effects* (grain, vignette); double-tap a slider to reset it. Hold the preview to see the original
+- **Overlays:** light leak, rose leak, prism, film burn, dust, VHS (scanlines, PLAY, time and date), bokeh, snow,
+  rain, 35mm frame with sprockets, orange date stamp and cinema bars, each with a strength; leaks and burns breathe,
+  dust, snow, rain and VHS move
 - Menus slide up from the bottom (speed as a big number with a rail of speeds, frame shapes drawn to scale, volume
   slider); the timeline has its own steel-blue colour
 - **Export:** MP4 video (720p, 1080p, 4K; 24, 25 or 30 fps; three quality levels), **GIF** (width, fps, length,

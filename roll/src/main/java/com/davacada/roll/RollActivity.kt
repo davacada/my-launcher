@@ -500,6 +500,7 @@ class RollActivity : Activity() {
             bare(R.drawable.i_speed, "Speed", dim) { if (sel >= 0) speedMenu(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_filter, "Film") { filmPanel(Looks.FILM) },
             bare(R.drawable.i_adjust, "Adjust") { adjustPanel() },
+            bare(R.drawable.i_fx, "Overlay") { overlayPanel() },
             bare(if (project?.mute == true) R.drawable.i_mute else R.drawable.i_volume, "Volume") { if (sel >= 0) volumeMenu(sel) else soundMenu() },
             bare(R.drawable.i_copy, "Copy", dim) { if (sel >= 0) duplicate(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_trash, "Delete", dim) { if (sel >= 0) deleteClip(sel) else toast("Tap a clip first") },
@@ -521,7 +522,7 @@ class RollActivity : Activity() {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playBtn?.setImageResource(if (isPlaying) R.drawable.i_pause else R.drawable.i_play); if (isPlaying) main.post(ticker) }
             override fun onPlayerError(error: PlaybackException) {
                 if (!noGrain && error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED) {
-                    noGrain = true; toast("Grain isn't supported on the preview here; showing the look without it")
+                    noGrain = true; toast("Overlays and grain couldn't be shown in the preview here; the colour look still shows")
                     pl.setVideoEffects(baseEffects() + gradeEffectsSafe()); pl.prepare(); return
                 }
                 toast("Playback: ${error.errorCodeName}")
@@ -599,7 +600,7 @@ class RollActivity : Activity() {
 
     private var noGrain = false
     private fun gradeEffectsSafe(): List<Effect> = try {
-        Render.gradeEffects(this, project!!.grade, store.lutDir).filter { !(noGrain && it is GrainEffect) }
+        Render.gradeEffects(this, project!!.grade, store.lutDir).filter { !(noGrain && it is androidx.media3.effect.OverlayEffect) }
     } catch (e: Exception) { emptyList() }
 
     private val gradeRun = Runnable { setEffects(baseEffects() + gradeEffectsSafe()); updateLookTag() }
@@ -762,12 +763,13 @@ class RollActivity : Activity() {
 
     /** Adjust, laid out like Lightroom: Light, Color and Effects, each a set of fine sliders. */
     private var adjTab = "light"
+    private var mixColor = 0
     private fun adjustPanel() {
         val p = project ?: return
         val g = p.grade
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(10), 0, dp(14), dp(2)) }
-        listOf(Triple("light", R.drawable.i_sun, "Light"), Triple("color", R.drawable.i_drop, "Color"), Triple("effects", R.drawable.i_fx, "Effects")).forEach { (k, ic, l) ->
+        listOf(Triple("light", R.drawable.i_sun, "Light"), Triple("color", R.drawable.i_drop, "Color"), Triple("mix", R.drawable.i_filter, "Mix"), Triple("effects", R.drawable.i_fx, "Effects")).forEach { (k, ic, l) ->
             tabs.addView(bare(ic, l, if (adjTab == k) C.AMBER else C.SUB, 20) { adjTab = k; val keep = gradeBefore; panelOpen = false; adjustPanel(); gradeBefore = keep })
         }
         tabs.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
@@ -775,6 +777,7 @@ class RollActivity : Activity() {
             when (adjTab) {
                 "light" -> { g.exposure = 0f; g.contrast = 0f; g.highlights = 0f; g.shadows = 0f; g.whites = 0f; g.blacks = 0f }
                 "color" -> { g.warmth = 0f; g.tint = 0f; g.vibrance = 0f; g.saturation = 0f }
+                "mix" -> java.util.Arrays.fill(g.mix, 0f)
                 else -> { g.grain = -1f; g.vignette = -1f }
             }
             applyGrade(); val keep = gradeBefore; panelOpen = false; adjustPanel(); gradeBefore = keep
@@ -799,6 +802,28 @@ class RollActivity : Activity() {
                 add("Vibrance", g.vibrance, -1f, 1f, null, pm) { g.vibrance = it }
                 add("Saturation", g.saturation, -1f, 1f, intArrayOf(0xFF8A8A8A.toInt(), 0xFFFF5A3C.toInt(), 0xFFFFC23C.toInt(), 0xFF3CC86E.toInt(), 0xFF3C8CFF.toInt(), 0xFFB45AFF.toInt()), pm) { g.saturation = it }
             }
+            "mix" -> {
+                // pick a colour, then move its hue, saturation and luminance
+                val dots = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(6)) }
+                Looks.MIX_COLORS.forEachIndexed { i, col ->
+                    val on = i == mixColor; val changed = g.mix[i * 3] != 0f || g.mix[i * 3 + 1] != 0f || g.mix[i * 3 + 2] != 0f
+                    dots.addView(FrameLayout(this).apply {
+                        setPadding(dp(5), dp(5), dp(5), dp(5)); background = ripple()
+                        addView(View(context).apply { background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(col); if (on) setStroke(dp(3), Color.WHITE) } },
+                            FrameLayout.LayoutParams(dp(if (on) 30 else 24), dp(if (on) 30 else 24), Gravity.CENTER))
+                        if (changed && !on) addView(View(context).apply { background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(Color.WHITE) } },
+                            FrameLayout.LayoutParams(dp(5), dp(5), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+                        setOnClickListener { mixColor = i; val keep = gradeBefore; panelOpen = false; adjustPanel(); gradeBefore = keep }
+                    }, LinearLayout.LayoutParams(0, dp(42), 1f))
+                }
+                s.addView(dots)
+                val i = mixColor; val col = Looks.MIX_COLORS[i]
+                val prev = Looks.MIX_COLORS[(i + 7) % 8]; val next = Looks.MIX_COLORS[(i + 1) % 8]
+                s.addView(text(Looks.MIX_NAMES[i].uppercase(), 11f, col, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(2), 0, 0) })
+                add("Hue", g.mix[i * 3], -1f, 1f, intArrayOf(prev, col, next), pm) { g.mix[i * 3] = it }
+                add("Saturation", g.mix[i * 3 + 1], -1f, 1f, intArrayOf(0xFF8A8A8A.toInt(), col), pm) { g.mix[i * 3 + 1] = it }
+                add("Luminance", g.mix[i * 3 + 2], -1f, 1f, intArrayOf(0xFF151515.toInt(), col, 0xFFF4F4F4.toInt()), pm) { g.mix[i * 3 + 2] = it }
+            }
             else -> {
                 add("Grain", Looks.grainOf(g), 0f, 1f, null, { "${(it * 100).toInt()}" }) { g.grain = it }
                 add("Vignette", Looks.vignetteOf(g), 0f, 1f, null, { "${(it * 100).toInt()}" }) { g.vignette = it }
@@ -808,6 +833,49 @@ class RollActivity : Activity() {
         col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
         col.addView(panelFooter(), LinearLayout.LayoutParams(-1, dp(46)))
         openPanel(col)
+    }
+
+    /** Overlays like InShot's: light leaks, dust, film burn, VHS, bokeh, snow, rain, a 35mm frame, date stamp, cinema bars. */
+    private fun overlayPanel() {
+        val p = project ?: return
+        val g = p.grade
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(text("OVERLAYS", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(18), dp(4), 0, dp(8)) })
+        val strip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(14), 0, dp(14), 0) }
+        strip.addView(overlayTile("none", "None", g.overlay == "none"))
+        Overlays.ALL.forEach { k -> strip.addView(overlayTile(k.id, k.name, g.overlay == k.id)) }
+        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(strip) }, LinearLayout.LayoutParams(-1, dp(124)))
+        if (g.overlay != "none") {
+            val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(4), dp(18), 0) }
+            s.addView(LrSlider(this, "Strength", g.overlayAmount, 0f, 1f, null, { "${(it * 100).toInt()}" }) { g.overlayAmount = it; applyGrade() })
+            col.addView(s, LinearLayout.LayoutParams(-1, 0, 1f))
+        } else col.addView(text("Overlays sit on top of your look and move with the video.", 12.5f, C.SUB).apply { setPadding(dp(20), dp(10), dp(20), 0) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(panelFooter(), LinearLayout.LayoutParams(-1, dp(46)))
+        openPanel(col)
+    }
+
+    private fun overlayTile(id: String, name: String, on: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        val img = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true; background = pill(0xFF1A1A1A.toInt(), dpf(10f))
+            if (on) foreground = pill(0, dpf(10f), dp(2), C.AMBER)
+        }
+        addView(img, LinearLayout.LayoutParams(dp(76), dp(92)))
+        addView(context.text(name, 11.5f, if (on) C.AMBER else C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(1), dp(6), 0, 0) },
+            LinearLayout.LayoutParams(dp(76), -2))
+        background = ripple()
+        setOnClickListener { project?.grade?.let { g -> g.overlay = id; if (g.overlayAmount < 0.05f) g.overlayAmount = 0.8f }; applyGrade(); val keep = gradeBefore; panelOpen = false; overlayPanel(); gradeBefore = keep }
+        layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) }
+        bg.execute {
+            val p = project ?: return@execute
+            val s0 = sample ?: p.clips.getOrNull(p.at(timeline?.time() ?: 0).first)?.let { c -> frameAt(c, c.startMs + 500, 180) }?.also { sample = it } ?: return@execute
+            val base = gradePreview(s0, p.grade).copy(Bitmap.Config.ARGB_8888, true)
+            if (id != "none") {
+                val ov = Overlays.draw(id, base.width, base.height, 0)
+                android.graphics.Canvas(base).drawBitmap(ov, 0f, 0f, android.graphics.Paint().apply { alpha = 220 })
+            }
+            main.post { img.setImageBitmap(base) }
+        }
     }
 
     // ---------------------------------------------------------------- frames

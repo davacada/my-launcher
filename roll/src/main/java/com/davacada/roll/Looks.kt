@@ -69,6 +69,7 @@ object Looks {
             for (i in 0..2) c[i] = o[i] + (c[i] - o[i]) * g.strength
             for (i in 0..2) c[i] *= expo
             light(c, g)
+            if (g.mixed) colorMix(c, g.mix)
             if (g.contrast != 0f) curve(c, 1f + g.contrast * 0.6f, 0.5f)
             if (g.vibrance != 0f) { val mx = maxOf(c[0], c[1], c[2]); val mn = minOf(c[0], c[1], c[2]); val s0 = if (mx > 0f) (mx - mn) / mx else 0f; sat(c, 1f + g.vibrance * (1f - s0) * 0.9f) }
             if (g.saturation != 0f) sat(c, 1f + g.saturation)
@@ -89,6 +90,34 @@ object Looks {
         for (i in 0..2) c[i] += d
         if (g.whites != 0f) { val wp = 1f - g.whites * 0.2f; for (i in 0..2) c[i] = c[i] / wp }
         if (g.blacks != 0f) { val bp = -g.blacks * 0.08f; for (i in 0..2) c[i] = (c[i] - bp) / (1f - bp) }
+    }
+
+    /** Centre hue (degrees) of each colour in the mix. */
+    val MIX_HUES = floatArrayOf(0f, 30f, 60f, 120f, 180f, 225f, 270f, 315f)
+    val MIX_NAMES = listOf("Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta")
+    val MIX_COLORS = intArrayOf(0xFFE8443A.toInt(), 0xFFF08A2E.toInt(), 0xFFE9CF3A.toInt(), 0xFF4FBF5A.toInt(), 0xFF3CC4C4.toInt(), 0xFF3E7BE6.toInt(), 0xFF8B54E0.toInt(), 0xFFD84FB4.toInt())
+
+    /** Lightroom's Color Mix: each colour's hue, saturation and luminance, blended smoothly between neighbours. */
+    private fun colorMix(c: FloatArray, mix: FloatArray) {
+        val r = c[0].coerceIn(0f, 1f); val g = c[1].coerceIn(0f, 1f); val b = c[2].coerceIn(0f, 1f)
+        val mx = maxOf(r, g, b); val mn = minOf(r, g, b); val d = mx - mn
+        if (d < 0.004f) return
+        var h = when (mx) { r -> 60f * (((g - b) / d) % 6f); g -> 60f * ((b - r) / d + 2f); else -> 60f * ((r - g) / d + 4f) }
+        if (h < 0) h += 360f
+        var l = (mx + mn) / 2f
+        var s = d / (1f - kotlin.math.abs(2f * l - 1f)).coerceAtLeast(0.0001f)
+        var dh = 0f; var ds = 0f; var dl = 0f
+        for (i in 0 until 8) {
+            var dist = kotlin.math.abs(h - MIX_HUES[i]); if (dist > 180f) dist = 360f - dist
+            val w = (1f - dist / 45f).coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
+            if (w > 0f) { dh += mix[i * 3] * w * 30f; ds += mix[i * 3 + 1] * w; dl += mix[i * 3 + 2] * w }
+        }
+        h = (h + dh + 360f) % 360f
+        s = (s * (1f + ds)).coerceIn(0f, 1f)
+        l = (l + dl * 0.25f * s).coerceIn(0f, 1f)
+        val cc = (1f - kotlin.math.abs(2f * l - 1f)) * s; val x = cc * (1f - kotlin.math.abs((h / 60f) % 2f - 1f)); val m = l - cc / 2f
+        val (r1, g1, b1) = when ((h / 60f).toInt()) { 0 -> Triple(cc, x, 0f); 1 -> Triple(x, cc, 0f); 2 -> Triple(0f, cc, x); 3 -> Triple(0f, x, cc); 4 -> Triple(x, 0f, cc); else -> Triple(cc, 0f, x) }
+        c[0] = r1 + m; c[1] = g1 + m; c[2] = b1 + m
     }
 
     fun grainOf(g: Grade) = if (g.grain >= 0f) g.grain else (byId(g.look)?.grain ?: 0f)
