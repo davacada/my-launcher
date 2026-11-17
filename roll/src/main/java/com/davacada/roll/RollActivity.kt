@@ -11,7 +11,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
-import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
@@ -76,7 +75,8 @@ class RollActivity : Activity() {
         home()
     }
 
-    override fun onPause() { super.onPause(); player?.pause(); project?.let { store.save(it) } }
+    override fun onPause() { super.onPause(); player?.pause(); project?.let { store.save(it) }; if (project != null && ::glView.isInitialized) glView.onPause() }
+    override fun onResume() { super.onResume(); if (project != null && ::glView.isInitialized) glView.onResume() }
     override fun onDestroy() { releasePlayer(); exporting?.cancel?.invoke(); bg.shutdownNow(); super.onDestroy() }
 
     @Deprecated("Deprecated in Java")
@@ -399,7 +399,9 @@ class RollActivity : Activity() {
     // ================================================================ editor
 
     private lateinit var previewBox: FrameLayout
-    private lateinit var surface: SurfaceView
+    private lateinit var glView: GlPreview
+    private var videoSurface: android.view.Surface? = null
+    private var videoRatio = 16f / 9f
 
     private fun open(p: Project) {
         project = p; undo.clear(); redo.clear(); panelOpen = false
@@ -425,11 +427,15 @@ class RollActivity : Activity() {
                 val ratio = Render.ratio(p)
                 var sw = pw; var sh = (pw / ratio).toInt()
                 if (sh > ph) { sh = ph; sw = (ph * ratio).toInt() }
-                surface.measure(MeasureSpec.makeMeasureSpec(sw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(sh, MeasureSpec.EXACTLY))
+                glView.measure(MeasureSpec.makeMeasureSpec(sw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(sh, MeasureSpec.EXACTLY))
             }
         }
-        surface = SurfaceView(this)
-        previewBox.addView(surface, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        glView = GlPreview(this, store.lutDir)
+        glView.onSurface = { sf ->
+            videoSurface = sf
+            player?.let { pl -> pl.setVideoSurface(sf); if (!pl.isPlaying) pl.seekTo(pl.currentMediaItemIndex, pl.currentPosition) }
+        }
+        previewBox.addView(glView, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         lookTag = text("", 10.5f, C.AMBER, true).apply { letterSpacing = 0.12f; setPadding(dp(8), dp(3), dp(8), dp(3)); background = pill(0x73000000, dpf(6f)) }
         previewBox.addView(lookTag, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { setMargins(dp(12), dp(10), 0, 0) })
         // hold the picture to see it without the look
@@ -438,7 +444,7 @@ class RollActivity : Activity() {
                 android.view.MotionEvent.ACTION_DOWN -> { main.postDelayed(showOriginal, 250); true }
                 android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                     main.removeCallbacks(showOriginal)
-                    if (showingOriginal) { showingOriginal = false; applyGrade() } else togglePlay(); true
+                    if (showingOriginal) { showingOriginal = false; glView.bypass = false; updateLookTag() } else togglePlay(); true
                 }
                 else -> true
             }
@@ -463,7 +469,7 @@ class RollActivity : Activity() {
     }
 
     private var showingOriginal = false
-    private val showOriginal = Runnable { showingOriginal = true; setEffects(baseEffects()); lookTag?.text = "ORIGINAL" }
+    private val showOriginal = Runnable { showingOriginal = true; glView.bypass = true; lookTag?.text = "ORIGINAL"; lookTag?.visibility = View.VISIBLE }
 
     /** The timeline and the tools under the preview. */
     private fun editBottom() {
@@ -515,17 +521,14 @@ class RollActivity : Activity() {
         val p = project ?: return
         val pl = ExoPlayer.Builder(this).build()
         player = pl
-        pl.setVideoSurfaceView(surface)
-        pl.setVideoEffects(baseEffects() + gradeEffectsSafe())
+        videoSurface?.let { pl.setVideoSurface(it) }
+        glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p))
         pl.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { clipParams() }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playBtn?.setImageResource(if (isPlaying) R.drawable.i_pause else R.drawable.i_play); if (isPlaying) main.post(ticker) }
-            override fun onPlayerError(error: PlaybackException) {
-                if (!noGrain && error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED) {
-                    noGrain = true; toast("Overlays and grain couldn't be shown in the preview here; the colour look still shows")
-                    pl.setVideoEffects(baseEffects() + gradeEffectsSafe()); pl.prepare(); return
-                }
-                toast("Playback: ${error.errorCodeName}")
+            override fun onPlayerError(error: PlaybackException) { toast("Playback: ${error.errorCodeName}") }
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) { videoRatio = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height; project?.let { glView.setRatios(videoRatio, Render.ratio(it)) } }
             }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) { pl.pause(); pl.seekTo(0, 0) } }
         })
@@ -558,7 +561,10 @@ class RollActivity : Activity() {
         timeline?.invalidate(); refreshTime()
     }
 
-    private fun releasePlayer() { main.removeCallbacks(ticker); player?.release(); player = null; timeline?.release(); timeline = null }
+    private fun releasePlayer() {
+        main.removeCallbacks(ticker); player?.release(); player = null; timeline?.release(); timeline = null
+        if (::glView.isInitialized) glView.release(); videoSurface = null
+    }
 
     private fun seekTimeline(t: Long) {
         val p = project ?: return; val pl = player ?: return
@@ -598,20 +604,12 @@ class RollActivity : Activity() {
 
     // ---------------------------------------------------------------- grade
 
-    private var noGrain = false
-    private fun gradeEffectsSafe(): List<Effect> = try {
-        Render.gradeEffects(this, project!!.grade, store.lutDir).filter { !(noGrain && it is androidx.media3.effect.OverlayEffect) }
-    } catch (e: Exception) { emptyList() }
-
-    private val gradeRun = Runnable { setEffects(baseEffects() + gradeEffectsSafe()); updateLookTag() }
-
-    /** Changes the look on the preview and redraws the paused frame, so you see it the moment you choose it. */
-    private fun setEffects(list: List<Effect>) {
-        val pl = player ?: return
-        pl.setVideoEffects(list)
-        if (!pl.isPlaying) { val i = pl.currentMediaItemIndex; val pos = pl.currentPosition; main.postDelayed({ player?.seekTo(i, pos) }, 60) }
+    /** The grade shows on the viewer straight away (drawn by GlPreview), paused or playing. */
+    private fun applyGrade() {
+        val p = project ?: return
+        if (::glView.isInitialized) { glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p)) }
+        updateLookTag()
     }
-    private fun applyGrade() { main.removeCallbacks(gradeRun); main.postDelayed(gradeRun, 90) }
 
     private fun updateLookTag() {
         val g = project?.grade ?: return
