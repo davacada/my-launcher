@@ -7,13 +7,17 @@ on:
       - 'ios/**'
       - '.github/workflows/ios.yml'
   workflow_dispatch:
+    inputs:
+      runner:
+        description: macOS runner
+        default: macos-latest
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: macos-15-intel
+    runs-on: ${{ inputs.runner || 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
 
