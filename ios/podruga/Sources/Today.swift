@@ -7,11 +7,11 @@ enum Planner {
         var t = Thing(title: p.title)
         t.raw = text
         if let ai, !ai.title.isEmpty { t.title = ai.title }
-        t.minutes = p.minutes ?? ai?.minutes ?? 30
+        t.minutes = p.minutes ?? ai?.minutes ?? LocalBrain.minutes(text) ?? 30
         t.deadline = p.deadline
         t.start = start
         t.place = p.place ?? ((ai?.place.isEmpty == false) ? ai?.place : nil)
-        if let s = ai?.firstStep, !s.isEmpty { t.firstStep = s }
+        if let s = ai?.firstStep, !s.isEmpty { t.firstStep = s } else { t.firstStep = LocalBrain.firstStep(text) }
         if let tip = ai?.tip, !tip.isEmpty { t.note = tip }
         for l in p.links {
             t.attachments.append(Attachment(kind: .link, url: l.absoluteString, title: l.host ?? l.absoluteString))

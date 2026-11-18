@@ -54,4 +54,5 @@ struct Decision: Codable, Identifiable, Hashable {
     var pick: String?
     var why: String?
     var scores: [String: Int] = [:]
+    var ratings: [String: [String: Int]] = [:]   // what matters → option → 1…5
 }

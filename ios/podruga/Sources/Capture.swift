@@ -23,7 +23,7 @@ struct CaptureView: View {
         _text = State(initialValue: initial)
     }
 
-    var minutes: Int { parsed.minutes ?? ai?.minutes ?? 30 }
+    var minutes: Int { parsed.minutes ?? ai?.minutes ?? LocalBrain.minutes(text) ?? 30 }
 
     /// The time to do it: chosen by her, said in the text, or the best free time.
     var slot: Date? {
@@ -111,7 +111,7 @@ struct CaptureView: View {
         }
         let offs = Pref.remindOffsets
         rows.append(("bell", tr("Remind", "Напомнить"), Fmt.remind(offs.last ?? 10).lowercased()))
-        if let s = ai?.firstStep, !s.isEmpty { rows.append(("spark", tr("First step", "Первый шаг"), s)) }
+        if let s = (ai?.firstStep).flatMap({ $0.isEmpty ? nil : $0 }) ?? LocalBrain.firstStep(text) { rows.append(("spark", tr("First step", "Первый шаг"), s)) }
         return rows
     }
 

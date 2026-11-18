@@ -54,7 +54,7 @@ jobs:
           set -x
           xcodebuild -project Podruga.xcodeproj -scheme Podruga -configuration Debug -sdk iphonesimulator \
             -derivedDataPath simbuild CODE_SIGNING_ALLOWED=NO build -quiet
-          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];c=[x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone 16') or x['name'].startswith('iPhone 17')];c=c or [x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')];print(c[0]['udid'])")
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];a=[x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')];pick=lambda n:[x for x in a if x['name']==n];c=pick('iPhone 14') or pick('iPhone 16e') or pick('iPhone 16') or pick('iPhone 17') or a;print(c[-1]['udid'])")
           xcrun simctl boot $UDID; sleep 20
           xcrun simctl status_bar $UDID override --time 9:41 || true
           xcrun simctl install $UDID simbuild/Build/Products/Debug-iphonesimulator/Podruga.app

@@ -22,11 +22,6 @@ struct BestWayView: View {
                                 Text(tr("\(appName) is thinking…", "\(appName) думает…")).font(.inter(14)).foregroundStyle(C.sub)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading).padding(16).card()
-                        } else if !AI.available {
-                            Text(tr("Suggestions use Apple's on-phone AI. It works on iPhone 15 Pro, iPhone 16 and newer with Apple Intelligence on (\(AI.status)).",
-                                    "Советы работают на ИИ Apple прямо в телефоне: iPhone 15 Pro, iPhone 16 и новее, с включённым Apple Intelligence (\(AI.status))."))
-                                .font(.inter(13.5)).foregroundStyle(C.sub).lineSpacing(3)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(16).card()
                         }
                     }
                     ForEach(t.ways) { w in OptionCard(w: w) }
@@ -34,7 +29,7 @@ struct BestWayView: View {
                         Text(tr("Why: ", "Почему: ") + why).font(.inter(12.5)).foregroundStyle(C.sub).lineSpacing(3)
                             .padding(.horizontal, 4).padding(.top, 6)
                     }
-                    if !t.ways.isEmpty && AI.available {
+                    if !t.ways.isEmpty {
                         Button { Task { await load(force: true) } } label: {
                             Text(tr("Ask again", "Спросить ещё раз")).font(.inter(13.5, .semibold)).foregroundStyle(C.pink)
                                 .frame(maxWidth: .infinity).padding(.vertical, 14)
@@ -55,7 +50,17 @@ struct BestWayView: View {
     }
 
     func load(force: Bool) async {
-        guard let t = store.thing(id), force || t.ways.isEmpty, AI.available else { return }
+        guard let t = store.thing(id), force || t.ways.isEmpty else { return }
+        if !AI.available {
+            // iPhone 14 and others without Apple Intelligence: built-in ideas
+            let r = LocalBrain.ways(for: t, now: cal.now)
+            if var x = store.thing(id) {
+                x.ways = r.0; x.waysWhy = r.1
+                if x.note == nil, let b = r.0.first { x.note = b.name.lowercased() + ", " + b.time }
+                store.upsert(x)
+            }
+            return
+        }
         loading = true
         if let r = await AI.ways(for: t, now: cal.now), var x = store.thing(id) {
             let opts = r.0, why = r.1

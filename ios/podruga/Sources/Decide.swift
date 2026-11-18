@@ -90,14 +90,9 @@ struct DecideView: View {
                         Text(tr("\(appName) is thinking…", "\(appName) думает…")).font(.inter(14)).foregroundStyle(C.sub)
                     }.padding(16).frame(maxWidth: .infinity, alignment: .leading).card()
                 } else if d.options.count >= 2 {
-                    if AI.available {
-                        PillButton(title: tr("Ask \(appName)", "Спросить \(appName)"), dark: true) { ask() }
-                    } else {
-                        Text(tr("Help me decide uses Apple's on-phone AI: iPhone 15 Pro, iPhone 16 or newer with Apple Intelligence on (\(AI.status)).",
-                                "«Помоги решить» работает на ИИ Apple в телефоне: iPhone 15 Pro, iPhone 16 и новее, с включённым Apple Intelligence (\(AI.status))."))
-                            .font(.inter(13.5)).foregroundStyle(C.sub).lineSpacing(3).padding(16)
-                            .frame(maxWidth: .infinity, alignment: .leading).card()
-                    }
+                    if !AI.available { RatingGrid().padding(.bottom, 14) }
+                    PillButton(title: tr("Ask \(appName)", "Спросить \(appName)"), dark: true) { ask() }
+                        .disabled(d.chosen.isEmpty)
                 } else {
                     Text(tr("Add at least two options, choose what matters, and \(appName) will tell you more or less the best one.",
                             "Добавь хотя бы два варианта, отметь, что важно, и \(appName) подскажет лучший."))
@@ -159,7 +154,12 @@ struct DecideView: View {
                 }
             }
             .padding(.top, 14)
-            if AI.available {
+            if !AI.available {
+                Button { store.decision.pick = nil } label: {
+                    Text(tr("Change my ratings", "Изменить оценки")).font(.inter(13.5, .semibold)).foregroundStyle(C.pink)
+                        .frame(maxWidth: .infinity).padding(.vertical, 14)
+                }.buttonStyle(.plain)
+            } else {
                 Button { ask() } label: {
                     Text(tr("Ask again", "Спросить ещё раз")).font(.inter(13.5, .semibold)).foregroundStyle(C.pink)
                         .frame(maxWidth: .infinity).padding(.vertical, 14)
@@ -170,6 +170,14 @@ struct DecideView: View {
 
     func ask() {
         focused = false
+        if !AI.available {
+            if let r = LocalBrain.decide(store.decision) {
+                store.decision.why = r.why
+                store.decision.scores = r.scores
+                store.decision.pick = r.pick
+            }
+            return
+        }
         thinking = true
         store.decision.pick = nil
         let snapshot = store.decision
@@ -271,5 +279,48 @@ struct ThingRow: View {
         .card(18)
         .padding(.bottom, 8)
         .opacity(t.done ? 0.6 : 1)
+    }
+}
+
+/// On iPhones without Apple Intelligence she rates each option, 1–5, for what matters.
+struct RatingGrid: View {
+    @EnvironmentObject var store: Store
+    var d: Decision { store.decision }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(tr("RATE THEM", "ОЦЕНИ ВАРИАНТЫ")).font(.inter(12, .semibold)).tracking(0.7).foregroundStyle(C.sub).padding(.bottom, 8)
+            VStack(spacing: 0) {
+                ForEach(Array(d.chosen.enumerated()), id: \.element) { ci, c in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(c).font(.inter(14, .bold)).foregroundStyle(C.text)
+                        ForEach(d.options, id: \.self) { o in
+                            HStack(spacing: 8) {
+                                Text(o.components(separatedBy: " · ").first ?? o).font(.inter(13)).foregroundStyle(C.sub)
+                                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                ForEach(1...5, id: \.self) { v in
+                                    let cur = d.ratings[c]?[o] ?? 3
+                                    Button {
+                                        var r = store.decision.ratings[c] ?? [:]
+                                        r[o] = v
+                                        store.decision.ratings[c] = r
+                                    } label: {
+                                        Circle().fill(v <= cur ? AnyShapeStyle(C.grad) : AnyShapeStyle(C.text.opacity(0.08)))
+                                            .frame(width: 22, height: 22)
+                                            .frame(width: 30, height: 30)
+                                            .contentShape(Rectangle())
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 12)
+                    if ci < d.chosen.count - 1 { Rectangle().fill(C.line).frame(height: 1) }
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 4).card()
+            Text(tr("Tap the dots: more pink = better. \(appName) then picks the best one.",
+                    "Нажимай на точки: больше розовых — лучше. Потом \(appName) выберет лучший."))
+                .font(.inter(12)).foregroundStyle(C.sub).padding(.top, 8).padding(.horizontal, 4)
+        }
     }
 }

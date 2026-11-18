@@ -58,7 +58,8 @@ struct SettingsView: View {
                         }
                     }
                     SRow(title: tr("Apple Intelligence", "Apple Intelligence"), sub: tr("Ways to do it, help me decide", "Способы, помощь с решением"), last: true) {
-                        Text(AI.status).font(.inter(13)).foregroundStyle(AI.available ? C.pink : C.sub).multilineTextAlignment(.trailing)
+                        Text(AI.available ? AI.status : tr("Built-in ideas", "Встроенные идеи")).font(.inter(13))
+                            .foregroundStyle(AI.available ? C.pink : C.sub).multilineTextAlignment(.trailing)
                     }
                 }
                 .padding(.horizontal, 16).padding(.vertical, 4).card()
