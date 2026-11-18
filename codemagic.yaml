@@ -1,0 +1,21 @@
+workflows:
+  podruga:
+    name: Подруга (iPhone)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+    scripts:
+      - name: Build the iPhone app
+        script: |
+          cd ios/podruga
+          brew install xcodegen >/dev/null 2>&1 && xcodegen generate || true
+          set -o pipefail
+          xcodebuild -project Podruga.xcodeproj -scheme Podruga -configuration Release -sdk iphoneos \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | xcpretty || \
+          xcodebuild -project Podruga.xcodeproj -scheme Podruga -configuration Release -sdk iphoneos \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | grep -E "error:" | head -40
+          mkdir -p Payload && cp -R build/Build/Products/Release-iphoneos/Podruga.app Payload/
+          zip -qry $CM_BUILD_DIR/Podruga.ipa Payload
+    artifacts:
+      - Podruga.ipa
