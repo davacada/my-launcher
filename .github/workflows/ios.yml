@@ -1,0 +1,85 @@
+name: Build iPhone app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick the newest Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -z "$X" ] && X=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $X"; sudo xcode-select -s "$X"; xcodebuild -version
+
+      - name: Generate project
+        working-directory: ios/podruga
+        run: brew install xcodegen >/dev/null && xcodegen generate
+
+      - name: Build for iPhone
+        working-directory: ios/podruga
+        run: |
+          set -o pipefail
+          xcodebuild -project Podruga.xcodeproj -scheme Podruga -configuration Release -sdk iphoneos \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD" || true
+          test -d build/Build/Products/Release-iphoneos/Podruga.app
+
+      - name: Show build errors
+        if: failure()
+        working-directory: ios/podruga
+        run: |
+          grep -E "error:" build.log | sed 's|.*/Sources/||' | sort -u | head -25 | while IFS= read -r line; do echo "::error::$line"; done
+
+      - name: Make the .ipa
+        working-directory: ios/podruga
+        run: |
+          mkdir -p Payload && cp -R build/Build/Products/Release-iphoneos/Podruga.app Payload/
+          zip -qry ../../Podruga.ipa Payload
+
+      - name: Screenshots in the simulator
+        continue-on-error: true
+        working-directory: ios/podruga
+        run: |
+          set -x
+          xcodebuild -project Podruga.xcodeproj -scheme Podruga -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath simbuild CODE_SIGNING_ALLOWED=NO build -quiet
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];c=[x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone 16') or x['name'].startswith('iPhone 17')];c=c or [x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')];print(c[0]['udid'])")
+          xcrun simctl boot $UDID; sleep 20
+          xcrun simctl status_bar $UDID override --time 9:41 || true
+          xcrun simctl install $UDID simbuild/Build/Products/Debug-iphonesimulator/Podruga.app
+          mkdir -p ../../shots
+          for s in today capture bestway decide calendars attach voice getthere notify things calendar settings; do
+            for l in en ru; do
+              xcrun simctl terminate $UDID com.davacada.podruga || true
+              xcrun simctl launch $UDID com.davacada.podruga -demo -screen $s -lang $l
+              sleep 6
+              xcrun simctl io $UDID screenshot ../../shots/$s-$l.png
+            done
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: podruga
+          path: |
+            Podruga.ipa
+            shots/
+
+      - name: Publish as a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: podruga-${{ github.run_number }}
+          name: Подруга (iPhone) ${{ github.run_number }}
+          body: "Unsigned iPhone app. Install it with Sideloadly or AltStore using your Apple ID."
+          files: Podruga.ipa

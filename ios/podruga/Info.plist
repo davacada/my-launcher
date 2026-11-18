@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleDisplayName</key><string>Подруга</string>
+	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>Podruga</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleLocalizations</key><array><string>en</string><string>ru</string></array>
+	<key>LSRequiresIPhoneOS</key><true/>
+	<key>UILaunchScreen</key><dict><key>UIColorName</key><string></string></dict>
+	<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
+	<key>UIApplicationSupportsIndirectInputEvents</key><true/>
+	<key>UIAppFonts</key><array>
+		<string>Inter-Regular.ttf</string><string>Inter-Medium.ttf</string><string>Inter-SemiBold.ttf</string><string>Inter-Bold.ttf</string><string>Inter-ExtraBold.ttf</string>
+	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key><string>Подруга reads your calendars to find free time and adds the things you plan. / Подруга смотрит календари, чтобы найти свободное время.</string>
+	<key>NSCalendarsUsageDescription</key><string>Подруга reads your calendars to find free time and adds the things you plan.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key><string>Подруга adds the things you plan to your calendar.</string>
+	<key>NSMicrophoneUsageDescription</key><string>Record a thing by voice and attach voice notes. / Запись дел голосом.</string>
+	<key>NSSpeechRecognitionUsageDescription</key><string>Turns what you say into a written reminder. / Превращает речь в напоминание.</string>
+	<key>NSLocationWhenInUseUsageDescription</key><string>Works out how long it takes to get to a place and when to leave. / Чтобы знать, когда выходить.</string>
+	<key>NSPhotoLibraryUsageDescription</key><string>Attach photos to your things.</string>
+	<key>LSSupportsOpeningDocumentsInPlace</key><false/>
+	<key>CFBundleDocumentTypes</key>
+	<array><dict>
+		<key>CFBundleTypeName</key><string>Any file</string>
+		<key>CFBundleTypeRole</key><string>Viewer</string>
+		<key>LSHandlerRank</key><string>Alternate</string>
+		<key>LSItemContentTypes</key><array><string>public.item</string><string>public.content</string></array>
+	</dict></array>
+</dict>
+</plist>
