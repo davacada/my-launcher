@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="GastoTheme" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowBackground">@color/white</item>
+        <item name="android:statusBarColor">@color/white</item>
+        <item name="android:navigationBarColor">@color/white</item>
+        <item name="android:colorAccent">@color/green</item>
+        <item name="android:alertDialogTheme">@style/GastoDialog</item>
+    </style>
+    <style name="GastoDialog" parent="@android:style/Theme.DeviceDefault.Light.Dialog.Alert">
+        <item name="android:colorAccent">@color/green</item>
+    </style>
+    <color name="white">#FFF2F1EA</color>
+    <color name="green">#FF2E6B4C</color>
+</resources>

@@ -45,6 +45,7 @@ jobs:
           cp sanka/build/outputs/apk/debug/sanka-debug.apk sanka.apk
           cp letra/build/outputs/apk/debug/letra-debug.apk letra.apk
           cp roll/build/outputs/apk/debug/roll-debug.apk roll.apk
+          cp gasto/build/outputs/apk/debug/gasto-debug.apk gasto.apk
 
       - uses: actions/upload-artifact@v4
         with:
@@ -55,6 +56,7 @@ jobs:
             sanka.apk
             letra.apk
             roll.apk
+            gasto.apk
 
       - name: Publish as a release (easy to download on the phone)
         uses: softprops/action-gh-release@v2
@@ -67,4 +69,5 @@ jobs:
             sanka.apk
             letra.apk
             roll.apk
+            gasto.apk
           make_latest: true
