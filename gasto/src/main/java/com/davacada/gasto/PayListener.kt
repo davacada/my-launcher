@@ -47,6 +47,9 @@ class PayListener : NotificationListenerService() {
         }
 
         private const val GMAIL = "com.google.android.gm"
+        private const val WALLET = "com.google.android.apps.walletnfcrel"
+        private const val GMS = "com.google.android.gms"
+        private val googlePayWords = Regex("""(?i)google pay|wallet|visa|mastercard|maestro|amex|debit|credit|card|kartic|•|\*{2,}\d{4}|contactless""")
         private val receiptish = Regex("""(?i)receipt|invoice|order|purchase|payment|paid|subscription|renew|račun|potrdilo|naročnin|plačil|faktur|charged""")
         private val ignore = setOf(
             "org.telegram.messenger", "com.whatsapp", "com.facebook.orca", "com.instagram.android",
@@ -64,7 +67,16 @@ class PayListener : NotificationListenerService() {
             Store.init(ctx)
             if (pkg == GMAIL) { gmailNotification(ctx, title, text, time); return }
             val amounts = Parse.amounts(text)
-            if (amounts.isEmpty() || !Parse.isSpend(text)) return
+            if (amounts.isEmpty()) return
+            // Google Pay / Wallet tap-to-pay notices are short ("Lidl · €23.84 with Visa ••1234"), with no word like "paid".
+            // They come from the Wallet app or from Google Play services.
+            val googlePay = pkg == WALLET || (pkg == GMS && googlePayWords.containsMatchIn(text))
+            if (googlePay) {
+                if (Parse.isIncoming(text)) return
+                val apps = Prefs.apps(ctx)
+                if (apps.add(pkg)) Prefs.setApps(ctx, apps)
+                val seen = Prefs.seen(ctx); if (seen.add(pkg)) Prefs.setSeen(ctx, seen)
+            } else if (!Parse.isSpend(text)) return
 
             // Remember every app that mentions a payment; banks and wallets count straight away.
             val seen = Prefs.seen(ctx)
@@ -77,10 +89,12 @@ class PayListener : NotificationListenerService() {
             if (pkg !in Prefs.apps(ctx)) return
 
             val amount = Math.abs(amounts.first().second)
-            val app = appName(ctx, pkg)
-            val fallback = if (title.isNotBlank() && !title.equals(app, true) && Parse.amounts(title).isEmpty() && title.length < 30) title else app
+            val appLabel = appName(ctx, pkg)
+            val app = if (googlePay) "Google Pay" else appLabel
+            val fallback = if (title.isNotBlank() && !title.equals(app, true) && !title.contains("Google", true) && Parse.amounts(title).isEmpty() && title.length < 30) title
+                else Regex("""^\s*([A-Z0-9ČŠŽ][^€\d•]{1,30}?)\s*[·,:-]""").find(body(text))?.groupValues?.get(1)?.trim() ?: app
             val merchant = Parse.merchant(text, fallback)
-            val isWallet = pkg.contains("walletnfcrel") || pkg.contains("wallet")
+            val isWallet = googlePay || pkg.contains("wallet")
             val p = Payment(
                 id = "n:$pkg:$time:$amount",
                 amount = amount,
@@ -95,6 +109,9 @@ class PayListener : NotificationListenerService() {
             if (Store.add(ctx, p)) Alerts.checkBudget(ctx)
         }
     
+        /** The text after the title (we join them as "title. body"). */
+        private fun body(text: String) = text.substringAfter(". ", text)
+
         /** A new email shown by the Gmail app: title is the sender, text the subject and preview. */
         private fun gmailNotification(ctx: Context, sender: String, text: String, time: Long) {
             if (!Prefs.bool(ctx, "gmailNotes", true) || !receiptish.containsMatchIn(text)) return

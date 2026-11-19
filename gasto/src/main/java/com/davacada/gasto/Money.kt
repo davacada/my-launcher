@@ -182,6 +182,7 @@ object Parse {
     private val spending = Regex("""paid|payment|purchase|spent|card|debit|transaction|charged|plačil|placil|nakup|kartic|bremenitev|transakcij|odliv|potrdilo|zaračun|you paid|tap|contactless""", RegexOption.IGNORE_CASE)
 
     fun isSpend(text: String) = spending.containsMatchIn(text) && !incoming.containsMatchIn(text)
+    fun isIncoming(text: String) = incoming.containsMatchIn(text)
 
     private val merchantRx = listOf(
         Regex("""(?:\bat|\bpri trgovcu|\bpri|\bto|\bv trgovini|\bmerchant:?|\btrgovec:?|\bprejemnik:?)\s+([A-Z0-9ČŠŽ][\wČŠŽčšž .&'*/-]{1,32}?)(?=[,.;:]?\s|\s*$|,|\.|\(|€|\d{1,3}[.,]\d{2})"""),

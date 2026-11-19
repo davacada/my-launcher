@@ -29,6 +29,7 @@ class GastoActivity : Activity() {
 
     private lateinit var root: FrameLayout
     private lateinit var scroll: ScrollView
+    private lateinit var pull: androidx.swiperefreshlayout.widget.SwipeRefreshLayout
     private lateinit var content: LinearLayout
     private lateinit var nav: LinearLayout
     private var tab = 0
@@ -49,13 +50,20 @@ class GastoActivity : Activity() {
         scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
         content = vbox()
         scroll.addView(content)
-        root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        pull = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(C.G1)
+            setProgressBackgroundColorSchemeColor(0xFFFFFFFF.toInt())
+            addView(scroll)
+            setOnRefreshListener { refresh() }
+        }
+        root.addView(pull, FrameLayout.LayoutParams(-1, -1))
         nav = hbox()
         root.addView(nav, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         setContentView(root)
         root.setOnApplyWindowInsetsListener { _, ins ->
             val bars = ins.getInsets(WindowInsets.Type.systemBars())
             topInset = bars.top; bottomInset = bars.bottom
+            pull.setProgressViewOffset(false, topInset, topInset + dp(64))
             render(); ins
         }
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -94,6 +102,21 @@ class GastoActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (tab != 0) { tab = 0; render() } else super.onBackPressed()
+    }
+
+    /** Pull down: look again at notifications in the shade and, if connected, at Gmail. */
+    private fun refresh() {
+        val before = Store.all().size
+        Thread {
+            PayListener.scanActive(this)
+            if (Gmail.connected(this)) Gmail.syncInBackground(this)
+            runOnUiThread {
+                val n = Store.all().size - before
+                pull.isRefreshing = false
+                render()
+                toast(if (n > 0) "$n new payment${if (n == 1) "" else "s"}" else if (!listenerOn()) "Turn on bank notifications in Settings to catch payments" else "Up to date")
+            }
+        }.start()
     }
 
     private fun gmailDone(err: String?) {

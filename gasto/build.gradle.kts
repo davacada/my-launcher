@@ -40,4 +40,6 @@ dependencies {
     implementation("com.google.android.gms:play-services-auth:21.2.0")
     // A daily check: renewals coming up, Gmail sync.
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Pull down to refresh.
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
 }
