@@ -88,7 +88,7 @@ object Prefs {
     private fun p(ctx: Context) = ctx.getSharedPreferences("gasto", Context.MODE_PRIVATE)
     fun base(ctx: Context) = p(ctx).getFloat("base", 1270f).toDouble()
     fun setBase(ctx: Context, v: Double) = p(ctx).edit().putFloat("base", v.toFloat()).apply()
-    fun startDay(ctx: Context) = p(ctx).getInt("startDay", 1)
+    fun startDay(ctx: Context) = p(ctx).getInt("startDay", 10)   // payday
     fun setStartDay(ctx: Context, d: Int) = p(ctx).edit().putInt("startDay", d).apply()
     fun bool(ctx: Context, k: String, def: Boolean) = p(ctx).getBoolean(k, def)
     fun setBool(ctx: Context, k: String, v: Boolean) = p(ctx).edit().putBoolean(k, v).apply()

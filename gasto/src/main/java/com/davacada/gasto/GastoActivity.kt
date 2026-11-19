@@ -87,7 +87,7 @@ class GastoActivity : Activity() {
         }
         if (requestCode == Gmail.REQ) {
             if (resultCode == RESULT_OK) Gmail.onResult(this, data) { err -> gmailDone(err) }
-            else gmailDone("Cancelled.")
+            else { Prefs.setStr(this, "gmailError", Gmail.SETUP); gmailDone(Gmail.SETUP) }
         }
     }
 
@@ -97,7 +97,11 @@ class GastoActivity : Activity() {
     }
 
     private fun gmailDone(err: String?) {
-        if (err == null) toast("Gmail: ${Prefs.str(this, "gmailAdded") ?: "0"} new receipts") else toast(err)
+        when {
+            err == null -> toast("Gmail: ${Prefs.str(this, "gmailAdded") ?: "0"} new receipts")
+            err == Gmail.SETUP -> gmailSetupHelp()
+            else -> toast(err)
+        }
         render()
     }
 
@@ -385,7 +389,7 @@ class GastoActivity : Activity() {
                 AlertDialog.Builder(this).setTitle("Gmail").setItems(arrayOf("Check now", "Disconnect")) { _, w ->
                     if (w == 0) { toast("Checking Gmail…"); Gmail.connect(this) { gmailDone(it) } } else { Gmail.disconnect(this); render() }
                 }.show()
-            } else if (Gmail.lastError(this)?.contains("setup") == true) gmailSetupHelp()
+            } else if (Gmail.lastError(this) == Gmail.SETUP) gmailSetupHelp()
             else Gmail.connect(this) { gmailDone(it) }
         })
         src.addView(settingRow("New receipts from Gmail's notifications", "works without the Google setup, from today on",
@@ -562,7 +566,7 @@ class GastoActivity : Activity() {
                     render()
                 }
             }
-            Gmail.lastError(this)?.contains("setup") == true -> {
+            Gmail.lastError(this) == Gmail.SETUP -> {
                 gStatus.text = "Needs the one-time Google setup · tap"; gStatus.setTextColor(C.RED)
                 gRow.setOnClickListener { dlg.dismiss(); gmailSetupHelp() }
             }

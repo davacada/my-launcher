@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit
  */
 object Gmail {
     const val REQ = 4207
+    const val SETUP = "Google stopped it: Gasto needs its one-time setup in Google Cloud first."
     private const val SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
     private fun request() = AuthorizationRequest.builder().setRequestedScopes(listOf(Scope(SCOPE))).build()
 
@@ -60,8 +61,7 @@ object Gmail {
     private fun explain(e: Exception): String {
         val code = (e as? ApiException)?.statusCode
         return when (code) {
-            10 -> "Google hasn't been told about Gasto yet (one-time setup in Google Cloud, see Settings)."
-            12501, 16 -> "Cancelled."
+            10, 16, 12501 -> SETUP
             7 -> "No internet."
             else -> e.message ?: "Couldn't connect to Gmail."
         }
