@@ -171,7 +171,7 @@ class GastoActivity : Activity() {
     private fun catName(c: String) = when (c) { "food" -> "food"; "transport" -> "transport"; "out" -> "going out"; else -> "other" }
 
     private fun paymentRow(p: Payment, last: Boolean, sub: String) =
-        payRow(p.merchant, sub, "−" + eur(p.amount), last, onClick = { editPayment(p) }, onLong = { editPayment(p) })
+        payRow(p.merchant, sub, (if (p.amount < 0) "+" else "−") + eur(p.amount), last, onClick = { editPayment(p) }, onLong = { editPayment(p) })
 
     // MARK: Month
 
@@ -224,12 +224,18 @@ class GastoActivity : Activity() {
             addView(text(if (left >= 0) "LEFT THIS MONTH" else "OVER THIS MONTH", 12f, C.SUB, 700).apply { letterSpacing = 0.06f })
             addView(money(Math.abs(left), 36f, if (left >= 0) C.INK else C.RED).apply { setPadding(0, dp(4), 0, 0) })
             addView(text("of €${base.toInt()} · $days days to go", 13f, C.SUB).apply { setPadding(0, dp(4), 0, 0) })
+            addView(text("✎ Update amount", 12.5f, C.G1, 700).apply {
+                background = round(C.MINT, dpf(12f)); setPadding(dp(10), dp(5), dp(10), dp(5))
+            }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
         }, LinearLayout.LayoutParams(0, -2, 1f))
+        big.background = card()
+        big.setOnClickListener { editLeft(left) }
+        big.contentDescription = "Left this month. Tap to update the amount"
         content.addView(big, lp(top = 16))
 
         val stats = hbox()
         val subs = ps.filter { it.kind == "sub" }
-        val daily = ps.filter { it.kind != "sub" }
+        val daily = ps.filter { it.kind == "daily" }
         listOf(
             Triple("PER DAY", eur(Math.max(0.0, left) / days), "to stay on ${base.toInt()}"),
             Triple("SUBS", eur(subs.sumOf { it.amount }), "${Subs.list().size} active"),
@@ -252,7 +258,7 @@ class GastoActivity : Activity() {
         } else {
             val box = cardBox()
             latest.forEachIndexed { i, p ->
-                box.addView(paymentRow(p, i == latest.size - 1, "${when_(p.time)} · ${if (p.kind == "sub") "subscription" else catName(p.category)} · ${sourceName(p)}"))
+                box.addView(paymentRow(p, i == latest.size - 1, "${when_(p.time)} · ${when (p.kind) { "sub" -> "subscription"; "adjust" -> "your update"; else -> catName(p.category) }}${if (p.kind == "adjust") "" else " · " + sourceName(p)}"))
             }
             content.addView(box)
         }
@@ -311,7 +317,7 @@ class GastoActivity : Activity() {
     // MARK: Daily
 
     private fun daily() {
-        val all = Period.payments(this).filter { it.kind != "sub" }
+        val all = Period.payments(this).filter { it.kind == "daily" }
         val shown = if (filter == "all") all else all.filter { it.category == filter }
         val head = hbox()
         head.addView(eyebrow("Daily payments"), LinearLayout.LayoutParams(0, -2, 1f))
@@ -465,6 +471,25 @@ class GastoActivity : Activity() {
         AlertDialog.Builder(this).setTitle("Month starts on").setItems(days) { _, i -> Prefs.setStartDay(this, i + 1); render() }.show()
     }
 
+    /** She types what she really has left; the difference is saved as an update so the month stays right. */
+    private fun editLeft(left: Double) {
+        val f = field("What you have left (€)", String.format(Locale.US, "%.2f", left), true)
+        val hint = text("Check your bank app and type what's left for this month. Gasto keeps the difference as an update, so everything adds up.", 12.5f, C.SUB).apply {
+            setPadding(0, dp(10), 0, 0); setLineSpacing(0f, 1.2f)
+        }
+        AlertDialog.Builder(this).setTitle("Update amount left").setView(dialogBox(f, hint))
+            .setPositiveButton("Save") { _, _ ->
+                val v = Parse.number(f.text.toString()) ?: return@setPositiveButton
+                val diff = left - v      // positive: spent more than Gasto saw
+                if (Math.abs(diff) < 0.005) return@setPositiveButton
+                Store.add(this, Payment("adj:${System.currentTimeMillis()}", diff, "Balance update", System.currentTimeMillis(),
+                    "adjust", "adjust", "other", note = "Set what's left to ${eur(v)}"))
+                toast(if (diff > 0) "${eur(diff)} more counted as spent" else "${eur(-diff)} given back to this month")
+                Alerts.checkBudget(this)
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
     private fun addPayment() {
         val name = field("Where (e.g. Market)", "", false)
         val amt = field("Amount €", "", true)
@@ -509,7 +534,7 @@ class GastoActivity : Activity() {
         AlertDialog.Builder(this).setTitle("Payment").setView(dialogBox(name, amt, kinds, HorizontalScrollView(this).apply { addView(cats) }, info))
             .setPositiveButton("Save") { _, _ ->
                 p.merchant = name.text.toString().trim().ifEmpty { p.merchant }
-                Parse.number(amt.text.toString())?.let { p.amount = Math.abs(it) }
+                Parse.number(amt.text.toString())?.let { p.amount = if (p.kind == "adjust") it else Math.abs(it) }
                 p.kind = kind; p.category = cat
                 Store.update(this, p)
             }

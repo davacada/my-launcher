@@ -52,7 +52,7 @@ object Store {
         init(ctx)
         if (list.any { it.id == p.id }) return false
         // The same payment often shows twice (Google Wallet and the bank): same amount within 5 minutes.
-        if (p.source != "manual" && list.any { Math.abs(it.amount - p.amount) < 0.005 && Math.abs(it.time - p.time) < 5 * 60_000 && it.source != "manual" }) return false
+        if (p.source !in setOf("manual", "adjust") && list.any { Math.abs(it.amount - p.amount) < 0.005 && Math.abs(it.time - p.time) < 5 * 60_000 && it.source !in setOf("manual", "adjust") }) return false
         // A Gmail receipt for something the bank already told us about (same amount, same day).
         if ((p.source == "gmail" || p.source == "play") && list.any {
                 Math.abs(it.amount - p.amount) < 0.005 && Math.abs(it.time - p.time) < 36 * 3600_000L && it.source in setOf("bank", "wallet") }) {
