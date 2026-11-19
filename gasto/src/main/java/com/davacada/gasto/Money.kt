@@ -63,6 +63,8 @@ object Store {
             }
             save(); return false
         }
+        // A statement line for a payment the bank already notified about (statements often only have the day).
+        if (p.id.startsWith("csv:") && list.any { !it.id.startsWith("csv:") && Math.abs(it.amount - p.amount) < 0.005 && Math.abs(it.time - p.time) < 36 * 3600_000L }) return false
         list.add(p)
         save()
         return true

@@ -11,6 +11,9 @@ import android.service.notification.StatusBarNotification
  */
 class PayListener : NotificationListenerService() {
 
+    override fun onListenerConnected() { instance = this }
+    override fun onListenerDisconnected() { if (instance === this) instance = null }
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val pkg = sbn.packageName ?: return
         if (pkg == packageName || pkg in ignore) return
@@ -24,8 +27,28 @@ class PayListener : NotificationListenerService() {
     }
 
     companion object {
+        @Volatile var instance: PayListener? = null
+
+        /** Look at the notifications still in the shade (for the Scan button). Returns how many were new. */
+        fun scanActive(ctx: Context): Int {
+            val l = instance ?: return -1
+            val before = Store.all().size
+            runCatching {
+                for (sbn in l.activeNotifications) {
+                    val pkg = sbn.packageName ?: continue
+                    if (pkg == ctx.packageName || pkg in ignore) continue
+                    val e = sbn.notification?.extras ?: continue
+                    val title = e.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+                    val body = (e.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: e.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
+                    handle(ctx, pkg, title, "$title. $body", sbn.postTime)
+                }
+            }
+            return Store.all().size - before
+        }
+
+        private const val GMAIL = "com.google.android.gm"
+        private val receiptish = Regex("""(?i)receipt|invoice|order|purchase|payment|paid|subscription|renew|račun|potrdilo|naročnin|plačil|faktur|charged""")
         private val ignore = setOf(
-            "com.google.android.gm",            // Gmail: read properly through the Gmail sync instead
             "org.telegram.messenger", "com.whatsapp", "com.facebook.orca", "com.instagram.android",
             "com.android.systemui", "android", "com.google.android.youtube",
         )
@@ -39,6 +62,7 @@ class PayListener : NotificationListenerService() {
 
         fun handle(ctx: Context, pkg: String, title: String, text: String, time: Long) {
             Store.init(ctx)
+            if (pkg == GMAIL) { gmailNotification(ctx, title, text, time); return }
             val amounts = Parse.amounts(text)
             if (amounts.isEmpty() || !Parse.isSpend(text)) return
 
@@ -67,6 +91,23 @@ class PayListener : NotificationListenerService() {
                 category = Parse.category("$merchant $text"),
                 app = app,
                 note = text.take(200),
+            )
+            if (Store.add(ctx, p)) Alerts.checkBudget(ctx)
+        }
+    
+        /** A new email shown by the Gmail app: title is the sender, text the subject and preview. */
+        private fun gmailNotification(ctx: Context, sender: String, text: String, time: Long) {
+            if (!Prefs.bool(ctx, "gmailNotes", true) || !receiptish.containsMatchIn(text)) return
+            val amounts = Parse.amounts(text)
+            if (amounts.isEmpty()) return
+            val isPlay = sender.contains("Google Play", true) || text.contains("Google Play", true)
+            val merchant = Parse.tidy(if (isPlay) "Google Play" else sender.substringBefore("<").ifBlank { "Email receipt" })
+            val p = Payment(
+                id = "gn:${text.hashCode()}:${amounts.first().second}",
+                amount = Math.abs(amounts.first().second), merchant = merchant, time = time,
+                source = if (isPlay) "play" else "gmail",
+                kind = if (Parse.isSub(text, merchant)) "sub" else "daily",
+                category = Parse.category("$merchant $text"), app = "Gmail", note = text.take(200),
             )
             if (Store.add(ctx, p)) Alerts.checkBudget(ctx)
         }

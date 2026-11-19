@@ -81,6 +81,10 @@ class GastoActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_CSV && resultCode == RESULT_OK) {
+            data?.data?.let { importStatement(it) }
+            return
+        }
         if (requestCode == Gmail.REQ) {
             if (resultCode == RESULT_OK) Gmail.onResult(this, data) { err -> gmailDone(err) }
             else gmailDone("Cancelled.")
@@ -182,6 +186,16 @@ class GastoActivity : Activity() {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         top.addView(text(Period.monthName(this), 13f, C.SUB, 600))
         content.addView(top)
+
+        content.addView(hbox().apply {
+            gravity = Gravity.CENTER
+            background = round(C.G1, dpf(18f)).let { android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33FFFFFF), it, null) }
+            setPadding(0, dp(13), 0, dp(13))
+            addView(ImageView(context).apply { setImageResource(R.drawable.i_scan); setColorFilter(C.WHITE) }, LinearLayout.LayoutParams(dp(20), dp(20)))
+            addView(text("Scan for receipts", 15f, C.WHITE, 700).apply { setPadding(dp(10), 0, 0, 0) })
+            contentDescription = "Scan email and bank for receipts"
+            setOnClickListener { scan() }
+        }, lp(top = 16))
 
         if (!listenerOn() && !Gmail.connected(this)) {
             content.addView(cardBox(16, 14).apply {
@@ -374,6 +388,8 @@ class GastoActivity : Activity() {
             } else if (Gmail.lastError(this)?.contains("setup") == true) gmailSetupHelp()
             else Gmail.connect(this) { gmailDone(it) }
         })
+        src.addView(settingRow("New receipts from Gmail's notifications", "works without the Google setup, from today on",
+            toggle(Prefs.bool(this, "gmailNotes", true)) { Prefs.setBool(this, "gmailNotes", it) }))
         val on = listenerOn()
         val apps = Prefs.apps(this)
         src.addView(settingRow("Bank notifications",
@@ -498,6 +514,86 @@ class GastoActivity : Activity() {
                     .setPositiveButton("Remove") { _, _ -> Store.remove(this, p) }.setNegativeButton("Keep", null).show()
             }
             .setNegativeButton("Cancel", null).show()
+    }
+
+    // MARK: Scan
+
+    private val REQ_CSV = 5301
+
+    private fun scanRow(title: String): Pair<LinearLayout, TextView> {
+        val status = text("…", 12.5f, C.SUB)
+        val row = vbox().apply {
+            setPadding(0, dp(12), 0, dp(12))
+            addView(text(title, 15f, C.INK, 600))
+            addView(status.apply { setPadding(0, dp(3), 0, 0) })
+        }
+        return row to status
+    }
+
+    private fun scan() {
+        val box = vbox().apply { setPadding(dp(22), dp(6), dp(22), dp(4)) }
+        val (gRow, gStatus) = scanRow("Gmail receipts")
+        val (bRow, bStatus) = scanRow("Bank & Wallet notifications")
+        val (sRow, sStatus) = scanRow("Bank statement (CSV)")
+        box.addView(gRow); box.addView(divider(), LinearLayout.LayoutParams(-1, 1))
+        box.addView(bRow); box.addView(divider(), LinearLayout.LayoutParams(-1, 1))
+        box.addView(sRow)
+        val dlg = AlertDialog.Builder(this).setTitle("Scanning").setView(box).setPositiveButton("Done", null).show()
+
+        // bank notifications still in the shade
+        if (!listenerOn()) {
+            bStatus.text = "Off · tap to turn on"; bStatus.setTextColor(C.G1)
+            bRow.setOnClickListener { dlg.dismiss(); startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+        } else {
+            val n = PayListener.scanActive(this)
+            bStatus.text = when {
+                n < 0 -> "Starting up · new payments are caught as they come"
+                n == 0 -> "Nothing new in your notifications · new payments are caught as they come"
+                else -> "$n new payment${if (n == 1) "" else "s"} found"
+            }
+        }
+
+        // Gmail: everything from the last two months
+        when {
+            Gmail.connected(this) -> {
+                gStatus.text = "Reading your inbox…"
+                Gmail.connect(this) { err ->
+                    gStatus.text = err ?: "${Prefs.str(this, "gmailAdded") ?: "0"} new receipts"
+                    render()
+                }
+            }
+            Gmail.lastError(this)?.contains("setup") == true -> {
+                gStatus.text = "Needs the one-time Google setup · tap"; gStatus.setTextColor(C.RED)
+                gRow.setOnClickListener { dlg.dismiss(); gmailSetupHelp() }
+            }
+            else -> {
+                gStatus.text = "Not connected · tap to connect"; gStatus.setTextColor(C.G1)
+                gRow.setOnClickListener { dlg.dismiss(); Gmail.connect(this) { gmailDone(it) } }
+            }
+        }
+
+        // older bank payments: from an exported statement
+        sStatus.text = "For older payments: export a CSV from your bank app, then tap to pick it"
+        sStatus.setTextColor(C.G1)
+        sRow.setOnClickListener {
+            dlg.dismiss()
+            runCatching {
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
+                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/csv", "text/comma-separated-values", "text/plain", "application/vnd.ms-excel", "application/octet-stream"))
+                }, REQ_CSV)
+            }
+        }
+    }
+
+    private fun importStatement(uri: android.net.Uri) {
+        toast("Reading the statement…")
+        Thread {
+            val msg = runCatching { Statement.import(this, uri) }.fold(
+                { (a, s) -> "$a payment${if (a == 1) "" else "s"} added" + (if (s > 0) " · $s skipped (income, duplicates or unreadable)" else "") },
+                { it.message ?: "Couldn't read that file." })
+            runOnUiThread { toast(msg); render() }
+        }.start()
     }
 
     private fun lp(top: Int = 0) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) }
