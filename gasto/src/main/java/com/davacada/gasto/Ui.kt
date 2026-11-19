@@ -111,7 +111,7 @@ fun Context.divider() = View(this).apply { setBackgroundColor(C.LINE) }
 
 /** Big money with smaller cents: €412.30 */
 fun Context.money(value: Double, sp: Float, color: Int = C.INK): TextView {
-    val whole = String.format("€%,d", value.toLong()).replace(',', '.')
+    val whole = "€" + value.toLong().toString()
     val cents = String.format(".%02d", Math.round(Math.abs(value) * 100) % 100)
     val b = SpannableStringBuilder(whole + cents)
     b.setSpan(AbsoluteSizeSpan((sp * 0.58f).toInt(), true), whole.length, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)

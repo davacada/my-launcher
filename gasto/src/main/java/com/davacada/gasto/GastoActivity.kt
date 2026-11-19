@@ -134,7 +134,8 @@ class GastoActivity : Activity() {
                 addView(ImageView(context).apply { setImageResource(icon); setColorFilter(if (on) C.G1 else C.SUB) }, FrameLayout.LayoutParams(dp(22), dp(22)))
             }
             col.addView(pillBox, LinearLayout.LayoutParams(-2, -2))
-            col.addView(text(name, 11f, if (on) C.G1 else C.SUB, 600).apply { setPadding(0, dp(4), 0, 0) })
+            col.addView(text(name, 11f, if (on) C.G1 else C.SUB, 600).apply { setPadding(0, dp(5), 0, 0); maxLines = 1 },
+                LinearLayout.LayoutParams(-2, -2))
             col.contentDescription = name
             col.setOnClickListener { tab = i; scroll.scrollTo(0, 0); render() }
             nav.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
@@ -196,8 +197,8 @@ class GastoActivity : Activity() {
         ringBox.addView(Ring(this).apply { fraction = (spent / base).toFloat() }, FrameLayout.LayoutParams(-1, -1))
         ringBox.addView(vbox().apply {
             gravity = Gravity.CENTER
-            addView(text("SPENT", 11f, C.SUB, 600))
-            addView(text("${Math.round(spent / base * 100)}%", 17f, C.INK, 800).apply { setPadding(0, dp(2), 0, 0) })
+            addView(text("SPENT", 11f, C.SUB, 600), LinearLayout.LayoutParams(-2, -2))
+            addView(text("${Math.round(spent / base * 100)}%", 17f, C.INK, 800).apply { setPadding(0, dp(2), 0, 0) }, LinearLayout.LayoutParams(-2, -2))
         }, FrameLayout.LayoutParams(-1, -1))
         big.addView(ringBox, LinearLayout.LayoutParams(dp(124), dp(124)))
         big.addView(vbox().apply {
