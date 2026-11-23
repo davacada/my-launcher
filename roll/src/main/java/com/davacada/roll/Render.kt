@@ -115,7 +115,8 @@ object Render {
                 if (withSound) { val pair = Effects.createExperimentalSpeedChangingEffect(Constant(c.speed)); audio.add(pair.first); video.add(pair.second) }
                 else video.add(SpeedChangeEffect(c.speed))
             }
-            if (withSound) { audio.add(volume(c.volume)); audio.add(resample()) }
+            // Phones like the Red Magic record 24-bit sound; the mixers only take 16-bit, so convert first.
+            if (withSound) { audio.add(0, androidx.media3.common.audio.ToInt16PcmAudioProcessor()); audio.add(volume(c.volume)); audio.add(resample()) }
             video.add(Presentation.createForWidthAndHeight(w, h, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
