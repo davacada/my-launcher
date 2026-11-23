@@ -1060,19 +1060,19 @@ class RollActivity : Activity() {
                 "video" -> {
                     val (w, h) = Render.size(p, exShort)
                     val out = File(outDir(), "$safe-$stamp.mp4")
-                    val comp = Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir)
-                    exporting = Render.export(this, comp, out, MimeTypes.VIDEO_H264, videoBitrate(w, h), { pr -> renderExport("Exporting…", pr) }) { err ->
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir, lvl) },
+                        out, MimeTypes.VIDEO_H264, videoBitrate(w, h), { pr -> renderExport("Exporting…", pr) }) { err, note ->
                         exporting = null
                         if (err != null) renderExport("Couldn't export: $err")
-                        else { val u = Render.saveToGallery(this, out, out.name, "video/mp4"); renderExport("Saved to Movies/Roll", 100, out, "video/mp4", u) }
+                        else { val u = Render.saveToGallery(this, out, out.name, "video/mp4"); renderExport(note ?: "Saved to Movies/Roll", 100, out, "video/mp4", u) }
                     }
                     renderExport("Exporting…", 0)
                 }
                 "gif" -> {
                     val (a, b) = gifRange(p); val (w, h) = gifSize(p)
                     val tmp = File(outDir(), "gif-src.mp4"); val out = File(outDir(), "$safe-$stamp.gif")
-                    val comp = Render.composition(this, p, Render.range(p, a, b), w, h, gifFps, false, store.lutDir)
-                    exporting = Render.export(this, comp, tmp, MimeTypes.VIDEO_H264, 6_000_000, { pr -> renderExport("Rendering frames…", pr / 2) }) { err ->
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, a, b), w, h, gifFps, false, store.lutDir, lvl) },
+                        tmp, MimeTypes.VIDEO_H264, 6_000_000, { pr -> renderExport("Rendering frames…", pr / 2) }) { err, _ ->
                         if (err != null) { exporting = null; renderExport("Couldn't export: $err"); return@export }
                         renderExport("Making the GIF…", 50)
                         bg.execute {
@@ -1091,8 +1091,8 @@ class RollActivity : Activity() {
                     val r = Render.ratio(p)
                     val (w, h) = if (stSquare) 512 to 512 else if (r >= 1) 512 to ((512 / r).toInt() / 2 * 2) else ((512 * r).toInt() / 2 * 2) to 512
                     val tmp = File(outDir(), "sticker-src.mp4"); val out = File(outDir(), "$safe-$stamp.webm")
-                    val comp = Render.composition(this, p, Render.range(p, t0, minOf(p.lengthMs, t0 + 2990)), w, h, stFps, false, store.lutDir)
-                    exporting = Render.export(this, comp, tmp, MimeTypes.VIDEO_H264, 8_000_000, { pr -> renderExport("Rendering…", pr / 2) }) { err ->
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, t0, minOf(p.lengthMs, t0 + 2990)), w, h, stFps, false, store.lutDir, lvl) },
+                        tmp, MimeTypes.VIDEO_H264, 8_000_000, { pr -> renderExport("Rendering…", pr / 2) }) { err, _ ->
                         if (err != null) { exporting = null; renderExport("Couldn't export: $err"); return@export }
                         renderExport("Encoding VP9…", 60)
                         bg.execute {

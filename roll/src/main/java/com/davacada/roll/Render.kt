@@ -96,7 +96,12 @@ object Render {
         return out
     }
 
-    fun composition(ctx: Context, p: Project, clips: List<Clip>, w: Int, h: Int, fps: Int, withSound: Boolean, lutDir: File): Composition {
+    /**
+     * [level] makes the export more forgiving after a failure:
+     * 0 normal · 1 no duration hint, no forced audio, MediaCodec tone-mapping · 2 also without sound.
+     */
+    fun composition(ctx: Context, p: Project, clips: List<Clip>, w: Int, h: Int, fps: Int, withSoundAsked: Boolean, lutDir: File, level: Int = 0): Composition {
+        val withSound = withSoundAsked && level < 2
         val grade = gradeEffects(ctx, p.grade, lutDir)
         val items = clips.map { c ->
             val mi = MediaItem.Builder().setUri(Uri.parse(c.uri)).setClippingConfiguration(
@@ -110,19 +115,58 @@ object Render {
             video.add(Presentation.createForWidthAndHeight(w, h, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
-            EditedMediaItem.Builder(mi).setEffects(Effects(audio, video)).setRemoveAudio(!withSound)
-                .setDurationUs(c.sourceMs * 1000).build()
+            val b = EditedMediaItem.Builder(mi).setEffects(Effects(audio, video)).setRemoveAudio(!withSound)
+            if (level == 0 && c.sourceMs > 0) b.setDurationUs(c.sourceMs * 1000)
+            b.build()
         }
         return Composition.Builder(EditedMediaItemSequence(items))
-            .setHdrMode(Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL)
-            .experimentalSetForceAudioTrack(withSound)
+            .setHdrMode(if (level == 0) Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL else Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_MEDIACODEC)
+            .experimentalSetForceAudioTrack(withSound && level == 0)
             .build()
     }
 
-    class Job(val transformer: Transformer, val cancel: () -> Unit)
+    class Job(var cancel: () -> Unit)
+
+    /** A readable reason, from the deepest cause. */
+    fun reason(e: Throwable): String {
+        var t: Throwable? = e
+        val parts = ArrayList<String>()
+        while (t != null) { parts.add((t.javaClass.simpleName + ": " + (t.message ?: "")).trim()); t = t.cause }
+        val all = parts.joinToString(" · ")
+        return when {
+            Regex("(?i)SecurityException|Permission").containsMatchIn(all) -> "Roll lost access to a clip. Remove it from the timeline and add it again."
+            Regex("(?i)FileNotFound|No such file|ENOENT").containsMatchIn(all) -> "A clip was moved or deleted from the phone."
+            Regex("(?i)Decoder|MediaCodec|codec").containsMatchIn(all) -> "The phone couldn't decode one of the clips (${parts.last().take(90)})."
+            else -> parts.last().take(140)
+        }
+    }
+
+    /**
+     * Export with automatic retries: if the first try fails (e.g. "Asset loader error"),
+     * try again more forgivingly, and finally without sound. [done] gets (error, note).
+     */
+    fun export(ctx: Context, make: (Int) -> Composition, out: File, mime: String, bitrate: Int, progress: (Int) -> Unit,
+               done: (String?, String?) -> Unit): Job {
+        val job = Job {}
+        var cancelled = false
+        fun attempt(level: Int) {
+            val comp = try { make(level) } catch (e: Exception) { done(reason(e), null); return }
+            val inner = exportOnce(ctx, comp, out, mime, bitrate, progress) { err ->
+                if (cancelled) return@exportOnce
+                when {
+                    err == null -> done(null, when (level) { 2 -> "Exported without sound: the phone couldn't read the clip's audio."; else -> null })
+                    level < 2 -> attempt(level + 1)
+                    else -> done(err, null)
+                }
+            }
+            job.cancel = { cancelled = true; inner.cancel() }
+        }
+        attempt(0)
+        return job
+    }
 
     /** Runs the export to [out]; [progress] gets 0..100, [done] gets null on success or the error. */
-    fun export(ctx: Context, comp: Composition, out: File, mime: String, bitrate: Int, progress: (Int) -> Unit, done: (String?) -> Unit): Job {
+    private fun exportOnce(ctx: Context, comp: Composition, out: File, mime: String, bitrate: Int, progress: (Int) -> Unit, done: (String?) -> Unit): Job {
         val main = Handler(Looper.getMainLooper())
         val enc = DefaultEncoderFactory.Builder(ctx)
             .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
@@ -131,7 +175,7 @@ object Render {
         val tr = Transformer.Builder(ctx).setVideoMimeType(mime).setEncoderFactory(enc)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) { finished = true; done(null) }
-                override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) { finished = true; done(exportException.message ?: "Export failed") }
+                override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) { finished = true; done(reason(exportException)) }
             }).build()
         out.parentFile?.mkdirs(); out.delete()
         tr.start(comp, out.path)
@@ -144,7 +188,7 @@ object Render {
             }
         }
         main.post(tick)
-        return Job(tr) { finished = true; tr.cancel() }
+        return Job { finished = true; tr.cancel() }
     }
 
     // ---------------------------------------------------------------- saving
