@@ -77,10 +77,14 @@ object Render {
         override fun getNextSpeedChangeTimeUs(timeUs: Long) = androidx.media3.common.C.TIME_UNSET
     }
 
+    /** Every clip's sound becomes stereo at the same volume scale, so clips from different sources join cleanly. */
     private fun volume(v: Float): AudioProcessor = ChannelMixingAudioProcessor().apply {
-        putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(v))
+        putChannelMixingMatrix(ChannelMixingMatrix.create(1, 2).scaleBy(v))
         putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(v))
     }
+
+    /** Same sample rate for every clip (phones record 44.1 or 48 kHz). */
+    private fun resample(): AudioProcessor = androidx.media3.common.audio.SonicAudioProcessor().apply { setOutputSampleRateHz(48000) }
 
     /** The part of the edit between [fromMs] and [toMs] (timeline time), as clips. */
     fun range(p: Project, fromMs: Long, toMs: Long): List<Clip> {
@@ -111,7 +115,7 @@ object Render {
                 if (withSound) { val pair = Effects.createExperimentalSpeedChangingEffect(Constant(c.speed)); audio.add(pair.first); video.add(pair.second) }
                 else video.add(SpeedChangeEffect(c.speed))
             }
-            if (withSound && c.volume != 1f) audio.add(volume(c.volume))
+            if (withSound) { audio.add(volume(c.volume)); audio.add(resample()) }
             video.add(Presentation.createForWidthAndHeight(w, h, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
@@ -149,13 +153,14 @@ object Render {
                done: (String?, String?) -> Unit): Job {
         val job = Job {}
         var cancelled = false
+        var firstError: String? = null
         fun attempt(level: Int) {
             val comp = try { make(level) } catch (e: Exception) { done(reason(e), null); return }
             val inner = exportOnce(ctx, comp, out, mime, bitrate, progress) { err ->
                 if (cancelled) return@exportOnce
                 when {
-                    err == null -> done(null, when (level) { 2 -> "Exported without sound: the phone couldn't read the clip's audio."; else -> null })
-                    level < 2 -> attempt(level + 1)
+                    err == null -> done(null, if (level == 2) "Saved WITHOUT sound. The sound failed: ${firstError ?: "unknown"}" else null)
+                    level < 2 -> { if (firstError == null) firstError = err; attempt(level + 1) }
                     else -> done(err, null)
                 }
             }
