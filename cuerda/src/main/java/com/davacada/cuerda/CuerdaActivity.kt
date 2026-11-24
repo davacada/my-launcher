@@ -120,9 +120,6 @@ class CuerdaActivity : Activity() {
         Notes.a4 = prefs.getFloat("a4", 440f).toDouble()
         window.setDecorFitsSystemWindows(false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        window.insetsController?.setSystemBarsAppearance(
-            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
-            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
 
         root = FrameLayout(this).apply { setBackgroundColor(C.PAPER) }
         paper = Paper(this)
@@ -137,6 +134,9 @@ class CuerdaActivity : Activity() {
         nav = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         root.addView(nav, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         setContentView(root)
+        runCatching { window.decorView.windowInsetsController?.setSystemBarsAppearance(
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS) }
         root.setOnApplyWindowInsetsListener { _, ins ->
             val b = ins.getInsets(WindowInsets.Type.systemBars()); top = b.top; bottom = b.bottom; render(); ins
         }
