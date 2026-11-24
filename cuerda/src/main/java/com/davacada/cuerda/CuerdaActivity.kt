@@ -101,6 +101,22 @@ class CuerdaActivity : Activity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        // If Cuerda crashed last time, show why (so it can be fixed) instead of crashing again silently.
+        val crashFile = File(filesDir, "crash.txt")
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            runCatching { crashFile.writeText(android.util.Log.getStackTraceString(e).take(6000)) }
+            previous?.uncaughtException(t, e)
+        }
+        if (crashFile.exists()) {
+            val trace = runCatching { crashFile.readText() }.getOrDefault("")
+            crashFile.delete()
+            AlertDialog.Builder(this).setTitle("Cuerda crashed last time")
+                .setMessage("Send a screenshot of this so it can be fixed:\n\n" + trace.lines().take(14).joinToString("\n"))
+                .setPositiveButton("OK", null)
+                .setNeutralButton("Share") { _, _ -> startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, trace), "Share crash")) }
+                .show()
+        }
         Notes.a4 = prefs.getFloat("a4", 440f).toDouble()
         window.setDecorFitsSystemWindows(false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -402,7 +418,8 @@ class CuerdaActivity : Activity() {
                     val s = android.text.SpannableStringBuilder(Notes.name(n) + oct)
                     s.setSpan(android.text.style.RelativeSizeSpan(0.42f), s.length - oct.length, s.length, 0)
                     s.setSpan(android.text.style.ForegroundColorSpan(C.SUB), s.length - oct.length, s.length, 0)
-                    text = s; textSize = 26f; typeface = Fonts.hand(context); fontVariationSettings = "'wght' 700"
+                    text = s; textSize = 26f; typeface = Fonts.hand(context)
+                    if (Fonts.handOk) runCatching { fontVariationSettings = "'wght' 700" }
                     setOnClickListener {
                         if (!auto && picked == i) { auto = true; picked = -1 } else { auto = false; picked = i }
                         if (tone.isPlaying) tone.freq = Notes.freq(n.toDouble())

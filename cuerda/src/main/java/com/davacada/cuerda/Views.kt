@@ -52,7 +52,11 @@ object Fonts {
         ctx.resources.getFont(when { w >= 800 -> R.font.inter_extrabold; w >= 700 -> R.font.inter_bold; w >= 600 -> R.font.inter_semibold; else -> R.font.inter_regular })
     }
     private var hand: Typeface? = null
-    fun hand(ctx: Context): Typeface = hand ?: ctx.resources.getFont(R.font.caveat).also { hand = it }
+    var handOk = true
+    /** Caveat, or a fallback if the font can't be loaded on this phone. */
+    fun hand(ctx: Context): Typeface = hand ?: (try { ctx.resources.getFont(R.font.caveat) } catch (e: Throwable) {
+        handOk = false; Typeface.create("casual", Typeface.BOLD)
+    }).also { hand = it }
 }
 
 /** Inter, for small print. */
@@ -64,7 +68,8 @@ fun Context.text(s: CharSequence, sp: Float, color: Int = C.INK, weight: Int = 4
 /** Handwriting (Caveat). */
 fun Context.hand(s: CharSequence, sp: Float, color: Int = C.INK, bold: Boolean = true) = TextView(this).apply {
     text = s; setTextColor(color); setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
-    typeface = Fonts.hand(context); fontVariationSettings = if (bold) "'wght' 700" else "'wght' 500"
+    typeface = Fonts.hand(context)
+    if (Fonts.handOk) runCatching { fontVariationSettings = if (bold) "'wght' 700" else "'wght' 500" }
     includeFontPadding = false
 }
 
