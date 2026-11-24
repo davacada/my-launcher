@@ -31,8 +31,16 @@ jobs:
             adb logcat -c
             adb shell am start -n com.davacada.cuerda/.CuerdaActivity
             sleep 12
+            adb exec-out screencap -p > shot1.png || true
+            W=$(adb shell wm size | grep -o '[0-9]*x[0-9]*' | tail -1 | cut -dx -f1); H=$(adb shell wm size | grep -o '[0-9]*x[0-9]*' | tail -1 | cut -dx -f2)
+            adb shell input tap $((W*55/100)) $((H-H*4/100)); sleep 6
+            adb exec-out screencap -p > shot2.png || true
+            adb shell input tap $((W*50/100)) $((H-H*11/100)); sleep 8
+            adb exec-out screencap -p > shot3.png || true
+            adb shell input tap $((W*85/100)) $((H-H*4/100)); sleep 5
+            adb exec-out screencap -p > shot4.png || true
             adb logcat -d > logcat.txt || true
-            adb exec-out screencap -p > shot.png || true
+            for f in shot1 shot2 shot3 shot4; do echo "BEGIN-$f"; base64 -w0 $f.png; echo; echo "END-$f"; done
             grep -n -A40 "FATAL EXCEPTION" logcat.txt | head -80 || true
             grep -n -B2 -A30 "AndroidRuntime" logcat.txt | head -80 || true
       - uses: actions/upload-artifact@v4
