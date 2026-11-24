@@ -32,12 +32,13 @@ jobs:
             adb shell am start -n com.davacada.cuerda/.CuerdaActivity
             sleep 12
             adb exec-out screencap -p > shot1.png || true
-            W=$(adb shell wm size | grep -o '[0-9]*x[0-9]*' | tail -1 | cut -dx -f1); H=$(adb shell wm size | grep -o '[0-9]*x[0-9]*' | tail -1 | cut -dx -f2)
-            adb shell input tap $((W*55/100)) $((H*95/100)); sleep 6
+            adb shell wm size
+            tapdesc() { adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb shell cat /sdcard/ui.xml > ui.xml; B=$(python3 -c "import re,sys;s=open('ui.xml').read();m=re.search(r'content-desc=\"$1\"[^>]*bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]',s);print((int(m.group(1))+int(m.group(3)))//2,(int(m.group(2))+int(m.group(4)))//2) if m else print('')"); echo "tap $1 at $B"; [ -n "$B" ] && adb shell input tap $B; }
+            tapdesc Chords; sleep 6
             adb exec-out screencap -p > shot2.png || true
-            adb shell input tap $((W*50/100)) $((H*80/100)); sleep 8
+            tapdesc "Listen for chords"; sleep 8
             adb exec-out screencap -p > shot3.png || true
-            adb shell input tap $((W*85/100)) $((H*95/100)); sleep 5
+            tapdesc Instruments; sleep 5
             adb exec-out screencap -p > shot4.png || true
             adb logcat -d > logcat.txt || true
             for f in shot1 shot2 shot3 shot4; do echo "BEGIN-$f"; base64 -w0 $f.png; echo; echo "END-$f"; done
