@@ -187,7 +187,7 @@ class CuerdaActivity : Activity() {
         val stretch = if (instrument.id == "piano") Notes.pianoStretch(target) else 0.0
         val cents = Notes.cents(fm, target.toDouble()) - stretch
         lastTarget = target
-        noteText?.text = Notes.name(target)
+        noteText?.apply { text = Notes.name(target); setTextColor(C.INK) }
         octText?.text = Notes.octave(target).toString()
         centsText?.apply {
             val c = cents.roundToInt()
@@ -240,7 +240,7 @@ class CuerdaActivity : Activity() {
             r.suggested -> "singing · chords that fit"
             else -> "song from speaker"
         }
-        chordText?.text = c?.name() ?: "–"
+        chordText?.apply { text = c?.name() ?: "♪"; setTextColor(if (c == null) tint(C.INK, 0x59) else C.INK) }
         chordSub?.text = c?.let { ch -> "${Notes.name(ch.root)} ${ch.q.name} · " + ch.notes().joinToString(" ") { Notes.name(it) } } ?: "No chord yet"
         val conf = r?.confidence ?: 0.0
         confBar?.apply { value = conf.toFloat(); color = if (r?.suggested == true) C.LAGOON else C.MANGO; invalidate() }
@@ -347,7 +347,7 @@ class CuerdaActivity : Activity() {
 
     private fun bigNote(): View = LinearLayout(this).apply {
         gravity = Gravity.CENTER_HORIZONTAL
-        noteText = text("–", 96f, C.INK, 800).apply { letterSpacing = -0.04f }
+        noteText = text("♪", 96f, tint(C.INK, 0x59), 800).apply { letterSpacing = -0.04f }
         octText = mono("", 26f, C.SUB).apply { setPadding(dp(4), dp(10), 0, 0) }
         addView(noteText); addView(octText)
     }
@@ -473,7 +473,7 @@ class CuerdaActivity : Activity() {
         })
         val mid = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        chordText = text("–", 92f, C.INK, 800).apply { letterSpacing = -0.04f; maxLines = 1 }
+        chordText = text("♪", 92f, C.INK, 800).apply { letterSpacing = -0.04f; maxLines = 1 }
         left.addView(chordText)
         chordSub = text("", 14f, C.SUB).apply { setPadding(0, dp(6), 0, 0) }
         left.addView(chordSub)
@@ -492,8 +492,8 @@ class CuerdaActivity : Activity() {
             stats.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
                 background = round(color, dpf(14f)); setPadding(0, dp(10), 0, dp(10))
-                addView(text(label, 11f, C.ON_BRIGHT, 700).apply { alpha = 0.7f })
-                addView(v)
+                addView(text(label, 11f, C.ON_BRIGHT, 700).apply { alpha = 0.7f; letterSpacing = 0.06f }, LinearLayout.LayoutParams(-2, -2))
+                addView(v, LinearLayout.LayoutParams(-2, -2))
             }, LinearLayout.LayoutParams(0, -2, 1f).apply { if (i > 0) leftMargin = dp(8) })
             return v
         }
