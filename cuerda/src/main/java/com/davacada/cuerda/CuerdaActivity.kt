@@ -15,7 +15,6 @@ import android.view.WindowManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -36,6 +35,8 @@ class CuerdaActivity : Activity() {
     private lateinit var scroll: ScrollView
     private lateinit var nav: LinearLayout
     private lateinit var root: FrameLayout
+    private lateinit var paper: Paper
+    private var wave: Wave? = null
     private var floating: View? = null
     private var top = 0; private var bottom = 0
     private var tab = 0
@@ -89,7 +90,6 @@ class CuerdaActivity : Activity() {
     private var stringButtons = ArrayList<TextView>()
     private var chordText: TextView? = null
     private var chordSub: TextView? = null
-    private var confBar: Bar? = null
     private var confText: TextView? = null
     private var chordBox: ChordBox? = null
     private var keyText: TextView? = null
@@ -104,11 +104,17 @@ class CuerdaActivity : Activity() {
         Notes.a4 = prefs.getFloat("a4", 440f).toDouble()
         window.setDecorFitsSystemWindows(false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.insetsController?.setSystemBarsAppearance(
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
 
-        root = FrameLayout(this).apply { setBackgroundColor(C.BG) }
-        root.addView(ImageView(this).apply { setImageResource(R.drawable.cuerda_bg); scaleType = ImageView.ScaleType.CENTER_CROP }, FrameLayout.LayoutParams(-1, -1))
-        root.addView(View(this).apply { background = grain() }, FrameLayout.LayoutParams(-1, -1))
-        scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        root = FrameLayout(this).apply { setBackgroundColor(C.PAPER) }
+        paper = Paper(this)
+        root.addView(paper, FrameLayout.LayoutParams(-1, -1))
+        scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER
+            setOnScrollChangeListener { _, _, y, _, _ -> paper.scrollOffset = y }
+        }
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(content)
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
@@ -199,7 +205,7 @@ class CuerdaActivity : Activity() {
                 c > 0 -> "$sign${abs(c)} cents · a little sharp"
                 else -> "$sign${abs(c)} cents · a little flat"
             }
-            setTextColor(if (abs(c) <= 10) C.MANGO else C.CORAL)
+            setTextColor(C.INK); highlight(if (abs(c) <= 10) C.MANGO else C.CORAL)
         }
         hzText?.text = String.format(Locale.US, "%.1f Hz → %.1f Hz", fm, Notes.freq(target + stretch / 100))
         needle?.set(cents, true)
@@ -216,7 +222,7 @@ class CuerdaActivity : Activity() {
     private fun showIdle() {
         needle?.set(null, false)
         centsBar?.apply { cents = null; invalidate() }
-        centsText?.apply { text = if (instrument.id == "piano") "Play one key" else "Play a string"; setTextColor(C.SUB) }
+        centsText?.apply { text = if (instrument.id == "piano") "play one key" else "play a string"; setTextColor(C.SUB); highlight(null) }
         hzText?.text = if (hasMic()) String.format(Locale.US, "A4 = %.0f Hz", Notes.a4) else "Allow the microphone to tune"
     }
 
@@ -225,31 +231,36 @@ class CuerdaActivity : Activity() {
     private fun onChord(r: ChordEar.Result) {
         lastResult = r
         val c = r.chord
-        if (c != null && r.loud) {
-            if (history.lastOrNull()?.chord != c) history.add(Hit(c, System.currentTimeMillis() - listenStart))
+        var changed: String? = null
+        val now = System.currentTimeMillis() - listenStart
+        if (c != null && r.loud && history.lastOrNull()?.chord != c) {
+            history.add(Hit(c, now)); changed = c.name()
         }
+        val mark = changed ?: if (c != null && r.loud) c.name() else null
+        waveLevels.add(r.level to (mark to now)); if (waveLevels.size > 50000) waveLevels.subList(0, 5000).clear()
+        wave?.push(r.level, mark, now)
         showChord(r)
     }
 
     private fun showChord(r: ChordEar.Result?) {
         val c = r?.chord ?: history.lastOrNull()?.chord
-        listenLabel?.text = if (listening) "LISTENING" else "TAP TO LISTEN"
         sourceText?.text = when {
-            !listening -> if (history.isEmpty()) "put the phone near the music" else "paused"
-            r == null || !r.loud -> "waiting for sound…"
+            !listening -> if (history.isEmpty()) "tap to listen" else "paused"
+            r == null || !r.loud -> "listening…"
             r.suggested -> "singing · chords that fit"
-            else -> "song from speaker"
+            else -> "listening…"
         }
-        chordText?.apply { text = c?.name() ?: "♪"; setTextColor(if (c == null) tint(C.INK, 0x59) else C.INK) }
-        chordSub?.text = c?.let { ch -> "${Notes.name(ch.root)} ${ch.q.name} · " + ch.notes().joinToString(" ") { Notes.name(it) } } ?: "No chord yet"
+        chordText?.apply { text = c?.name() ?: "♪"; setTextColor(if (c == null) 0x59000000 or (C.INK and 0xFFFFFF) else C.INK) }
+        chordSub?.text = c?.let { "${Notes.name(it.root)} ${it.q.name}" } ?: "no chord yet"
+        chordNotes?.text = c?.notes()?.joinToString(" · ") { Notes.name(it) } ?: ""
         val conf = r?.confidence ?: 0.0
-        confBar?.apply { value = conf.toFloat(); color = if (r?.suggested == true) C.LAGOON else C.MANGO; invalidate() }
+        val pct = (conf * 100).roundToInt()
         confText?.text = when {
-            c == null -> ""
-            r?.suggested == true -> "suggested · ${(conf * 100).roundToInt()}%"
-            conf > 0.66 -> "sure · ${(conf * 100).roundToInt()}%"
-            conf > 0.33 -> "likely · ${(conf * 100).roundToInt()}%"
-            else -> "guessing · ${(conf * 100).roundToInt()}%"
+            c == null || r == null -> ""
+            r.suggested -> "a guess from the melody ($pct%)"
+            conf > 0.66 -> "pretty sure ($pct%)"
+            conf > 0.33 -> "fairly sure ($pct%)"
+            else -> "not sure yet ($pct%)"
         }
         chordBox?.apply {
             if (c != null) { val (f, b) = Chords.shape(c); frets = f; barre = b } else frets = null
@@ -257,50 +268,51 @@ class CuerdaActivity : Activity() {
         }
         keyText?.text = r?.key?.let { Notes.name(it.first) + if (it.second) " minor" else " major" } ?: "…"
         tempoText?.text = r?.bpm?.let { "$it bpm" } ?: "…"
-        val cp = Chords.capo(history.map { it.chord }.distinct())
-        capoText?.text = cp?.let { "fret ${it.first}" } ?: "none"
-        renderHistory()
+        capoText?.text = Chords.capo(history.map { it.chord }.distinct())?.let { "fret ${it.first}" } ?: "none"
+        renderChart()
     }
 
-    private fun renderHistory() {
-        val row = historyRow ?: return
-        row.removeAllViews()
-        val colors = intArrayOf(C.LAGOON, C.MANGO, C.HIB)
-        if (history.isEmpty()) {
-            row.addView(text("Chords show up here as the song plays.", 13f, C.SUB).apply { setPadding(dp(4), dp(10), 0, dp(10)) })
-            return
+    /** "| Am | F | C | G |", the newest in red ink. */
+    private fun renderChart() {
+        val t = chartText ?: return
+        if (history.isEmpty()) { t.text = "chords appear here as the song plays"; t.setTextColor(C.SUB); t.textSize = 22f; return }
+        val shown = history.takeLast(10)
+        val b = android.text.SpannableStringBuilder(if (history.size > 10) "… " else "")
+        b.append("| ")
+        shown.forEachIndexed { i, h ->
+            val s = b.length
+            b.append(h.chord.name())
+            if (i == shown.size - 1) b.setSpan(android.text.style.ForegroundColorSpan(C.RED), s, b.length, 0)
+            b.append(" | ")
         }
-        history.forEachIndexed { i, h ->
-            val last = i == history.size - 1
-            val col = colors[i % 3]
-            val chip = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
-                background = if (last) round(C.CORAL, dpf(16f)) else round(tint(col, 0x24), dpf(16f), dp(1), tint(col, 0x66))
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                addView(text(h.chord.name(), 22f, if (last) 0xFF2A0F08.toInt() else col, 800))
-                addView(mono(clock(h.at), 10.5f, if (last) 0xFF2A0F08.toInt() else col).apply { setPadding(0, dp(2), 0, 0); alpha = 0.8f })
-                minimumWidth = dp(72)
-            }
-            row.addView(chip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
-        }
-        (row.parent as? HorizontalScrollView)?.post { (row.parent as HorizontalScrollView).fullScroll(View.FOCUS_RIGHT) }
+        t.text = b; t.setTextColor(C.INK); t.textSize = 32f
     }
 
     private fun clock(ms: Long) = String.format(Locale.US, "%d:%02d", ms / 60000, (ms / 1000) % 60)
 
     // MARK: layout
 
+    private var chordNotes: TextView? = null
+    private var chartText: TextView? = null
+
+    private fun subtitle(): String = when (tab) {
+        0 -> if (instrument.id == "piano") "piano" else if (chromaticMode || instrument.chromatic) "chromatic" else "${instrument.name.lowercase()} · ${tuning()?.name?.lowercase()}"
+        1 -> if (listening) "listening…" else "chords"
+        else -> "instruments"
+    }
+
     private fun render() {
         content.removeAllViews()
         floating?.let { root.removeView(it) }; floating = null
         needle = null; centsBar = null; keyboard = null; noteText = null; octText = null; centsText = null; hzText = null
-        stringButtons.clear(); chordText = null; chordSub = null; confBar = null; confText = null; chordBox = null
-        keyText = null; tempoText = null; capoText = null; historyRow = null; sourceText = null; listenLabel = null
-        content.setPadding(dp(20), top + dp(4), dp(20), bottom + dp(120))
+        stringButtons.clear(); chordText = null; chordSub = null; chordNotes = null; confText = null; chordBox = null
+        keyText = null; tempoText = null; capoText = null; chartText = null; sourceText = null; listenLabel = null; wave = null
+        content.setPadding(dp(54), top + dp(2), dp(20), bottom + dp(120))
         content.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            addView(wordmark(34f), LinearLayout.LayoutParams(0, -2, 1f))
-            addView(dots())
+            addView(hand("cuerda", 46f).apply { highlight(C.MANGO) }, LinearLayout.LayoutParams(-2, -2))
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(hand(subtitle(), 20f, C.SUB, bold = false).apply { maxLines = 1 })
         }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
         when (tab) {
             0 -> if (instrument.id == "piano") pianoScreen() else tunerScreen()
@@ -312,17 +324,28 @@ class CuerdaActivity : Activity() {
 
     private fun renderNav() {
         nav.removeAllViews()
-        nav.setBackgroundColor(0xF017213A.toInt())
-        nav.setPadding(0, dp(12), 0, bottom + dp(10))
-        listOf(Triple("Tune", R.drawable.i_tune, 0), Triple("Chords", R.drawable.i_chords, 1), Triple("Instruments", R.drawable.i_inst, 2)).forEach { (name, icon, i) ->
+        nav.background = object : android.graphics.drawable.Drawable() {
+            val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0x40000000 or (C.INK and 0xFFFFFF); strokeWidth = dpf(1.5f)
+                pathEffect = android.graphics.DashPathEffect(floatArrayOf(dpf(5f), dpf(4f)), 0f)
+            }
+            override fun draw(c: android.graphics.Canvas) {
+                c.drawColor(0xEBF6F1E4.toInt()); c.drawLine(bounds.left + dpf(40f), 0f, bounds.right.toFloat(), 0f, p)
+            }
+            override fun setAlpha(a: Int) {}
+            override fun setColorFilter(cf: android.graphics.ColorFilter?) {}
+            @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+        }
+        nav.setPadding(dp(40), dp(12), 0, bottom + dp(12))
+        nav.gravity = Gravity.CENTER_VERTICAL
+        listOf(Triple("Tune", C.LAGOON, 0), Triple("Chords", C.MANGO, 1), Triple("Instruments", C.PINK, 2)).forEach { (name, col, i) ->
             val on = tab == i
             nav.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-                background = RippleDrawable(ColorStateList.valueOf(0x22FFFFFF), null, null)
-                addView(ImageView(context).apply { setImageResource(icon); setColorFilter(if (on) C.CORAL else C.SUB) }, LinearLayout.LayoutParams(dp(22), dp(22)))
-                addView(text(name, 11f, if (on) C.CORAL else C.SUB, 600).apply { setPadding(0, dp(5), 0, 0) }, LinearLayout.LayoutParams(-2, -2))
+                gravity = Gravity.CENTER
+                addView(hand(name, 24f, if (on) C.INK else C.SUB).apply { if (on) highlight(col) }, LinearLayout.LayoutParams(-2, -2))
                 contentDescription = name
                 setOnClickListener { switchTab(i) }
+                setPadding(0, dp(6), 0, dp(6))
             }, LinearLayout.LayoutParams(0, -2, 1f))
         }
     }
@@ -338,17 +361,16 @@ class CuerdaActivity : Activity() {
 
     private fun lp(topMargin: Int = 0, w: Int = -1) = LinearLayout.LayoutParams(w, -2).apply { this.topMargin = dp(topMargin) }
 
-    private fun pill(label: String, bg: Int, fg: Int, onClick: () -> Unit) = text(label, 12.5f, fg, 700).apply {
-        gravity = Gravity.CENTER
-        background = RippleDrawable(ColorStateList.valueOf(0x33000000), round(bg, dpf(14f)), null)
-        setPadding(dp(10), dp(11), dp(10), dp(11))
+    /** A handwritten button with a highlighter swipe. */
+    private fun marker(label: String, color: Int, size: Float = 22f, onClick: () -> Unit) = hand(label, size).apply {
+        highlight(color); maxLines = 1
         setOnClickListener { onClick() }
     }
 
     private fun bigNote(): View = LinearLayout(this).apply {
         gravity = Gravity.CENTER_HORIZONTAL
-        noteText = text("♪", 96f, tint(C.INK, 0x59), 800).apply { letterSpacing = -0.04f }
-        octText = mono("", 26f, C.SUB).apply { setPadding(dp(4), dp(10), 0, 0) }
+        noteText = hand("♪", 120f, 0x59000000 or (C.INK and 0xFFFFFF))
+        octText = hand("", 36f, C.SUB, bold = false).apply { setPadding(dp(8), dp(14), 0, 0) }
         addView(noteText); addView(octText)
     }
 
@@ -359,32 +381,28 @@ class CuerdaActivity : Activity() {
         val strings = if (chromaticMode || instrument.chromatic) null else t?.notes
         content.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(eyebrow(if (strings == null) "Chromatic" else "${instrument.name} · ${t?.name}"))
-                addView(text(String.format(Locale.US, "A4 = %.0f Hz · %s", Notes.a4, if (strings == null) "any note" else if (auto) "auto" else "string ${picked + 1}"), 13f, C.SUB).apply { setPadding(0, dp(3), 0, 0) })
-            }, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(text("Change ▾", 13f, C.ON_BRIGHT, 700).apply {
-                background = round(C.MANGO, dpf(14f)); setPadding(dp(12), dp(8), dp(12), dp(8))
-                setOnClickListener { changeSheet() }
-            })
+            addView(hand(String.format(Locale.US, "A4 = %.0f Hz · %s", Notes.a4, if (strings == null) "any note" else if (auto) "auto string" else "string ${picked + 1}"), 22f, C.INK, bold = false),
+                LinearLayout.LayoutParams(0, -2, 1f))
+            addView(marker("change ›", C.LAGOON) { changeSheet() })
         })
         needle = Needle(this)
-        content.addView(needle, LinearLayout.LayoutParams(-1, dp(180)).apply { topMargin = dp(16) })
-        content.addView(bigNote(), lp(-4))
-        centsText = text("", 15f, C.SUB, 700).apply { gravity = Gravity.CENTER }
-        content.addView(centsText, lp(4))
-        hzText = mono("", 12.5f).apply { gravity = Gravity.CENTER }
-        content.addView(hzText, lp(4))
+        content.addView(needle, LinearLayout.LayoutParams(-1, dp(170)).apply { topMargin = dp(6) })
+        content.addView(bigNote(), lp(-6))
+        centsText = hand("", 28f).apply { gravity = Gravity.CENTER }
+        content.addView(LinearLayout(this).apply { gravity = Gravity.CENTER_HORIZONTAL; addView(centsText, LinearLayout.LayoutParams(-2, -2)) }, lp(0))
+        hzText = text("", 12f, C.SUB).apply { gravity = Gravity.CENTER }
+        content.addView(hzText, lp(6))
 
         if (strings != null) {
             val row = LinearLayout(this).apply { gravity = Gravity.CENTER }
             strings.forEachIndexed { i, n ->
                 val b = TextView(this).apply {
                     gravity = Gravity.CENTER; includeFontPadding = false
-                    val s = android.text.SpannableStringBuilder(Notes.name(n) + "\n" + Notes.octave(n))
-                    s.setSpan(android.text.style.AbsoluteSizeSpan(10, true), s.length - Notes.octave(n).toString().length, s.length, 0)
-                    text = s; textSize = 20f; typeface = Fonts.get(context, 800)
+                    val oct = Notes.octave(n).toString()
+                    val s = android.text.SpannableStringBuilder(Notes.name(n) + oct)
+                    s.setSpan(android.text.style.RelativeSizeSpan(0.42f), s.length - oct.length, s.length, 0)
+                    s.setSpan(android.text.style.ForegroundColorSpan(C.SUB), s.length - oct.length, s.length, 0)
+                    text = s; textSize = 26f; typeface = Fonts.hand(context); fontVariationSettings = "'wght' 700"
                     setOnClickListener {
                         if (!auto && picked == i) { auto = true; picked = -1 } else { auto = false; picked = i }
                         if (tone.isPlaying) tone.freq = Notes.freq(n.toDouble())
@@ -393,26 +411,30 @@ class CuerdaActivity : Activity() {
                 }
                 styleString(b, i, !auto && picked == i)
                 stringButtons.add(b)
-                row.addView(b, LinearLayout.LayoutParams(0, dp(58), 1f).apply { leftMargin = dp(3); rightMargin = dp(3) })
+                val size = if (strings.size > 5) dp(42) else dp(48)
+                row.addView(b, LinearLayout.LayoutParams(size, size).apply { leftMargin = dp(3); rightMargin = dp(3) })
             }
             content.addView(row, lp(28))
         }
         content.addView(LinearLayout(this).apply {
-            addView(pill(if (auto || strings == null) "Auto string ✓" else "Auto string", C.LAGOON, C.ON_BRIGHT) { auto = true; picked = -1; chromaticMode = false; render(); startAudio() },
-                LinearLayout.LayoutParams(0, -2, 1f))
-            addView(pill(if (tone.isPlaying) "Stop tone" else "Reference tone", C.MANGO, C.ON_BRIGHT) { toggleTone() },
-                LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
-            addView(pill(if (chromaticMode) "Chromatic ✓" else "Chromatic", C.HIB, C.ON_BRIGHT) { chromaticMode = !chromaticMode; render(); startAudio() },
-                LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
-        }, lp(16))
+            gravity = Gravity.CENTER_VERTICAL
+            addView(marker(if (auto || strings == null) "auto string ✓" else "auto string", C.LAGOON) { auto = true; picked = -1; chromaticMode = false; render(); startAudio() })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(marker(if (tone.isPlaying) "stop tone" else "reference tone", C.MANGO) { toggleTone() })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(marker(if (chromaticMode) "chromatic ✓" else "chromatic", C.PINK) { chromaticMode = !chromaticMode; render(); startAudio() })
+        }, lp(24))
         showIdle()
     }
 
+    /** Strings are circled letters; the one being tuned is filled with highlighter. */
     private fun styleString(b: TextView, i: Int, on: Boolean) {
-        val cols = intArrayOf(C.CORAL, C.MANGO, C.LAGOON)
-        val col = cols[i % 3]
-        b.setTextColor(if (on) C.ON_BRIGHT else col)
-        b.background = if (on) round(col, dpf(16f)) else round(tint(col, 0x24), dpf(16f), dp(1), tint(col, 0x66))
+        val col = intArrayOf(C.LAGOON, C.MANGO, C.PINK, C.CORAL)[i % 4]
+        b.setTextColor(C.INK)
+        b.background = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            if (on) setColor(col) else { setColor(0); setStroke(dp(2), C.INK) }
+        }
     }
 
     private fun toggleTone() {
@@ -426,32 +448,30 @@ class CuerdaActivity : Activity() {
     // MARK: Piano
 
     private fun pianoScreen() {
-        content.addView(eyebrow("Piano"))
-        content.addView(text("Play one key at a time · stretched tuning on", 13f, C.SUB).apply { setPadding(0, dp(3), 0, 0) })
-        content.addView(bigNote(), lp(34))
+        content.addView(hand("play one key at a time · stretched tuning", 21f, C.SUB, bold = false))
+        content.addView(bigNote(), lp(24))
         centsBar = CentsBar(this)
-        content.addView(centsBar, LinearLayout.LayoutParams(-1, dp(30)).apply { topMargin = dp(14); leftMargin = dp(10); rightMargin = dp(10) })
+        content.addView(centsBar, LinearLayout.LayoutParams(-1, dp(34)).apply { topMargin = dp(10) })
         content.addView(LinearLayout(this).apply {
-            setPadding(dp(10), 0, dp(10), 0)
-            addView(mono("−50", 11f), LinearLayout.LayoutParams(0, -2, 1f))
-            addView(mono("0", 11f).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(mono("+50", 11f).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(hand("flat", 18f, C.SUB, false), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(hand("sharp", 18f, C.SUB, false).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(0, -2, 1f))
         })
-        centsText = text("", 15f, C.SUB, 700).apply { gravity = Gravity.CENTER }
-        content.addView(centsText, lp(10))
-        hzText = mono("", 12.5f).apply { gravity = Gravity.CENTER }
-        content.addView(hzText, lp(4))
+        centsText = hand("", 28f).apply { gravity = Gravity.CENTER }
+        content.addView(LinearLayout(this).apply { gravity = Gravity.CENTER_HORIZONTAL; addView(centsText, LinearLayout.LayoutParams(-2, -2)) }, lp(6))
+        hzText = text("", 12f, C.SUB).apply { gravity = Gravity.CENTER }
+        content.addView(hzText, lp(6))
         keyboard = Keyboard(this).apply {
             startC = keyboardStart
             onKey = { midi -> lastTarget = midi; lit = midi; invalidate(); tone.start(Notes.freq(midi + Notes.pianoStretch(midi) / 100)) }
         }
-        content.addView(keyboard, LinearLayout.LayoutParams(-1, dp(150)).apply { topMargin = dp(30) })
+        content.addView(keyboard, LinearLayout.LayoutParams(-1, dp(150)).apply { topMargin = dp(26) })
         content.addView(LinearLayout(this).apply {
-            addView(text("‹ lower octave", 12.5f, C.LAGOON, 600).apply { setOnClickListener { moveOctave(-12) }; setPadding(0, dp(10), 0, dp(10)) }, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(text("tap a key to hear it", 12.5f, C.SUB).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, dp(10)) }, LinearLayout.LayoutParams(0, -2, 1.2f))
-            addView(text("higher ›", 12.5f, C.LAGOON, 600).apply { gravity = Gravity.END; setOnClickListener { moveOctave(12) }; setPadding(0, dp(10), 0, dp(10)) }, LinearLayout.LayoutParams(0, -2, 1f))
-        }, lp(8))
-        content.addView(pill(if (tone.isPlaying) "Stop tone" else "Reference tone", C.MANGO, C.ON_BRIGHT) { toggleTone() }, lp(8))
+            gravity = Gravity.CENTER_VERTICAL
+            addView(marker("‹ lower", C.LAGOON) { moveOctave(-12) })
+            addView(hand("tap a key to hear it", 19f, C.SUB, false).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(marker("higher ›", C.LAGOON) { moveOctave(12) })
+        }, lp(10))
+        content.addView(LinearLayout(this).apply { gravity = Gravity.CENTER_HORIZONTAL; addView(marker(if (tone.isPlaying) "stop tone" else "reference tone", C.MANGO) { toggleTone() }) }, lp(14))
         showIdle()
     }
 
@@ -463,81 +483,90 @@ class CuerdaActivity : Activity() {
     // MARK: Chords
 
     private fun chordScreen() {
-        content.addView(LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            listenLabel = eyebrow(if (listening) "Listening" else "Tap to listen")
-            addView(listenLabel, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(View(context).apply { background = round(if (listening) C.CORAL else C.SUB, dpf(4f)) }, LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(6) })
-            sourceText = text("", 12.5f, C.SUB)
-            addView(sourceText)
-        })
-        val mid = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        chordText = text("♪", 92f, C.INK, 800).apply { letterSpacing = -0.04f; maxLines = 1 }
-        left.addView(chordText)
-        chordSub = text("", 14f, C.SUB).apply { setPadding(0, dp(6), 0, 0) }
-        left.addView(chordSub)
-        confBar = Bar(this)
-        left.addView(confBar, LinearLayout.LayoutParams(dp(160), dp(6)).apply { topMargin = dp(10) })
-        confText = text("", 11.5f, C.SUB).apply { setPadding(0, dp(5), 0, 0) }
-        left.addView(confText)
-        mid.addView(left, LinearLayout.LayoutParams(0, -2, 1f))
+        // big chord circled in red pen, its name and how sure
+        val headRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        chordText = hand("♪", 110f).apply {
+            gravity = Gravity.CENTER; setPadding(dp(14), dp(4), dp(14), dp(10)); minWidth = dp(110)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(0); setStroke(dp(3), C.RED)
+            }
+        }
+        headRow.addView(chordText, LinearLayout.LayoutParams(-2, -2))
+        headRow.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0)
+            chordSub = hand("", 26f); addView(chordSub)
+            chordNotes = text("", 12f, C.SUB).apply { setPadding(0, dp(2), 0, 0) }; addView(chordNotes)
+            confText = hand("", 21f, C.SUB, false).apply { setPadding(0, dp(4), 0, 0) }; addView(confText)
+        }, LinearLayout.LayoutParams(0, -2, 1f))
         chordBox = ChordBox(this)
-        mid.addView(chordBox, LinearLayout.LayoutParams(dp(92), dp(112)))
-        content.addView(mid, lp(18))
+        headRow.addView(chordBox, LinearLayout.LayoutParams(dp(74), dp(92)))
+        content.addView(headRow, lp(2))
+
+        // the waveform with the chords written on top
+        wave = Wave(this)
+        content.addView(wave, LinearLayout.LayoutParams(-1, dp(170)).apply { topMargin = dp(18) })
+        replayWave()
 
         val stats = LinearLayout(this)
-        fun stat(label: String, color: Int, i: Int): TextView {
-            val v = text("…", 16f, C.ON_BRIGHT, 800).apply { gravity = Gravity.CENTER; setPadding(0, dp(3), 0, 0); maxLines = 1 }
+        fun stat(label: String, color: Int, gravity: Int): TextView {
+            val v = hand("…", 26f).apply { highlight(color); maxLines = 1 }
             stats.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
-                background = round(color, dpf(14f)); setPadding(0, dp(10), 0, dp(10))
-                addView(text(label, 11f, C.ON_BRIGHT, 700).apply { alpha = 0.7f; letterSpacing = 0.06f }, LinearLayout.LayoutParams(-2, -2))
+                orientation = LinearLayout.VERTICAL; this.gravity = gravity
+                addView(text(label, 11f, C.SUB, 700).apply { letterSpacing = 0.08f }, LinearLayout.LayoutParams(-2, -2))
                 addView(v, LinearLayout.LayoutParams(-2, -2))
-            }, LinearLayout.LayoutParams(0, -2, 1f).apply { if (i > 0) leftMargin = dp(8) })
+            }, LinearLayout.LayoutParams(0, -2, 1f))
             return v
         }
-        keyText = stat("KEY", C.LAGOON, 0); tempoText = stat("TEMPO", C.MANGO, 1); capoText = stat("CAPO", C.HIB, 2)
-        content.addView(stats, lp(22))
+        keyText = stat("KEY", C.LAGOON, Gravity.START); tempoText = stat("TEMPO", C.MANGO, Gravity.CENTER_HORIZONTAL); capoText = stat("CAPO", C.PINK, Gravity.END)
+        content.addView(stats, lp(18))
 
         content.addView(LinearLayout(this).apply {
             gravity = Gravity.BOTTOM
-            addView(eyebrow("So far", C.CORAL), LinearLayout.LayoutParams(0, -2, 1f))
-            addView(text("save as song ›", 12.5f, C.LAGOON, 600).apply { setOnClickListener { saveSong() }; setPadding(dp(6), dp(6), 0, dp(6)) })
-        }, lp(22))
-        historyRow = LinearLayout(this)
-        content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(historyRow) }, lp(8))
+            addView(hand("so far", 22f, C.SUB, false), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(marker("save as song ›", C.LAGOON, 20f) { saveSong() })
+        }, lp(18))
+        chartText = hand("", 32f)
+        content.addView(chartText, lp(2))
 
-        content.addView(text("Singing only, no instruments? Cuerda hears the melody and suggests the chords that fit it.", 12.5f, C.SUB).apply {
-            background = round(C.CARD_DARK, dpf(16f)); setPadding(dp(14), dp(12), dp(14), dp(12)); setLineSpacing(0f, 1.25f)
-        }, lp(14))
+        content.addView(hand("Singing only, no instruments? Cuerda follows the melody and suggests chords that fit it.", 20f, C.SUB, false).apply { setLineSpacing(0f, 1.0f) }, lp(14))
         content.addView(LinearLayout(this).apply {
-            addView(text("Saved songs (${songs().length()}) ›", 13f, C.MANGO, 700).apply { setOnClickListener { songsSheet() }; setPadding(0, dp(12), 0, dp(12)) }, LinearLayout.LayoutParams(0, -2, 1f))
-            if (history.isNotEmpty()) addView(text("Clear", 13f, C.SUB, 600).apply {
-                setOnClickListener { history.clear(); ear.reset(); saveHistory(); render() }; setPadding(dp(12), dp(12), 0, dp(12))
+            gravity = Gravity.CENTER_VERTICAL
+            addView(marker("saved songs (${songs().length()}) ›", C.MANGO, 21f) { songsSheet() })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            if (history.isNotEmpty()) addView(hand("clear page", 21f, C.RED).apply {
+                setOnClickListener { history.clear(); waveLevels.clear(); ear.reset(); saveHistory(); render() }
             })
-        }, lp(6))
+        }, lp(12))
 
-        // the big listen button, above the menu
+        // the record button: red pen circle
         val btn = FrameLayout(this).apply {
-            background = round(C.CORAL, dpf(36f))
-            addView(if (listening) View(context).apply { background = round(0xFF2A0F08.toInt(), dpf(5f)) }
-                    else ImageView(context).apply { setImageResource(R.drawable.i_mic); setColorFilter(0xFF2A0F08.toInt()) },
-                FrameLayout.LayoutParams(if (listening) dp(22) else dp(30), if (listening) dp(22) else dp(30), Gravity.CENTER))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(0xF2F6F1E4.toInt()); setStroke(dp(3), C.RED)
+            }
+            addView(View(context).apply { background = round(C.RED, if (listening) dpf(4f) else dpf(13f)) },
+                FrameLayout.LayoutParams(dp(if (listening) 22 else 26), dp(if (listening) 22 else 26), Gravity.CENTER))
             contentDescription = if (listening) "Stop listening" else "Listen for chords"
             setOnClickListener { toggleListening() }
-            elevation = dpf(6f)
         }
-        root.addView(btn, FrameLayout.LayoutParams(dp(72), dp(72), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = bottom + dp(96) })
+        root.addView(btn, FrameLayout.LayoutParams(dp(68), dp(68), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = bottom + dp(86) })
         floating = btn
         showChord(lastResult)
+    }
+
+    /** Waveform data survives switching tabs. */
+    private val waveLevels = ArrayList<Pair<Double, Pair<String?, Long>>>()
+
+    private fun replayWave() {
+        val w = wave ?: return
+        w.clear()
+        for ((lvl, m) in waveLevels) w.push(lvl, m.first, m.second)
     }
 
     private fun toggleListening() {
         if (!hasMic()) { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1); return }
         listening = !listening
         if (listening) {
-            if (history.isEmpty()) { ear.reset(); listenStart = System.currentTimeMillis() }
+            if (history.isEmpty()) { ear.reset(); waveLevels.clear(); listenStart = System.currentTimeMillis() }
             else listenStart = System.currentTimeMillis() - (history.last().at + 2000)
         }
         render()
@@ -609,51 +638,45 @@ class CuerdaActivity : Activity() {
     // MARK: Instruments
 
     private fun instrumentsScreen() {
-        content.addView(eyebrow("Instruments"))
         if (!instrument.chromatic) {
-            val chips = LinearLayout(this)
-            val cols = intArrayOf(C.CORAL, C.MANGO, C.LAGOON, C.HIB)
-            tunings().forEachIndexed { i, t ->
+            content.addView(hand("tuning for ${instrument.name.lowercase()}", 22f, C.SUB, false))
+            val flow = android.widget.GridLayout(this).apply { columnCount = 1 }
+            val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            var row = LinearLayout(this); var used = 0
+            val maxW = resources.displayMetrics.widthPixels - dp(80)
+            val paint = android.graphics.Paint().apply { typeface = Fonts.hand(this@CuerdaActivity); textSize = dpf(24f) }
+            val items = tunings().mapIndexed { i, t -> Triple(t.name.lowercase(), i, C.MARKERS[i % 4]) } + Triple("+ my own", -1, C.LAGOON)
+            for ((name, i, col) in items) {
+                val w = (paint.measureText(name) + dp(26)).toInt()
+                if (used + w > maxW && used > 0) { wrap.addView(row); row = LinearLayout(this); used = 0 }
                 val on = i == tuningIdx
-                val col = cols[i % 4]
-                chips.addView(text(t.name, 12f, if (on) C.ON_BRIGHT else col, 700).apply {
-                    background = round(if (on) col else tint(col, 0x24), dpf(13f)); setPadding(dp(11), dp(7), dp(11), dp(7))
-                    setOnClickListener { tuningIdx = i; render() }
-                    setOnLongClickListener { if (t.name == "Custom") customTuning(); true }
-                }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+                row.addView(hand(name, 24f, if (on || i < 0) C.INK else C.SUB).apply {
+                    if (on || i < 0) highlight(if (i < 0) C.LAGOON else col)
+                    setOnClickListener { if (i < 0) customTuning() else { tuningIdx = i; render() } }
+                    if (name == "custom") setOnLongClickListener { customTuning(); true }
+                }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8); bottomMargin = dp(4) })
+                used += w
             }
-            chips.addView(text("+ custom", 12f, C.LAGOON, 700).apply {
-                background = round(tint(C.LAGOON, 0x24), dpf(13f)); setPadding(dp(11), dp(7), dp(11), dp(7))
-                setOnClickListener { customTuning() }
+            wrap.addView(row)
+            content.addView(wrap, lp(4))
+            tuning()?.let { content.addView(text(Instruments.describe(it), 12.5f, C.SUB).apply { setPadding(dp(2), dp(4), 0, dp(6)) }) }
+        }
+        for (ins in Instruments.all) {
+            val on = ins.id == instrumentId
+            content.addView(LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(46)
+                addView(text(if (on) "✓" else "", 15f, C.RED, 800).apply {
+                    gravity = Gravity.CENTER; background = round(0, dpf(4f), dp(2), C.INK)
+                }, LinearLayout.LayoutParams(dp(22), dp(22)))
+                addView(hand(ins.name, 28f).apply { if (on) highlight(C.MANGO) }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(12) })
+                addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+                val sub = if (ins.tunings.isNotEmpty()) Instruments.describe(ins.tunings[0]) else ins.blurb
+                addView(hand(sub, 20f, C.SUB, false))
+                setOnClickListener { instrumentId = ins.id; chromaticMode = false; picked = -1; auto = true; tab = 0; render(); startAudio() }
             })
-            content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }, lp(12))
-            tuning()?.let { content.addView(mono(Instruments.describe(it), 12.5f, C.SUB).apply { setPadding(dp(4), dp(8), 0, 0) }) }
         }
-        fun group(title: String, items: List<Instrument>) {
-            content.addView(eyebrow(title, C.CORAL).apply { setPadding(dp(4), dp(20), 0, dp(8)) })
-            val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = round(C.CARD_DARK, dpf(20f)); setPadding(dp(16), dp(2), dp(16), dp(2)) }
-            items.forEachIndexed { i, ins ->
-                val on = ins.id == instrumentId
-                box.addView(LinearLayout(this).apply {
-                    gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(11), 0, dp(11))
-                    addView(LinearLayout(context).apply {
-                        orientation = LinearLayout.VERTICAL
-                        addView(text(ins.name, 15f, if (on) C.CORAL else C.INK, if (on) 800 else 600))
-                        val sub = if (ins.tunings.isNotEmpty()) Instruments.describe(ins.tunings[0]) else ins.blurb
-                        addView(text(if (ins.tunings.isNotEmpty() && ins.id in setOf("guitar", "bass", "banjo")) "${ins.blurb} · $sub" else sub, 12f, C.SUB).apply { setPadding(0, dp(2), 0, 0) })
-                    }, LinearLayout.LayoutParams(0, -2, 1f))
-                    addView(text(if (on) "●" else "›", 15f, if (on) C.CORAL else C.SUB))
-                    setOnClickListener { instrumentId = ins.id; chromaticMode = false; picked = -1; auto = true; tab = 0; render(); startAudio() }
-                })
-                if (i < items.size - 1) box.addView(View(this).apply { setBackgroundColor(C.LINE) }, LinearLayout.LayoutParams(-1, 1))
-            }
-            content.addView(box)
-        }
-        group("Strings", Instruments.all.filter { !it.chromatic })
-        group("Keys & more", Instruments.all.filter { it.chromatic })
-        content.addView(text(String.format(Locale.US, "Concert pitch: A4 = %.0f Hz ›", Notes.a4), 13f, C.MANGO, 700).apply {
-            setPadding(dp(4), dp(16), 0, dp(8)); setOnClickListener { pickA4() }
-        })
+        content.addView(LinearLayout(this).apply { addView(marker(String.format(Locale.US, "concert pitch: A4 = %.0f Hz ›", Notes.a4), C.PINK, 21f) { pickA4() }) }, lp(16))
     }
 
     private fun changeSheet() {

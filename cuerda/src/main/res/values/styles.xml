@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="CuerdaTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+    <style name="CuerdaTheme" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:colorAccent">@color/coral</item>
         <item name="android:alertDialogTheme">@style/CuerdaDialog</item>
     </style>
-    <style name="CuerdaDialog" parent="@android:style/Theme.DeviceDefault.Dialog.Alert">
-        <item name="android:colorAccent">@color/mango</item>
+    <style name="CuerdaDialog" parent="@android:style/Theme.DeviceDefault.Light.Dialog.Alert">
+        <item name="android:colorAccent">@color/coral</item>
     </style>
-    <color name="bg">#FF17213A</color>
-    <color name="coral">#FFFF7A59</color>
+    <color name="bg">#FFF6F1E4</color>
+    <color name="coral">#FFE2574C</color>
     <color name="mango">#FFFFC24B</color>
 </resources>

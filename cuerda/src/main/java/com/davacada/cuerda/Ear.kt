@@ -151,6 +151,7 @@ class ChordEar {
     data class Result(
         val chord: Chords.Chord?, val confidence: Double, val suggested: Boolean,
         val key: Triple<Int, Boolean, Double>?, val bpm: Int?, val loud: Boolean, val melodyNote: Int?,
+        val level: Double = 0.0,
     )
 
     private val n = 8192
@@ -191,7 +192,7 @@ class ChordEar {
         }
         lastMag = mag
 
-        if (!loud) return Result(current, 0.0, false, keyOrNull(), tempo(), false, null)
+        if (!loud) return Result(current, 0.0, false, keyOrNull(), tempo(), false, null, rms)
 
         // chroma: 55 Hz – 2 kHz, log-compressed, peaks only
         val chroma = DoubleArray(12)
@@ -211,7 +212,7 @@ class ChordEar {
             chroma[pc] += w
         }
         val sum = chroma.sum()
-        if (sum <= 0) return Result(current, 0.0, false, keyOrNull(), tempo(), true, null)
+        if (sum <= 0) return Result(current, 0.0, false, keyOrNull(), tempo(), true, null, rms)
         for (i in 0 until 12) chroma[i] /= sum
         for (i in 0 until 12) { smooth[i] = smooth[i] * 0.55 + chroma[i] * 0.45; keyProfile[i] = keyProfile[i] * 0.995 + chroma[i] }
 
@@ -229,7 +230,7 @@ class ChordEar {
         val key = keyOrNull()
         if (mono || (melody.size > 8 && sorted[0] > 0.33)) {
             // suggest a chord that fits the recent melody notes, from the key
-            val k = key ?: return Result(current, 0.0, true, null, tempo(), true, melodyNote)
+            val k = key ?: return Result(current, 0.0, true, null, tempo(), true, melodyNote, rms)
             val counts = DoubleArray(12); melody.forEach { counts[it.first] += 1.0 }
             var bestC: Chords.Chord? = null; var bestS = -1.0
             for ((idx, ch) in Chords.diatonic(k.first, k.second).withIndex()) {
@@ -240,7 +241,7 @@ class ChordEar {
             }
             settle(bestC, 3)
             val conf = (bestS / max(1.0, counts.sum())).coerceIn(0.0, 1.0) * 0.8
-            return Result(current, conf, true, key, tempo(), true, melodyNote)
+            return Result(current, conf, true, key, tempo(), true, melodyNote, rms)
         }
 
         // template matching on the smoothed chroma
@@ -258,7 +259,7 @@ class ChordEar {
         }
         if (bestScore > 0.55) settle(best, 2)
         val conf = ((bestScore - 0.5) / 0.4).coerceIn(0.0, 1.0)
-        return Result(current, conf, false, key, tempo(), true, null)
+        return Result(current, conf, false, key, tempo(), true, null, rms)
     }
 
     /** Only change chord once the new one has won a few frames in a row. */
