@@ -327,8 +327,8 @@ class CuerdaActivity : Activity() {
         content.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(hand("cuerda", 46f).apply { highlight(C.MANGO) }, LinearLayout.LayoutParams(-2, -2))
-            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(hand(subtitle(), 20f, C.SUB, bold = false).apply { maxLines = 1 })
+            addView(hand(subtitle(), 20f, C.SUB, bold = false).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; gravity = Gravity.END; setPadding(dp(8), 0, dp(2), 0) },
+                LinearLayout.LayoutParams(0, -2, 1f))
         }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
         when (tab) {
             0 -> if (instrument.id == "piano") pianoScreen() else tunerScreen()
@@ -358,7 +358,7 @@ class CuerdaActivity : Activity() {
             val on = tab == i
             nav.addView(LinearLayout(this).apply {
                 gravity = Gravity.CENTER
-                addView(hand(name, 24f, if (on) C.INK else C.SUB).apply { if (on) highlight(col) }, LinearLayout.LayoutParams(-2, -2))
+                addView(hand(name, if (resources.configuration.screenWidthDp < 400) 21f else 24f, if (on) C.INK else C.SUB).apply { maxLines = 1; if (on) highlight(col) }, LinearLayout.LayoutParams(-2, -2))
                 contentDescription = name
                 setOnClickListener { switchTab(i) }
                 setPadding(0, dp(6), 0, dp(6))
@@ -397,7 +397,7 @@ class CuerdaActivity : Activity() {
         val strings = if (chromaticMode || instrument.chromatic) null else t?.notes
         content.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            addView(hand(String.format(Locale.US, "A4 = %.0f Hz · %s", Notes.a4, if (strings == null) "any note" else if (auto) "auto string" else "string ${picked + 1}"), 22f, C.INK, bold = false),
+            addView(hand(String.format(Locale.US, "A4 = %.0f · %s", Notes.a4, if (strings == null) "any note" else if (auto) "auto" else "string ${picked + 1}"), 22f, C.INK, bold = false).apply { maxLines = 1 },
                 LinearLayout.LayoutParams(0, -2, 1f))
             addView(marker("change ›", C.LAGOON) { changeSheet() })
         })
