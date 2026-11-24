@@ -46,6 +46,7 @@ jobs:
           cp letra/build/outputs/apk/debug/letra-debug.apk letra.apk
           cp roll/build/outputs/apk/debug/roll-debug.apk roll.apk
           cp gasto/build/outputs/apk/debug/gasto-debug.apk gasto.apk
+          cp cuerda/build/outputs/apk/debug/cuerda-debug.apk cuerda.apk
 
       - uses: actions/upload-artifact@v4
         with:
@@ -57,6 +58,7 @@ jobs:
             letra.apk
             roll.apk
             gasto.apk
+            cuerda.apk
 
       - name: Publish as a release (easy to download on the phone)
         uses: softprops/action-gh-release@v2
@@ -70,4 +72,5 @@ jobs:
             letra.apk
             roll.apk
             gasto.apk
+            cuerda.apk
           make_latest: true
