@@ -352,7 +352,7 @@ class CuerdaActivity : Activity() {
             override fun setColorFilter(cf: android.graphics.ColorFilter?) {}
             @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
         }
-        nav.setPadding(dp(40), dp(12), 0, bottom + dp(12))
+        nav.setPadding(dp(40), 0, 0, bottom)
         nav.gravity = Gravity.CENTER_VERTICAL
         listOf(Triple("Tune", C.LAGOON, 0), Triple("Chords", C.MANGO, 1), Triple("Instruments", C.PINK, 2)).forEach { (name, col, i) ->
             val on = tab == i
@@ -361,8 +361,8 @@ class CuerdaActivity : Activity() {
                 addView(hand(name, if (resources.configuration.screenWidthDp < 400) 21f else 24f, if (on) C.INK else C.SUB).apply { maxLines = 1; if (on) highlight(col) }, LinearLayout.LayoutParams(-2, -2))
                 contentDescription = name
                 setOnClickListener { switchTab(i) }
-                setPadding(0, dp(6), 0, dp(6))
-            }, LinearLayout.LayoutParams(0, -2, 1f))
+                setPadding(0, dp(16), 0, dp(16))
+            }, LinearLayout.LayoutParams(0, -1, 1f))
         }
     }
 
