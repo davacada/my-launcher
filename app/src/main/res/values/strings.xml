@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="edge_off_description">Turns the screen off right after an edge-lighting glow, like pressing the power button. It doesn\'t read or change anything on your screen.</string>
+    <string name="matte_description">Matte screen: lays a see-through layer of fine grain over everything so the screen looks matte and less shiny. It doesn\'t read your screen, and touches go straight through.</string>
 </resources>

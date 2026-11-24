@@ -286,13 +286,14 @@ class MainActivity : Activity() {
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            val slot = { LinearLayout.LayoutParams(dp(50), dp(50)).apply { marginStart = dp(3); marginEnd = dp(3) } }
+            val slot = { LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginStart = dp(2); marginEnd = dp(2) } }
             addView(searchButton, slot())
             addView(organiserButton, slot())
             addView(hiddenButton, slot())
             addView(backgroundButton, slot())
             addView(companionButton, slot())
             addView(barButton(R.drawable.ic_edge, "Edge lighting") { showEdgeMenu(it) }, slot())
+            addView(barButton(R.drawable.ic_matte, "Matte screen") { showMatteMenu(it) }, slot())
             addView(barButton(R.drawable.ic_trash, "Trash") {
                 startActivity(Intent(this@MainActivity, TrashActivity::class.java))
             }, slot())
@@ -324,7 +325,7 @@ class MainActivity : Activity() {
     private fun barButton(icon: Int, description: String, onClick: (View) -> Unit) = ImageView(this).apply {
         setImageResource(icon)
         scaleType = ImageView.ScaleType.FIT_CENTER
-        setPadding(dp(15), dp(15), dp(15), dp(15))
+        setPadding(dp(13), dp(13), dp(13), dp(13))
         contentDescription = description
         background = StateListDrawable().apply {
             val on = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x2EFFFFFF) }
@@ -565,6 +566,37 @@ class MainActivity : Activity() {
                     startActivity(Intent(this, EdgeGlowActivity::class.java).putExtra(EdgeGlowActivity.EXTRA_KIND, kind.name))
                 })
             }
+        showGlassMenu(anchor as ImageView, items)
+    }
+
+    // ---------------------------------------------------------------- matte screen
+
+    /** Matte screen: on/off (needs its accessibility switch once), strength, warmth, pauses. */
+    private fun showMatteMenu(anchor: View) {
+        val enabled = MatteService.isEnabled(this)
+        val on = prefs.getBoolean("matte", false)
+        val strength = prefs.getInt("matteStrength", 2).coerceIn(1, 3)
+        val warmth = prefs.getInt("matteWarmth", 0).coerceIn(0, 2)
+        val items = ArrayList<MenuItem>()
+        items.add(MenuItem(R.drawable.ic_matte, "Matte screen", on && enabled) {
+            prefs.edit().putBoolean("matte", !on || !enabled).apply()
+            if (!enabled) {
+                Toast.makeText(this, "Turn on \"My Launcher: matte screen\" (under Downloaded apps)", Toast.LENGTH_LONG).show()
+                openSafely(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        })
+        items.add(MenuItem(R.drawable.ic_layers, "Strength: " + listOf("", "Light", "Medium", "Strong")[strength], true) {
+            prefs.edit().putInt("matteStrength", if (strength >= 3) 1 else strength + 1).apply()
+        })
+        items.add(MenuItem(R.drawable.ic_wallpaper, "Warmth: " + listOf("Off", "Soft", "Warm")[warmth], warmth > 0) {
+            prefs.edit().putInt("matteWarmth", (warmth + 1) % 3).apply()
+        })
+        items.add(MenuItem(R.drawable.ic_photo, "Pause for the camera", prefs.getBoolean("matteCameraPause", true)) {
+            prefs.edit().putBoolean("matteCameraPause", !prefs.getBoolean("matteCameraPause", true)).apply()
+        })
+        items.add(MenuItem(R.drawable.ic_play, "Pause while recording the screen", prefs.getBoolean("matteRecordPause", true)) {
+            prefs.edit().putBoolean("matteRecordPause", !prefs.getBoolean("matteRecordPause", true)).apply()
+        })
         showGlassMenu(anchor as ImageView, items)
     }
 
