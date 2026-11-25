@@ -991,10 +991,8 @@ class MainActivity : Activity() {
                         val raw = info.getIcon(density) ?: return@mapNotNull null
                         val colour = IconFactory.colour(raw, size)
                         val pkg = info.componentName.packageName
-                        val white = forcedGlyph(pkg, info.label.toString())?.let { res ->
-                                getDrawable(res)?.let { IconFactory.fromVector(it, size) }
-                            }
-                            ?: IconFactory.white(raw, size)
+                        // every app shows its own logo in white; the launcher's line icons are only a last resort
+                        val white = IconFactory.white(raw, size)
                             ?: (roles[pkg] ?: PACKAGE_GLYPHS[pkg])?.let { res ->
                                 getDrawable(res)?.let { IconFactory.fromVector(it, size) }
                             }
