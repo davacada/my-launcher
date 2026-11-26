@@ -84,7 +84,7 @@ class RollActivity : Activity() {
         when {
             sheetView != null -> closeSheet()
             exportView != null -> { if (exporting == null) closeExport() else toast("Exporting · wait or tap Cancel") }
-            panelOpen -> closePanel(false)
+            panelOpen -> if (clipPanelBefore != null) closeClipPanel(false) else closePanel(false)
             project != null -> { store.save(project!!); releasePlayer(); project = null; home() }
             else -> @Suppress("DEPRECATION") super.onBackPressed()
         }
@@ -298,7 +298,11 @@ class RollActivity : Activity() {
         fun move(to: Int) { snapshot(); val x = p.clips.removeAt(i); p.clips.add(to, x); timeline?.selected = to; store.save(p); reloadPlayer(true); refresh(); closeSheet() }
         if (i > 0) col.addView(action(R.drawable.i_left, "Move earlier") { move(i - 1) })
         if (i < p.clips.size - 1) col.addView(action(R.drawable.i_right, "Move later") { move(i + 1) })
+        col.addView(action(R.drawable.i_aspect, "Frame", "Fit or fill, move, zoom, rotate, flip") { closeSheet(); framePanel(i) })
+        if (i < p.clips.size - 1) col.addView(action(R.drawable.i_trans, "Transition", Scene.transition(c.trans).name + " into clip ${i + 2}") { closeSheet(); transitionPanel(i) })
         col.addView(action(R.drawable.i_speed, "Speed", "${c.speed}×") { closeSheet(); speedMenu(i) })
+        if (c.still.isEmpty()) col.addView(action(R.drawable.i_reverse, if (c.revOf != null) "Play forwards again" else "Reverse", if (c.revOf != null) "Back to the original clip" else "Plays backwards (without sound)") { closeSheet(); reverseClip(i) })
+        col.addView(action(R.drawable.i_freeze, "Freeze frame", "Holds the frame under the playhead for 2 s") { closeSheet(); freezeFrame() })
         col.addView(action(R.drawable.i_volume, "Volume", "${(c.volume * 100).toInt()}%") { closeSheet(); volumeMenu(i) })
         col.addView(action(R.drawable.i_copy, "Duplicate") { closeSheet(); duplicate(i) })
         col.addView(action(R.drawable.i_trash, "Delete", null, 0xFFFF6B5E.toInt()) { closeSheet(); deleteClip(i) })
@@ -308,10 +312,11 @@ class RollActivity : Activity() {
     /** Frame shapes drawn as their own outlines. */
     private fun aspectMenu() {
         val p = project ?: return
-        val opts = listOf(Triple("original", "Original", 0f), Triple("9:16", "9:16", 9f / 16f), Triple("4:5", "4:5", 0.8f), Triple("1:1", "1:1", 1f), Triple("16:9", "16:9", 16f / 9f))
+        val opts = listOf(Triple("original", "Original", 0f), Triple("9:16", "9:16", 9f / 16f), Triple("4:5", "4:5", 0.8f), Triple("1:1", "1:1", 1f), Triple("4:3", "4:3", 4f / 3f), Triple("16:9", "16:9", 16f / 9f), Triple("21:9", "Cinema", 2.39f))
         val col = vcol()
         col.addView(headline("Frame", "The shape of the finished video"))
         val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
+        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(r) })
         opts.forEach { (k, l, ratio) ->
             val on = p.aspect == k
             val rr = if (ratio == 0f) p.clips.firstOrNull()?.let { if (it.w > 0 && it.h > 0) it.w.toFloat() / it.h else 16f / 9f } ?: (16f / 9f) else ratio
@@ -322,10 +327,10 @@ class RollActivity : Activity() {
                 addView(FrameLayout(context).apply { addView(View(context).apply { background = pill(if (on) 0x26F2A541 else 0, dpf(5f), dp(2), if (on) C.AMBER else 0x80FFFFFF.toInt()) },
                     FrameLayout.LayoutParams(dp(w.toInt()), dp(h.toInt()), Gravity.CENTER)) }, LinearLayout.LayoutParams(dp(54), dp(54)))
                 addView(context.text(l, 12.5f, if (on) C.AMBER else C.TEXT, on).apply { setPadding(0, dp(8), 0, 0) })
-                setOnClickListener { snapshot(); p.aspect = k; store.save(p); previewBox.requestLayout(); applyGrade(); closeSheet() }
-            }, LinearLayout.LayoutParams(0, -2, 1f))
+                setOnClickListener { snapshot(); p.aspect = k; store.save(p); previewBox.requestLayout(); applyGrade(); updateFrame(); closeSheet() }
+            }, LinearLayout.LayoutParams(dp(70), -2))
         }
-        col.addView(r)
+        col.addView(text("Tap a clip, then Frame, to place it in the shape (fit, fill, move, zoom, rotate).", 12f, C.SUB).apply { setPadding(dp(4), dp(10), dp(4), 0) })
         sheet(col)
     }
 
@@ -340,7 +345,7 @@ class RollActivity : Activity() {
 
     private fun pickVideos() {
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE); type = "video/*"; putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"; putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("video/*", "image/*")); putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
         try { startActivityForResult(i, 1) } catch (e: Exception) { toast("No file picker found") }
@@ -363,6 +368,10 @@ class RollActivity : Activity() {
         toast("Reading ${uris.size} clip${if (uris.size == 1) "" else "s"}…")
         bg.execute {
             val clips = uris.mapNotNull { u ->
+                if (contentResolver.getType(u)?.startsWith("image/") == true) {
+                    // a photo becomes a still clip (3 s, slow push-in)
+                    return@mapNotNull try { Stills.stillClip(this, Stills.decodePhoto(this, u), "photo", 3000) } catch (e: Exception) { null }
+                }
                 try { contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) {}
                 try {
                     val mr = MediaMetadataRetriever(); mr.setDataSource(this, u)
@@ -376,7 +385,7 @@ class RollActivity : Activity() {
                 } catch (e: Exception) { null }
             }
             main.post {
-                if (clips.isEmpty()) { toast("Couldn't read those videos"); return@post }
+                if (clips.isEmpty()) { toast("Couldn't read those files"); return@post }
                 if (project === p) { snapshot(); val at = (timeline?.selected ?: -1).let { if (it >= 0) it + 1 else p.clips.size }; p.clips.addAll(at, clips); store.save(p); reloadPlayer(keepTime = true); refresh() }
                 else { p.clips.addAll(clips); store.save(p); open(p) }
             }
@@ -440,6 +449,7 @@ class RollActivity : Activity() {
         previewBox.addView(lookTag, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { setMargins(dp(12), dp(10), 0, 0) })
         // hold the picture to see it without the look
         previewBox.setOnTouchListener { _, e ->
+            if (framing >= 0) { frameTouch(e); return@setOnTouchListener true }
             when (e.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> { main.postDelayed(showOriginal, 250); true }
                 android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
@@ -485,6 +495,7 @@ class RollActivity : Activity() {
         tl.onTrimmed = { i -> snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); reloadPlayer(keepTime = true); refreshTime() }
         tl.onAdd = { addingTo = p; pickVideos() }
         tl.onHold = { i -> clipMenu(i) }
+        tl.onJoint = { i -> transitionPanel(i) }
         col.addView(tl, LinearLayout.LayoutParams(-1, dp(118)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
@@ -504,6 +515,11 @@ class RollActivity : Activity() {
         listOf(
             bare(R.drawable.i_split, "Split") { split() },
             bare(R.drawable.i_speed, "Speed", dim) { if (sel >= 0) speedMenu(sel) else toast("Tap a clip first") },
+            bare(R.drawable.i_aspect, "Frame", dim) { if (sel >= 0) framePanel(sel) else toast("Tap a clip first") },
+            bare(R.drawable.i_trans, "Transition", if (sel >= 0 && sel < (project?.clips?.size ?: 0) - 1) C.TEXT else C.FAINT) {
+                when { sel < 0 -> toast("Tap a clip first"); sel >= (project?.clips?.size ?: 0) - 1 -> toast("The last clip has nothing after it"); else -> transitionPanel(sel) } },
+            bare(R.drawable.i_reverse, "Reverse", if (sel >= 0 && project?.clips?.getOrNull(sel)?.still?.isEmpty() == true) C.TEXT else C.FAINT) { if (sel >= 0) reverseClip(sel) else toast("Tap a clip first") },
+            bare(R.drawable.i_freeze, "Freeze") { freezeFrame() },
             bare(R.drawable.i_filter, "Film") { filmPanel(Looks.FILM) },
             bare(R.drawable.i_adjust, "Adjust") { adjustPanel() },
             bare(R.drawable.i_fx, "Overlay") { overlayPanel() },
@@ -524,7 +540,7 @@ class RollActivity : Activity() {
         videoSurface?.let { pl.setVideoSurface(it) }
         glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p))
         pl.addListener(object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { clipParams() }
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { clipParams(); updateFrame() }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playBtn?.setImageResource(if (isPlaying) R.drawable.i_pause else R.drawable.i_play); if (isPlaying) main.post(ticker) }
             override fun onPlayerError(error: PlaybackException) { toast("Playback: ${error.errorCodeName}") }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -532,8 +548,8 @@ class RollActivity : Activity() {
             }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) { pl.pause(); pl.seekTo(0, 0) } }
         })
-        loadItems(); pl.prepare()
-        updateLookTag(); refreshTime()
+        loadItems(); pl.prepare(); refreshDissolves()
+        updateLookTag(); refreshTime(); updateFrame()
         if (p.clips.isEmpty()) toast("Add a clip with +")
     }
 
@@ -556,7 +572,7 @@ class RollActivity : Activity() {
 
     private fun reloadPlayer(keepTime: Boolean) {
         val t = timeline?.time() ?: 0L
-        loadItems(); player?.prepare()
+        loadItems(); player?.prepare(); refreshDissolves()
         if (keepTime) seekTimeline(t.coerceAtMost(maxOf(0, (project?.lengthMs ?: 0) - 1)))
         timeline?.invalidate(); refreshTime()
     }
@@ -571,7 +587,7 @@ class RollActivity : Activity() {
         if (p.clips.isEmpty()) return
         val (i, off) = p.at(t)
         pl.seekTo(i, (off * p.clips[i].speed).toLong())
-        timeline?.setTime(t); refreshTime()
+        timeline?.setTime(t); refreshTime(); updateFrame(i, off)
     }
 
     private fun timelineTime(): Long {
@@ -585,8 +601,8 @@ class RollActivity : Activity() {
         override fun run() {
             val pl = player ?: return
             if (!pl.isPlaying) return
-            timeline?.setTime(timelineTime()); refreshTime()
-            main.postDelayed(this, 33)
+            timeline?.setTime(timelineTime()); refreshTime(); updateFrame()
+            main.postDelayed(this, 16)
         }
     }
 
@@ -600,7 +616,33 @@ class RollActivity : Activity() {
         }
     }
 
-    private fun refresh() { timeline?.invalidate(); editBottomTools(); refreshTime(); previewBox.requestLayout() }
+    private fun refresh() { timeline?.invalidate(); editBottomTools(); refreshTime(); previewBox.requestLayout(); updateFrame() }
+
+    // ---------------------------------------------------------------- framing and transitions on the viewer
+
+    /** Dissolves: the last frame of each clip that dissolves into the next, for the viewer. */
+    private var dissolves: Map<String, Bitmap> = emptyMap()
+    private var dissolveKey = ""
+    private fun refreshDissolves() {
+        val p = project ?: return
+        val key = p.clips.joinToString("|") { "${it.uri}@${it.endMs}:${it.trans}" }
+        if (key == dissolveKey) return
+        dissolveKey = key
+        val list = p.clips.map { Clip.from(it.json()) }
+        bg.execute { val m = Render.dissolveFrames(this, list); main.post { if (dissolveKey == key) { dissolves = m; updateFrame() } } }
+    }
+
+    /** Tells the viewer how the clip under the playhead sits in the frame right now. */
+    private fun updateFrame(index: Int = -1, localMs: Long = -1) {
+        val p = project ?: return
+        if (!::glView.isInitialized || p.clips.isEmpty()) return
+        val pl = player
+        val i = if (index >= 0) index else (pl?.currentMediaItemIndex ?: 0).coerceIn(0, p.clips.size - 1)
+        val local = if (localMs >= 0) localMs else ((pl?.currentPosition ?: 0L) / p.clips[i].speed).toLong()
+        val f = Scene.frame(p.clips, i, local, Render.ratio(p))
+        glView.prevBitmap = f.prev?.let { dissolves[it.id] }
+        glView.frame = f
+    }
 
     // ---------------------------------------------------------------- grade
 
@@ -625,7 +667,7 @@ class RollActivity : Activity() {
     private fun restore(s: String) {
         val p = project ?: return
         val q = Project.from(JSONObject(s))
-        p.clips.clear(); p.clips.addAll(q.clips); p.grade = q.grade; p.aspect = q.aspect; p.mute = q.mute; p.name = q.name
+        p.copyFrom(q)
         timeline?.selected = -1
         store.save(p); reloadPlayer(keepTime = true); applyGrade(); refresh()
     }
@@ -644,7 +686,7 @@ class RollActivity : Activity() {
         val cut = c.startMs + (off * c.speed).toLong()
         if (cut - c.startMs < 200 || c.endMs - cut < 200) { toast("Too close to the edge of the clip"); return }
         snapshot()
-        val b = c.copy(); b.startMs = cut; c.endMs = cut
+        val b = c.copy(); b.startMs = cut; c.endMs = cut; c.trans = "none"
         p.clips.add(i + 1, b)
         timeline?.selected = i + 1
         store.save(p); reloadPlayer(keepTime = true); refresh()
@@ -660,6 +702,213 @@ class RollActivity : Activity() {
         val p = project ?: return
         snapshot(); p.clips.removeAt(i); timeline?.selected = -1
         store.save(p); reloadPlayer(keepTime = true); refresh()
+    }
+
+    // ================================================================ clip panels: frame, transition
+
+    /** A panel for one clip's settings: Cancel puts everything back, Done keeps it (one undo step). */
+    private var clipPanelBefore: String? = null
+    private fun openClipPanel(view: View) {
+        val b = bottom ?: return
+        if (clipPanelBefore == null) clipPanelBefore = project!!.json().toString()
+        panelOpen = true
+        b.removeAllViews(); b.addView(view, FrameLayout.LayoutParams(-1, -1))
+    }
+    private fun closeClipPanel(keep: Boolean) {
+        val p = project ?: return
+        val before = clipPanelBefore; clipPanelBefore = null
+        framing = -1
+        if (before != null) {
+            if (!keep) p.copyFrom(Project.from(JSONObject(before)))
+            else if (before != p.json().toString()) pushUndo(before)
+        }
+        store.save(p); panelOpen = false
+        reloadPlayer(keepTime = true); editBottom(); updateFrame()
+    }
+    private fun clipFooter(note: String): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+        addView(context.word("Cancel", false, 14f) { closeClipPanel(false) })
+        addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+        addView(context.text(note, 11.5f, C.FAINT))
+        addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+        addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { closeClipPanel(true) } })
+    }
+
+    /** Which clip is being framed (drag and pinch on the picture move and zoom it), or -1. */
+    private var framing = -1
+
+    /** Frame: fill or fit the shape, background, position, zoom, rotation, flip, Ken Burns. */
+    private fun framePanel(i: Int) {
+        val p = project ?: return
+        val c = p.clips.getOrNull(i) ?: return
+        framing = i
+        // show this clip on the viewer
+        if ((player?.currentMediaItemIndex ?: -1) != i) seekTimeline(p.startOf(i) + minOf(400L, c.lengthMs / 2))
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), dp(6)) }
+        fun again() { val keep = clipPanelBefore; framePanel(i); clipPanelBefore = keep }
+        fun changed() { updateFrame() }
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        row1.addView(word("Fill", !c.fit, 14f) { c.fit = false; changed(); again() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(14) })
+        row1.addView(word("Fit", c.fit, 14f) { c.fit = true; changed(); again() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(22) })
+        row1.addView(text("Background", 12f, C.SUB), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
+        listOf("blur" to "Blur", "black" to "Black", "white" to "White").forEach { (k, l) ->
+            row1.addView(word(l, c.bg == k, 14f) { c.bg = k; changed(); again() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
+        }
+        s.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row1) })
+        s.addView(LrSlider(this, "Zoom", c.scale, 0.3f, 3f, null, { "%.2f×".format(it) }) { c.scale = it; changed() }.also { it.value = c.scale })
+        s.addView(LrSlider(this, "Left · right", c.ox, -1f, 1f, null, { "%+d".format((it * 100).toInt()) }) { c.ox = it; changed() })
+        s.addView(LrSlider(this, "Down · up", c.oy, -1f, 1f, null, { "%+d".format((it * 100).toInt()) }) { c.oy = it; changed() })
+        s.addView(LrSlider(this, "Rotate", c.rot, -180f, 180f, null, { "%+.0f°".format(it) }) { c.rot = it; changed() })
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(4), 0, 0) }
+        row2.addView(bare(R.drawable.i_rotate, "90°", size = 20) { c.rot = ((c.rot + 90f + 180f) % 360f) - 180f; changed(); again() })
+        row2.addView(bare(R.drawable.i_flip, "Flip", if (c.flip) C.AMBER else C.TEXT, 20) { c.flip = !c.flip; changed(); again() })
+        row2.addView(bare(R.drawable.i_zoom, "Ken Burns", if (c.kenBurns) C.AMBER else C.TEXT, 20) { c.kenBurns = !c.kenBurns; changed(); again() })
+        row2.addView(bare(R.drawable.i_undo, "Reset", size = 20) { c.fit = false; c.bg = "blur"; c.scale = 1f; c.ox = 0f; c.oy = 0f; c.rot = 0f; c.flip = false; c.kenBurns = false; changed(); again() })
+        row2.addView(bare(R.drawable.i_copy, "To all", size = 20) { p.clips.forEach { o -> if (o !== c) o.framingFrom(c) }; toast("Same framing on every clip"); changed() })
+        s.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row2) })
+        s.addView(text("Drag the picture to move it, pinch to zoom.", 11.5f, C.FAINT).apply { setPadding(dp(4), dp(6), 0, 0) })
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(clipFooter("Clip ${i + 1}"), LinearLayout.LayoutParams(-1, dp(46)))
+        openClipPanel(col)
+        updateFrame()
+    }
+
+    private var touchX = 0f; private var touchY = 0f; private var touchDist = 0f; private var touchScale = 1f
+    private fun frameTouch(e: android.view.MotionEvent) {
+        val c = project?.clips?.getOrNull(framing) ?: return
+        val w = glView.width.coerceAtLeast(1); val h = glView.height.coerceAtLeast(1)
+        fun dist() = if (e.pointerCount >= 2) Math.hypot((e.getX(0) - e.getX(1)).toDouble(), (e.getY(0) - e.getY(1)).toDouble()).toFloat() else 0f
+        when (e.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> { touchX = e.x; touchY = e.y }
+            android.view.MotionEvent.ACTION_POINTER_DOWN -> { touchDist = dist(); touchScale = c.scale }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                if (e.pointerCount >= 2 && touchDist > 0f) c.scale = (touchScale * dist() / touchDist).coerceIn(0.3f, 3f)
+                else if (e.pointerCount == 1) {
+                    c.ox = (c.ox + (e.x - touchX) / w).coerceIn(-1f, 1f); c.oy = (c.oy - (e.y - touchY) / h).coerceIn(-1f, 1f)
+                    touchX = e.x; touchY = e.y
+                }
+                updateFrame()
+            }
+            android.view.MotionEvent.ACTION_POINTER_UP -> { touchDist = 0f; val k = if (e.actionIndex == 0) 1 else 0; touchX = e.getX(k); touchY = e.getY(k) }
+            android.view.MotionEvent.ACTION_UP -> { val keep = clipPanelBefore; framePanel(framing); clipPanelBefore = keep }
+        }
+    }
+
+    /** Transition from clip [i] into the next one. */
+    private fun transitionPanel(i: Int) {
+        val p = project ?: return
+        val c = p.clips.getOrNull(i) ?: return
+        if (i >= p.clips.size - 1) return
+        timeline?.selected = i
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun again() { val keep = clipPanelBefore; transitionPanel(i); clipPanelBefore = keep }
+        /** Plays the cut with a little run-up so you see it. */
+        fun preview() { val at = p.startOf(i + 1); seekTimeline(maxOf(0, at - c.transMs / 2 - 700)); player?.play() }
+        col.addView(text("CLIP ${i + 1} → ${i + 2}", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(18), dp(2), 0, dp(8)) })
+        val strip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(14), 0, dp(14), 0) }
+        Scene.TRANSITIONS.forEach { t ->
+            val on = c.trans == t.id
+            strip.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+                background = pill(if (on) 0x26F2A541 else 0xFF141414.toInt(), dpf(14f), dp(if (on) 2 else 1), if (on) C.AMBER else 0x14FFFFFF)
+                addView(ImageView(context).apply { setImageResource(transIcon(t.id)); setColorFilter(if (on) C.AMBER else C.TEXT) }, LinearLayout.LayoutParams(dp(26), dp(26)))
+                addView(context.text(t.name, 11.5f, if (on) C.AMBER else C.TEXT, true).apply { gravity = Gravity.CENTER; setPadding(dp(4), dp(8), dp(4), 0) })
+                setOnClickListener { c.trans = t.id; refreshDissolves(); again(); if (t.id != "none") main.postDelayed({ preview() }, 250) }
+            }, LinearLayout.LayoutParams(dp(84), dp(84)).apply { marginEnd = dp(8) })
+        }
+        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(strip) }, LinearLayout.LayoutParams(-1, dp(92)))
+        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(4), dp(18), 0) }
+        if (c.trans != "none") {
+            s.addView(LrSlider(this, "Length", c.transMs / 1000f, 0.2f, 2f, null, { "%.1f s".format(it) }) { c.transMs = (it * 1000).toLong(); updateFrame() })
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            r.addView(bare(R.drawable.i_play, "Play it", size = 20) { preview() })
+            r.addView(bare(R.drawable.i_copy, "On every cut", size = 20) { p.clips.dropLast(1).forEach { o -> o.trans = c.trans; o.transMs = c.transMs }; refreshDissolves(); toast("${Scene.transition(c.trans).name} on every cut"); timeline?.invalidate() })
+            s.addView(r)
+        } else s.addView(text("A straight cut. Pick a transition above; it plays straight away.", 12.5f, C.SUB).apply { setPadding(dp(2), dp(8), 0, 0) })
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(clipFooter("Tap ◆ between clips"), LinearLayout.LayoutParams(-1, dp(46)))
+        openClipPanel(col)
+        timeline?.invalidate()
+    }
+
+    private fun transIcon(id: String) = when (id) {
+        "none" -> R.drawable.i_split; "dissolve" -> R.drawable.i_trans; "black", "white" -> R.drawable.i_sun
+        "zoom" -> R.drawable.i_zoom; "whip", "slide" -> R.drawable.i_right; "spin" -> R.drawable.i_rotate
+        "blur" -> R.drawable.i_drop; "burn" -> R.drawable.i_fx; else -> R.drawable.i_film
+    }
+
+    // ---------------------------------------------------------------- reverse, freeze
+
+    private fun busySheet(title: String): Pair<TextView, ProgressBar> {
+        val col = vcol()
+        col.addView(headline(title, "This takes a moment"))
+        val pct = text("0%", 13f, C.TEXT, mono = true)
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100; progressTintList = android.content.res.ColorStateList.valueOf(C.AMBER); progressBackgroundTintList = android.content.res.ColorStateList.valueOf(0x22FFFFFF)
+        }
+        col.addView(pct); col.addView(bar, LinearLayout.LayoutParams(-1, dp(14)).apply { topMargin = dp(8) })
+        sheet(col)
+        return pct to bar
+    }
+
+    private fun reverseClip(i: Int) {
+        val p = project ?: return
+        val c = p.clips.getOrNull(i) ?: return
+        if (c.still.isNotEmpty()) { toast("A still doesn't move, so there's nothing to reverse"); return }
+        player?.pause()
+        if (c.revOf != null) {
+            snapshot()
+            Stills.unreverse(this, c)?.let { p.clips[i] = it }
+            store.save(p); reloadPlayer(true); refresh(); toast("Plays forwards again"); return
+        }
+        if (c.lengthMs > 60_000) toast("A long clip: reversing it takes a while")
+        val (pct, bar) = busySheet("Reversing clip ${i + 1}")
+        val before = p.json().toString()
+        bg.execute {
+            val r = try { Stills.reverse(this, c) { pr -> main.post { pct.text = "$pr%"; bar.progress = pr } } } catch (e: Throwable) { null }
+            main.post {
+                closeSheet()
+                if (r == null) { toast("Couldn't reverse this clip"); return@post }
+                pushUndo(before)
+                val at = p.clips.indexOf(c).takeIf { it >= 0 } ?: i
+                p.clips[at] = r
+                store.save(p); reloadPlayer(true); refresh(); toast("Reversed · it plays without sound")
+            }
+        }
+    }
+
+    /** Holds the frame under the playhead for 2 s: the clip is cut there and the still goes in between. */
+    private fun freezeFrame() {
+        val p = project ?: return
+        if (p.clips.isEmpty()) return
+        player?.pause()
+        val t = timeline?.time() ?: 0L
+        val (i, off) = p.at(t)
+        val c = p.clips[i]
+        val srcMs = c.startMs + (off * c.speed).toLong()
+        toast("Freezing ${fmt(t, true)}…")
+        bg.execute {
+            val still = try {
+                val mr = MediaMetadataRetriever(); mr.setDataSource(this, Uri.parse(c.uri))
+                val k = minOf(1f, 1920f / maxOf(c.w, c.h, 1))
+                val bm = mr.getScaledFrameAtTime(srcMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST, maxOf(2, (c.w * k).toInt()), maxOf(2, (c.h * k).toInt()))
+                mr.release()
+                bm?.let { Stills.stillClip(this, it, "freeze", 2000).apply { framingFrom(c) } }
+            } catch (e: Throwable) { null }
+            main.post {
+                if (still == null) { toast("Couldn't grab that frame"); return@post }
+                snapshot()
+                val idx = p.clips.indexOf(c).takeIf { it >= 0 } ?: i
+                when {
+                    srcMs - c.startMs < 150 -> p.clips.add(idx, still)
+                    c.endMs - srcMs < 150 -> p.clips.add(idx + 1, still)
+                    else -> { val b = c.copy(); b.startMs = srcMs; c.endMs = srcMs; c.trans = "none"; p.clips.add(idx + 1, still); p.clips.add(idx + 2, b) }
+                }
+                timeline?.selected = p.clips.indexOf(still)
+                store.save(p); reloadPlayer(true); refresh(); toast("Frozen for 2 s · drag its end to make it longer")
+            }
+        }
     }
 
     // ================================================================ panels: film looks and adjust
@@ -1050,9 +1299,17 @@ class RollActivity : Activity() {
 
     private fun outDir() = File(cacheDir, "export").apply { mkdirs() }
 
+    private var exDissolve: Map<String, Bitmap>? = null
     private fun startExport() {
         val p = project ?: return
         store.save(p)
+        if (exDissolve == null && p.clips.any { it.trans == "dissolve" }) {
+            renderExport("Getting ready…", 0)
+            val list = p.clips.map { Clip.from(it.json()) }
+            bg.execute { val m = Render.dissolveFrames(this, list); main.post { exDissolve = m; startExport() } }
+            return
+        }
+        val diss = exDissolve ?: emptyMap(); exDissolve = null
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val safe = p.name.replace(Regex("[^A-Za-z0-9 _-]"), "").trim().ifBlank { "Roll" }
         try {
@@ -1060,7 +1317,7 @@ class RollActivity : Activity() {
                 "video" -> {
                     val (w, h) = Render.size(p, exShort)
                     val out = File(outDir(), "$safe-$stamp.mp4")
-                    exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir, lvl) },
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir, lvl, diss) },
                         out, MimeTypes.VIDEO_H264, videoBitrate(w, h), { pr -> renderExport("Exporting…", pr) }) { err, note ->
                         exporting = null
                         if (err != null) renderExport("Couldn't export: $err")
@@ -1071,7 +1328,7 @@ class RollActivity : Activity() {
                 "gif" -> {
                     val (a, b) = gifRange(p); val (w, h) = gifSize(p)
                     val tmp = File(outDir(), "gif-src.mp4"); val out = File(outDir(), "$safe-$stamp.gif")
-                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, a, b), w, h, gifFps, false, store.lutDir, lvl) },
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, a, b), w, h, gifFps, false, store.lutDir, lvl, diss) },
                         tmp, MimeTypes.VIDEO_H264, 6_000_000, { pr -> renderExport("Rendering frames…", pr / 2) }) { err, _ ->
                         if (err != null) { exporting = null; renderExport("Couldn't export: $err"); return@export }
                         renderExport("Making the GIF…", 50)
@@ -1091,7 +1348,7 @@ class RollActivity : Activity() {
                     val r = Render.ratio(p)
                     val (w, h) = if (stSquare) 512 to 512 else if (r >= 1) 512 to ((512 / r).toInt() / 2 * 2) else ((512 * r).toInt() / 2 * 2) to 512
                     val tmp = File(outDir(), "sticker-src.mp4"); val out = File(outDir(), "$safe-$stamp.webm")
-                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, t0, minOf(p.lengthMs, t0 + 2990)), w, h, stFps, false, store.lutDir, lvl) },
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, t0, minOf(p.lengthMs, t0 + 2990)), w, h, stFps, false, store.lutDir, lvl, diss) },
                         tmp, MimeTypes.VIDEO_H264, 8_000_000, { pr -> renderExport("Rendering…", pr / 2) }) { err, _ ->
                         if (err != null) { exporting = null; renderExport("Couldn't export: $err"); return@export }
                         renderExport("Encoding VP9…", 60)

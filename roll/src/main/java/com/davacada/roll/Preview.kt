@@ -63,6 +63,19 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
 
     fun setRatios(video: Float, view: Float) { videoRatio = video; viewRatio = view; requestRender() }
 
+    /** How the current clip sits in the frame and where it is in a transition (set every tick by the editor). */
+    @Volatile var frame: Scene.Frame? = null
+        set(v) { field = v; requestRender() }
+    /** Dissolve: the last frame of the clip before. */
+    @Volatile var prevBitmap: Bitmap? = null
+        set(v) { if (v !== field) { field = v; prevDirty = true; requestRender() } }
+    /** Titles and captions, drawn over everything at the viewer's size (premultiplied). */
+    @Volatile var textBitmap: Bitmap? = null
+        set(v) { field = v; textDirty = true; requestRender() }
+    @Volatile private var prevDirty = false
+    @Volatile private var textDirty = false
+    private var prevTex = 0; private var textTex = 0
+
     /** New grade: rebuilds the colour table and overlay in the background, then redraws. */
     private var current: Grade? = null
     private var ovSize = ""
@@ -109,8 +122,16 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
     // ---------------------------------------------------------------- GL
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        val t = IntArray(3); GLES30.glGenTextures(3, t, 0)
-        oesTex = t[0]; lutTex = t[1]; ovTex = t[2]
+        val t = IntArray(5); GLES30.glGenTextures(5, t, 0)
+        oesTex = t[0]; lutTex = t[1]; ovTex = t[2]; prevTex = t[3]; textTex = t[4]
+        for (x in intArrayOf(prevTex, textTex)) {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, x)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        }
+        prevDirty = true; textDirty = true
         GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex)
         GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -165,16 +186,24 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
             GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, ovFrame, 0)
             ovUploaded = ovFrame
         }
+        if (prevDirty) { prevDirty = false; prevBitmap?.takeIf { !it.isRecycled }?.let { GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, prevTex); GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, it, 0) } }
+        val tb = textBitmap
+        if (textDirty) { textDirty = false; tb?.takeIf { !it.isRecycled }?.let { GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textTex); GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, it, 0) } }
         GLES30.glClearColor(0f, 0f, 0f, 1f); GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(prog)
-        // centre-crop the video into the frame shape
-        val sx: Float; val sy: Float
-        if (videoRatio > viewRatio) { sx = viewRatio / videoRatio; sy = 1f } else { sx = 1f; sy = videoRatio / viewRatio }
         val aPos = GLES30.glGetAttribLocation(prog, "aPos"); val aUv = GLES30.glGetAttribLocation(prog, "aUv")
         quad.position(0); GLES30.glVertexAttribPointer(aPos, 2, GLES30.GL_FLOAT, false, 16, quad); GLES30.glEnableVertexAttribArray(aPos)
         quad.position(2); GLES30.glVertexAttribPointer(aUv, 2, GLES30.GL_FLOAT, false, 16, quad); GLES30.glEnableVertexAttribArray(aUv)
         GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(prog, "uSt"), 1, false, stMatrix, 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(prog, "uCrop"), sx, sy)
+        val f = frame ?: Scene.Frame(videoRatio, viewRatio, false, 0, 1f, 0f, 0f, 0f, false, 0, 0f, 0f, null)
+        val u = f.uniforms()
+        for ((k, name) in listOf("uA", "uB", "uC", "uP1", "uP2").withIndex()) GLES30.glUniform4fv(GLES30.glGetUniformLocation(prog, name), 1, u[k], 0)
+        if (prevBitmap == null) GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uP2"), 0f, 0f, 0f, 0f)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, prevTex)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "uPrev"), 3)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE4); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textTex)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "uText"), 4)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(prog, "uTextA"), if (tb != null) 1f else 0f)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0); GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "uTex"), 0)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1); GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTex)
@@ -213,21 +242,20 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
         private const val VERT = """#version 300 es
 in vec2 aPos;
 in vec2 aUv;
-uniform mat4 uSt;
-uniform vec2 uCrop;
-out vec2 vTex;
 out vec2 vUv;
 void main() {
   gl_Position = vec4(aPos, 0.0, 1.0);
-  vec2 uv = (aUv - 0.5) * uCrop + 0.5;
-  vTex = (uSt * vec4(uv, 0.0, 1.0)).xy;
   vUv = aUv;
 }
 """
-        private const val FRAG = """#version 300 es
+        private val FRAG = """#version 300 es
 #extension GL_OES_EGL_image_external_essl3 : require
 precision highp float;
 uniform samplerExternalOES uTex;
+uniform mat4 uSt;
+uniform sampler2D uPrev;
+uniform sampler2D uText;
+uniform float uTextA;
 uniform highp sampler3D uLut;
 uniform sampler2D uOv;
 uniform float uUseLut;
@@ -238,12 +266,15 @@ uniform float uVig;
 uniform float uOvA;
 uniform float uSeed;
 uniform vec2 uSize;
-in vec2 vTex;
+uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2;
 in vec2 vUv;
 out vec4 outColor;
+#define SRC(t) texture(uTex, (uSt * vec4((t), 0.0, 1.0)).xy)
+#define PREV(t) texture(uPrev, vec2((t).x, 1.0 - (t).y))
+""" + Scene.BODY + """
 float rand(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233)) + uSeed * 0.731) * 43758.5453); }
 void main() {
-  vec3 c = clamp(texture(uTex, vTex).rgb, 0.0, 1.0);
+  vec3 c = frameColor(vUv);
   if (uUseLut > 0.5) c = texture(uLut, c * uLutScale + uLutOffset).rgb;
   if (uOvA > 0.001) { vec4 o = texture(uOv, vec2(vUv.x, 1.0 - vUv.y)); c = mix(c, o.rgb / max(o.a, 0.001), o.a * uOvA); }
   vec2 d = vUv - 0.5;
@@ -254,6 +285,7 @@ void main() {
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
     c += n * uGrain * (1.0 - abs(l - 0.5) * 1.3);
   }
+  if (uTextA > 0.5) { vec4 t = texture(uText, vec2(vUv.x, 1.0 - vUv.y)); c = c * (1.0 - t.a) + t.rgb; }
   outColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }
 """

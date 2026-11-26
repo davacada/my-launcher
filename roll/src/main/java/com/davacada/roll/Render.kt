@@ -50,7 +50,7 @@ object Render {
     fun size(p: Project, short: Int): Pair<Int, Int> {
         val first = p.clips.firstOrNull()
         val ratio = when (p.aspect) {
-            "9:16" -> 9f / 16f; "1:1" -> 1f; "4:5" -> 4f / 5f; "16:9" -> 16f / 9f
+            "9:16" -> 9f / 16f; "1:1" -> 1f; "4:5" -> 4f / 5f; "16:9" -> 16f / 9f; "4:3" -> 4f / 3f; "3:4" -> 3f / 4f; "21:9" -> 2.39f
             else -> if (first != null && first.w > 0 && first.h > 0) first.w.toFloat() / first.h else 16f / 9f
         }
         fun even(x: Float) = (x.toInt() / 2) * 2
@@ -92,7 +92,7 @@ object Render {
         for (c in p.clips) {
             val a = t; val b = t + c.lengthMs; t = b
             if (b <= fromMs || a >= toMs) continue
-            val cc = c.copy()
+            val cc = Clip.from(c.json())   // same id
             cc.startMs = c.startMs + ((maxOf(fromMs, a) - a) * c.speed).toLong()
             cc.endMs = c.startMs + ((minOf(toMs, b) - a) * c.speed).toLong()
             if (cc.endMs - cc.startMs > 40) out.add(cc)
@@ -104,10 +104,28 @@ object Render {
      * [level] makes the export more forgiving after a failure:
      * 0 normal · 1 no duration hint, no forced audio, MediaCodec tone-mapping · 2 also without sound.
      */
-    fun composition(ctx: Context, p: Project, clips: List<Clip>, w: Int, h: Int, fps: Int, withSoundAsked: Boolean, lutDir: File, level: Int = 0): Composition {
+    /** The last frame of each clip that dissolves into the next one (clip id → frame). Run off the main thread. */
+    fun dissolveFrames(ctx: Context, clips: List<Clip>): Map<String, Bitmap> {
+        val out = HashMap<String, Bitmap>()
+        clips.forEachIndexed { i, c ->
+            if (i < clips.size - 1 && c.trans == "dissolve") lastFrame(ctx, c, 1280)?.let { out[c.id] = it }
+        }
+        return out
+    }
+
+    /** The frame at the very end of a clip, upright, at most [long] pixels on its long side. */
+    fun lastFrame(ctx: Context, c: Clip, long: Int): Bitmap? = try {
+        val mr = MediaMetadataRetriever(); mr.setDataSource(ctx, Uri.parse(c.uri))
+        val k = minOf(1f, long.toFloat() / maxOf(c.w, c.h, 1))
+        val b = mr.getScaledFrameAtTime(maxOf(0, c.endMs - 40) * 1000, MediaMetadataRetriever.OPTION_CLOSEST, maxOf(2, (c.w * k).toInt()), maxOf(2, (c.h * k).toInt()))
+        mr.release(); b
+    } catch (e: Exception) { null }
+
+    fun composition(ctx: Context, p: Project, clips: List<Clip>, w: Int, h: Int, fps: Int, withSoundAsked: Boolean, lutDir: File, level: Int = 0,
+                    dissolve: Map<String, Bitmap> = emptyMap()): Composition {
         val withSound = withSoundAsked && level < 2
         val grade = gradeEffects(ctx, p.grade, lutDir)
-        val items = clips.map { c ->
+        val items = clips.mapIndexed { idx, c ->
             val mi = MediaItem.Builder().setUri(Uri.parse(c.uri)).setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder().setStartPositionMs(c.startMs).setEndPositionMs(c.endMs).build()).build()
             val audio = ArrayList<AudioProcessor>(); val video = ArrayList<Effect>()
@@ -117,7 +135,7 @@ object Render {
             }
             // Phones like the Red Magic record 24-bit sound; the mixers only take 16-bit, so convert first.
             if (withSound) { audio.add(0, androidx.media3.common.audio.ToInt16PcmAudioProcessor()); audio.add(volume(c.volume)); audio.add(resample()) }
-            video.add(Presentation.createForWidthAndHeight(w, h, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
+            video.add(RollFrame(clips, idx, w, h, clips.getOrNull(idx - 1)?.let { dissolve[it.id] }))
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
             val b = EditedMediaItem.Builder(mi).setEffects(Effects(audio, video)).setRemoveAudio(!withSound)

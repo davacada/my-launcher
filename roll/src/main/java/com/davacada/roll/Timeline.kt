@@ -36,6 +36,8 @@ class Timeline(ctx: Context) : View(ctx) {
     var onTrimmed: ((Int) -> Unit)? = null
     var onAdd: (() -> Unit)? = null
     var onHold: ((Int) -> Unit)? = null
+    /** Tapped the diamond between clip i and i + 1. */
+    var onJoint: ((Int) -> Unit)? = null
 
     private val d = resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -61,6 +63,9 @@ class Timeline(ctx: Context) : View(ctx) {
     private val plus = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x1FFFFFFF }
     private val plusLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); strokeWidth = dp(2f); strokeCap = Paint.Cap.ROUND }
     private val clipPath = Path(); private val r = RectF()
+    private val diamond = Path()
+    private val jointFill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val jointShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC000000.toInt(); style = Paint.Style.STROKE; strokeWidth = dp(3f) }
 
     // thumbnails: one frame per second of source, per video
     private val frames = HashMap<String, Bitmap?>()
@@ -109,8 +114,13 @@ class Timeline(ctx: Context) : View(ctx) {
                 fx += fw
             }
             c.restore()
-            if (clip.speed != 1f || clip.volume == 0f) {
-                val label = listOfNotNull(if (clip.speed != 1f) "${trim(clip.speed)}×" else null, if (clip.volume == 0f) "muted" else null).joinToString(" · ")
+            val tags = listOfNotNull(
+                when (clip.still) { "photo" -> "photo"; "freeze" -> "freeze"; else -> null },
+                if (clip.revOf != null) "reversed" else null,
+                if (clip.speed != 1f) "${trim(clip.speed)}×" else null,
+                if (clip.volume == 0f && clip.still.isEmpty() && clip.revOf == null) "muted" else null)
+            if (tags.isNotEmpty()) {
+                val label = tags.joinToString(" · ")
                 val tw = badge.measureText(label)
                 c.drawRoundRect(r.left + dp(6f), r.bottom - dp(19f), r.left + dp(14f) + tw, r.bottom - dp(5f), dp(4f), dp(4f), badgeBg)
                 c.drawText(label, r.left + dp(10f), r.bottom - dp(8.5f), badge)
@@ -124,6 +134,18 @@ class Timeline(ctx: Context) : View(ctx) {
                 c.drawRect(r.right - handleW / 2 - dp(1f), r.centerY() - dp(9f), r.right - handleW / 2 + dp(1f), r.centerY() + dp(9f), head)
                 head.color = 0xFFFFFFFF.toInt()
             }
+        }
+        // joints: a diamond between clips (amber when there's a transition)
+        var jt = 0L
+        p.clips.forEachIndexed { i, clip ->
+            jt += clip.lengthMs
+            if (i == p.clips.size - 1) return@forEachIndexed
+            val x = x0 + jt * pxPerMs
+            if (x < -dp(20f) || x > width + dp(20f)) return@forEachIndexed
+            val y = clipTop + clipH / 2; val rr = dp(if (clip.trans != "none") 8f else 6f)
+            diamond.reset(); diamond.moveTo(x, y - rr); diamond.lineTo(x + rr, y); diamond.lineTo(x, y + rr); diamond.lineTo(x - rr, y); diamond.close()
+            jointFill.color = if (clip.trans != "none") C.AMBER else 0xFFEFE8DF.toInt()
+            c.drawPath(diamond, jointShadow); c.drawPath(diamond, jointFill)
         }
         // add button after the last clip
         val ax = x0 + p.lengthMs * pxPerMs + dp(28f); val ay = clipTop + clipH / 2
@@ -178,6 +200,14 @@ class Timeline(ctx: Context) : View(ctx) {
             val p = project ?: return true
             val ax = edgeX + p.lengthMs * pxPerMs + dp(28f)
             if (abs(e.x - ax) < dp(26f) && abs(e.y - (clipTop + clipH / 2)) < dp(30f)) { onAdd?.invoke(); return true }
+            // a joint between clips
+            if (abs(e.y - (clipTop + clipH / 2)) < dp(22f)) {
+                var jt = 0L
+                for (i in 0 until p.clips.size - 1) {
+                    jt += p.clips[i].lengthMs
+                    if (abs(e.x - (edgeX + jt * pxPerMs)) < dp(14f)) { onJoint?.invoke(i); return true }
+                }
+            }
             val i = clipAt(e.x, e.y)
             onSelect?.invoke(if (i == selected) -1 else i); return true
         }

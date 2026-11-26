@@ -7,7 +7,11 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-/** One clip on the timeline: a piece [startMs, endMs) of a video, played at [speed]. */
+/**
+ * One clip on the timeline: a piece [startMs, endMs) of a video, played at [speed].
+ * Photos and frozen frames are short still videos Roll makes itself ([still]); a reversed clip points at a
+ * reversed copy, and remembers the original in [revOf] so it can be turned back.
+ */
 class Clip(
     var uri: String,
     var sourceMs: Long,            // full length of the source video
@@ -18,17 +22,40 @@ class Clip(
     var w: Int = 0, var h: Int = 0, // as shown (rotation applied)
     val id: String = UUID.randomUUID().toString(),
 ) {
+    // framing: how the clip sits in the frame
+    var fit = false                // false: fill the frame (crop) · true: whole picture, with a background around it
+    var bg = "blur"                // background when it doesn't fill: blur, black, white
+    var scale = 1f                 // 1 = as fitted/filled
+    var ox = 0f; var oy = 0f       // position, in frame widths / heights (+x right, +y up)
+    var rot = 0f                   // degrees, clockwise
+    var flip = false
+    var kenBurns = false           // a slow push-in over the clip
+    // the transition into the next clip
+    var trans = "none"; var transMs = 500L
+    // what kind of clip
+    var still = ""                 // "" a video · "photo" · "freeze"
+    var revOf: String? = null      // JSON of the clip before it was reversed
+
     /** How long it lasts in the edit (after speed). */
     val lengthMs get() = ((endMs - startMs) / speed).toLong()
+    val aspect get() = if (w > 0 && h > 0) w.toFloat() / h else 16f / 9f
 
     fun json(): JSONObject = JSONObject().put("u", uri).put("src", sourceMs).put("s", startMs).put("e", endMs)
         .put("sp", speed.toDouble()).put("v", volume.toDouble()).put("w", w).put("h", h).put("id", id)
+        .put("fit", fit).put("bg", bg).put("sc", scale.toDouble()).put("ox", ox.toDouble()).put("oy", oy.toDouble()).put("rot", rot.toDouble())
+        .put("fl", flip).put("kb", kenBurns).put("tr", trans).put("trm", transMs).put("still", still).apply { revOf?.let { put("rev", it) } }
 
-    fun copy() = Clip(uri, sourceMs, startMs, endMs, speed, volume, w, h)
+    fun copy() = from(json().put("id", UUID.randomUUID().toString()))
+    fun framingFrom(o: Clip) { fit = o.fit; bg = o.bg; scale = o.scale; ox = o.ox; oy = o.oy; rot = o.rot; flip = o.flip }
 
     companion object {
         fun from(o: JSONObject) = Clip(o.getString("u"), o.optLong("src"), o.optLong("s"), o.optLong("e"),
-            o.optDouble("sp", 1.0).toFloat(), o.optDouble("v", 1.0).toFloat(), o.optInt("w"), o.optInt("h"), o.optString("id", UUID.randomUUID().toString()))
+            o.optDouble("sp", 1.0).toFloat(), o.optDouble("v", 1.0).toFloat(), o.optInt("w"), o.optInt("h"), o.optString("id", UUID.randomUUID().toString())).apply {
+            fit = o.optBoolean("fit"); bg = o.optString("bg", "blur"); scale = o.optDouble("sc", 1.0).toFloat()
+            ox = o.optDouble("ox", 0.0).toFloat(); oy = o.optDouble("oy", 0.0).toFloat(); rot = o.optDouble("rot", 0.0).toFloat()
+            flip = o.optBoolean("fl"); kenBurns = o.optBoolean("kb"); trans = o.optString("tr", "none"); transMs = o.optLong("trm", 500L)
+            still = o.optString("still", ""); revOf = if (o.has("rev")) o.optString("rev") else null
+        }
     }
 }
 
@@ -77,7 +104,7 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     var updated = System.currentTimeMillis()
     val clips = mutableListOf<Clip>()
     var grade = Grade()
-    var aspect = "original"        // original, 9:16, 1:1, 4:5, 16:9
+    var aspect = "original"        // original, 9:16, 4:5, 1:1, 4:3, 16:9, 21:9
     var mute = false
 
     val lengthMs get() = clips.sumOf { it.lengthMs }
@@ -94,6 +121,11 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
 
     fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("created", created).put("updated", updated)
         .put("clips", JSONArray().apply { clips.forEach { put(it.json()) } }).put("grade", grade.json()).put("aspect", aspect).put("mute", mute)
+
+    /** Takes everything from [q] (undo / redo). */
+    fun copyFrom(q: Project) {
+        clips.clear(); clips.addAll(q.clips); grade = q.grade; aspect = q.aspect; mute = q.mute; name = q.name
+    }
 
     companion object {
         fun from(o: JSONObject) = Project(o.getString("id"), o.optString("name", "Untitled"), o.optLong("created")).apply {
@@ -121,6 +153,8 @@ class Projects(private val ctx: Context) {
         File(dir, p.id + ".json").delete()
         // let go of the videos this project used, unless another project still uses them
         val still = all().flatMap { q -> q.clips.map { it.uri } }.toSet()
+        val mine = File(ctx.filesDir, "media").absolutePath
+        p.clips.map { it.uri }.distinct().filter { it !in still && it.contains(mine) }.forEach { u -> try { File(Uri.parse(u).path!!).delete() } catch (e: Exception) {} }
         p.clips.map { it.uri }.distinct().filter { it !in still }.forEach { u ->
             try { ctx.contentResolver.releasePersistableUriPermission(Uri.parse(u), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) {}
         }
