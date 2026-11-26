@@ -73,6 +73,8 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
     @Volatile var textBitmap: Bitmap? = null
         set(v) { field = v; textDirty = true; requestRender() }
     /** Bloom, halation, fringing, sharpen (from the grade). */
+    @Volatile var hideVideo = false
+        set(v) { field = v; requestRender() }
     @Volatile var fx = FloatArray(4)
         set(v) { field = v; requestRender() }
     @Volatile private var prevDirty = false
@@ -204,6 +206,7 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
         if (prevBitmap == null) GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uP2"), 0f, 0f, 0f, 0f)
         val e = if (bypass) FloatArray(4) else fx
         GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uE"), e[0], e[1], e[2], e[3])
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(prog, "uHide"), if (hideVideo) 1f else 0f)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, prevTex)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "uPrev"), 3)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE4); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textTex)
@@ -272,6 +275,7 @@ uniform float uOvA;
 uniform float uSeed;
 uniform vec2 uSize;
 uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uE;
+uniform float uHide;
 in vec2 vUv;
 out vec4 outColor;
 #define SRC(t) texture(uTex, (uSt * vec4((t), 0.0, 1.0)).xy)
@@ -279,7 +283,7 @@ out vec4 outColor;
 """ + Scene.BODY + """
 float rand(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233)) + uSeed * 0.731) * 43758.5453); }
 void main() {
-  vec3 c = frameColor(vUv);
+  vec3 c = uHide > 0.5 ? vec3(0.0) : frameColor(vUv);
   if (uUseLut > 0.5) c = texture(uLut, c * uLutScale + uLutOffset).rgb;
   if (uOvA > 0.001) { vec4 o = texture(uOv, vec2(vUv.x, 1.0 - vUv.y)); c = mix(c, o.rgb / max(o.a, 0.001), o.a * uOvA); }
   vec2 d = vUv - 0.5;

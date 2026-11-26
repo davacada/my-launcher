@@ -115,10 +115,14 @@ class Timeline(ctx: Context) : View(ctx) {
             keys.forEachIndexed { i, (k, on) -> val x = dp(4f) + i * (cw + gap); out.add(Triple(RectF(x, y, x + cw, y + h), k, on)) }
         }
         val bh = dp(24f)
+        // add above the video track
+        out.add(Triple(RectF(dp(4f), dp(2f), dp(4f) + cw * 2 + gap, dp(2f) + dp(20f)), "v+", false))
         row(clipTop + clipH / 2 - bh - dp(2f), bh, listOf("vM" to p.vMute, "vS" to p.vSolo))
-        row(clipTop + clipH / 2 + dp(2f), bh, listOf("vL" to p.vLock, "v+" to false))
+        row(clipTop + clipH / 2 + dp(2f), bh, listOf("vH" to p.vHide, "vL" to p.vLock))
         row(textTop, laneH, listOf("tH" to p.tHide, "tL" to p.tLock, "t+" to false))
-        row(audioTop, laneH, listOf("aM" to p.aMute, "aS" to p.aSolo, "aL" to p.aLock, "a+" to false))
+        row(audioTop, laneH, listOf("aM" to p.aMute, "aS" to p.aSolo, "aL" to p.aLock))
+        // add under the audio track
+        out.add(Triple(RectF(dp(4f), audioTop + laneH + dp(6f), dp(4f) + cw * 2 + gap, audioTop + laneH + dp(26f)), "a+", false))
         return out
     }
 
@@ -128,12 +132,19 @@ class Timeline(ctx: Context) : View(ctx) {
         c.drawRect(0f, 0f, headW, height.toFloat(), headBg)
         c.drawRect(headW - dp(1f), 0f, headW, height.toFloat(), headEdge)
         for ((r, k, on) in buttons(p)) {
-            val active = when (k[1]) { 'M' -> 0xFFFF6B5E.toInt(); 'S' -> 0xFFFFD24A.toInt(); 'L' -> 0xFFEFE8DF.toInt(); 'H' -> 0xFFB794FF.toInt(); else -> 0xFFF2A541.toInt() }
+            val active = if (k == "vH") 0xFFB794FF.toInt() else when (k[1]) { 'M' -> 0xFFFF6B5E.toInt(); 'S' -> 0xFFFFD24A.toInt(); 'L' -> 0xFFEFE8DF.toInt(); 'H' -> 0xFFB794FF.toInt(); else -> 0xFFF2A541.toInt() }
             btnBg.color = if (on) active else 0xFF1A232C.toInt()
             c.drawRoundRect(r, dp(5f), dp(5f), btnBg)
             val fg = if (on) 0xFF0A0A0A.toInt() else 0xFFB8C2CC.toInt()
             when (k[1]) {
                 'M', 'S' -> { btnText.color = fg; btnText.textSize = dp(11.5f); c.drawText(k[1].toString(), r.centerX(), r.centerY() + dp(4f), btnText) }
+                '+' -> if (r.width() > dp(30f)) {
+                    btnText.color = 0xFFF2A541.toInt(); btnText.textSize = dp(10.5f)
+                    c.drawText(if (k[0] == 'v') "+ video" else "+ audio", r.centerX(), r.centerY() + dp(3.5f), btnText)
+                } else {
+                    val d = icon(R.drawable.i_add); val sz = dp(14f).toInt(); val cx = r.centerX().toInt(); val cy = r.centerY().toInt()
+                    d.setBounds(cx - sz / 2, cy - sz / 2, cx + sz / 2, cy + sz / 2); d.setTint(0xFFF2A541.toInt()); d.draw(c)
+                }
                 else -> {
                     val d = icon(when (k[1]) { 'L' -> R.drawable.i_lock; 'H' -> if (on) R.drawable.i_eye_off else R.drawable.i_eye; else -> R.drawable.i_add })
                     val s = dp(14f).toInt(); val cx = r.centerX().toInt(); val cy = r.centerY().toInt()
@@ -241,7 +252,7 @@ class Timeline(ctx: Context) : View(ctx) {
             c.restore()
         }
         // dim what you can't hear or see
-        if (!p.clipSound()) { bar.color = 0x66000000; c.drawRect(0f, clipTop - dp(4f), width.toFloat(), clipTop + clipH + dp(4f), bar) }
+        if (!p.clipSound() || p.vHide) { bar.color = if (p.vHide) 0xAA000000.toInt() else 0x66000000; c.drawRect(0f, clipTop - dp(4f), width.toFloat(), clipTop + clipH + dp(4f), bar) }
         if (p.tHide) { bar.color = 0x99000000.toInt(); c.drawRect(0f, textTop - dp(2f), width.toFloat(), textTop + laneH + dp(2f), bar) }
         if (!p.musicSound()) { bar.color = 0x99000000.toInt(); c.drawRect(0f, audioTop - dp(2f), width.toFloat(), audioTop + laneH + dp(2f), bar) }
         // add button after the last clip

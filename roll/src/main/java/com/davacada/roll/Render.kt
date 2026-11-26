@@ -135,7 +135,7 @@ object Render {
             }
             // Phones like the Red Magic record 24-bit sound; the mixers only take 16-bit, so convert first.
             if (withSound) { audio.add(0, androidx.media3.common.audio.ToInt16PcmAudioProcessor()); audio.add(volume(c.volume)); audio.add(resample()) }
-            video.add(RollFrame(clips, idx, w, h, clips.getOrNull(idx - 1)?.let { dissolve[it.id] }, p.grade.fx()))
+            video.add(RollFrame(clips, idx, w, h, clips.getOrNull(idx - 1)?.let { dissolve[it.id] }, p.grade.fx(), p.vHide))
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
             // titles and captions go on top of the grade

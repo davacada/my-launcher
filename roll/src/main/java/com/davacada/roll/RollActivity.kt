@@ -627,7 +627,7 @@ class RollActivity : Activity() {
             else { row.addView(col, LinearLayout.LayoutParams(0, -1, 1f)); row.addView(side, LinearLayout.LayoutParams(sideW, -1)) }
             screen.addView(row, FrameLayout.LayoutParams(-1, -1))
         } else {
-            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(334)))
+            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(352)))
             screen.addView(col, FrameLayout.LayoutParams(-1, -1))
         }
         editBottom()
@@ -661,7 +661,7 @@ class RollActivity : Activity() {
         // sideways the panel is tall: timeline and tools sit at the bottom, under your thumbs, with room above
         val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         if (sideways) col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
-        col.addView(tl, LinearLayout.LayoutParams(-1, dp(186)))
+        col.addView(tl, LinearLayout.LayoutParams(-1, dp(206)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) },
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (sideways) 8 else 18); if (sideways) bottomMargin = dp(10) })
@@ -707,7 +707,7 @@ class RollActivity : Activity() {
         val pl = ExoPlayer.Builder(this).build()
         player = pl
         videoSurface?.let { pl.setVideoSurface(it) }
-        glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p))
+        glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p)); glView.hideVideo = p.vHide
         pl.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { clipParams(); updateFrame() }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -867,7 +867,7 @@ class RollActivity : Activity() {
     /** The grade shows on the viewer straight away (drawn by GlPreview), paused or playing. */
     private fun applyGrade() {
         val p = project ?: return
-        if (::glView.isInitialized) { glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p)); glView.fx = p.grade.fx() }
+        if (::glView.isInitialized) { glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p)); glView.fx = p.grade.fx(); glView.hideVideo = p.vHide }
         updateLookTag()
     }
 
@@ -1250,6 +1250,7 @@ class RollActivity : Activity() {
         when (k) {
             "vM" -> { p.vMute = !p.vMute; say(if (p.vMute) "Clips' sound muted" else "Clips' sound on") }
             "vS" -> { p.vSolo = !p.vSolo; say(if (p.vSolo) "Only the clips' sound" else "Solo off") }
+            "vH" -> { p.vHide = !p.vHide; say(if (p.vHide) "Video hidden: the picture is black (also in the export)" else "Video showing") }
             "vL" -> { p.vLock = !p.vLock; say(if (p.vLock) "Video locked: no trimming, moving or clip changes" else "Video unlocked") }
             "v+" -> { if (p.vLock) { say("Video track is locked"); return }; addingTo = p; pickVideos(); return }
             "tH" -> { p.tHide = !p.tHide; textKey = ""; say(if (p.tHide) "Titles and captions hidden (also in the export)" else "Titles and captions showing") }
@@ -1268,6 +1269,7 @@ class RollActivity : Activity() {
             }
         }
         store.save(p); clipParams(); updateFrame(); timeline?.invalidate()
+        glView.hideVideo = p.vHide
     }
 
     // ---------------------------------------------------------------- music and voiceovers

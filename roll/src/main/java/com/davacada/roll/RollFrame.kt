@@ -19,7 +19,7 @@ import androidx.media3.effect.GlShaderProgram
  */
 @UnstableApi
 class RollFrame(private val clips: List<Clip>, private val index: Int, private val outW: Int, private val outH: Int, private val prevFrame: Bitmap?,
-                private val fx: FloatArray = FloatArray(4)) : GlEffect {
+                private val fx: FloatArray = FloatArray(4), private val hide: Boolean = false) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program()
 
     private inner class Program : BaseGlShaderProgram(false, 1) {
@@ -51,6 +51,7 @@ class RollFrame(private val clips: List<Clip>, private val index: Int, private v
             val u = f.uniforms()
             prog.setFloatsUniform("uA", u[0]); prog.setFloatsUniform("uB", u[1]); prog.setFloatsUniform("uC", u[2])
             prog.setFloatsUniform("uE", fx)
+            prog.setFloatUniform("uHide", if (hide) 1f else 0f)
             prog.setFloatsUniform("uP1", u[3]); prog.setFloatsUniform("uP2", if (prevTex != 0) u[4] else floatArrayOf(0f, 0f, 0f, 0f))
             prog.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
@@ -74,11 +75,12 @@ precision highp float;
 uniform sampler2D uTexSampler;
 uniform sampler2D uPrev;
 uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uE;
+uniform float uHide;
 varying vec2 vUv;
 #define SRC(t) texture2D(uTexSampler, t)
 #define PREV(t) texture2D(uPrev, vec2((t).x, 1.0 - (t).y))
 """ + Scene.BODY + """
-void main() { gl_FragColor = vec4(frameColor(vUv), 1.0); }
+void main() { gl_FragColor = vec4(uHide > 0.5 ? vec3(0.0) : frameColor(vUv), 1.0); }
 """
     }
 }
