@@ -125,11 +125,18 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     // track controls: video (clips), titles, audio (music + voice)
     var vMute = false; var vSolo = false; var vLock = false; var vHide = false
     var tHide = false; var tLock = false
-    var aMute = false; var aSolo = false; var aLock = false
-    /** Whether the clips' own sound is heard (mute / solo). */
-    fun clipSound() = !mute && !vMute && !(aSolo && !vSolo)
-    /** Whether music and voiceovers are heard. */
-    fun musicSound() = !mute && !aMute && !(vSolo && !aSolo)
+    /** Audio tracks after A1 (A1 is the clips' own sound): A2, A3, … each with mute / solo / lock. */
+    val aTracks = mutableListOf(Track())
+    class Track(var mute: Boolean = false, var solo: Boolean = false, var lock: Boolean = false) {
+        fun json(): JSONObject = JSONObject().put("m", mute).put("s", solo).put("l", lock)
+    }
+    private fun anySolo() = vSolo || aTracks.any { it.solo }
+    /** Whether the clips' own sound (A1) is heard. */
+    fun clipSound() = !mute && !vMute && (!anySolo() || vSolo)
+    /** Whether audio track [i] (0 = A2) is heard. */
+    fun trackSound(i: Int): Boolean { val t = aTracks.getOrNull(i) ?: return !mute; return !mute && !t.mute && (!anySolo() || t.solo) }
+    fun musicSound() = aTracks.indices.any { trackSound(it) }
+    fun trackLocked(i: Int) = aTracks.getOrNull(i)?.lock == true
     var mute = false
 
     val lengthMs get() = clips.sumOf { it.lengthMs }
@@ -148,13 +155,15 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
         .put("clips", JSONArray().apply { clips.forEach { put(it.json()) } }).put("grade", grade.json()).put("aspect", aspect).put("mute", mute)
         .put("texts", JSONArray().apply { texts.forEach { put(it.json()) } })
         .put("audio", JSONArray().apply { audio.forEach { put(it.json()) } }).put("duck", duck)
-        .put("tracks", JSONObject().put("vm", vMute).put("vs", vSolo).put("vl", vLock).put("vh", vHide).put("th", tHide).put("tl", tLock).put("am", aMute).put("as", aSolo).put("al", aLock))
+        .put("tracks", JSONObject().put("vm", vMute).put("vs", vSolo).put("vl", vLock).put("vh", vHide).put("th", tHide).put("tl", tLock))
+        .put("atracks", JSONArray().apply { aTracks.forEach { put(it.json()) } })
 
     /** Takes everything from [q] (undo / redo). */
     fun copyFrom(q: Project) {
         clips.clear(); clips.addAll(q.clips); grade = q.grade; aspect = q.aspect; mute = q.mute; name = q.name
         texts.clear(); texts.addAll(q.texts); audio.clear(); audio.addAll(q.audio); duck = q.duck
-        vMute = q.vMute; vSolo = q.vSolo; vLock = q.vLock; vHide = q.vHide; tHide = q.tHide; tLock = q.tLock; aMute = q.aMute; aSolo = q.aSolo; aLock = q.aLock
+        vMute = q.vMute; vSolo = q.vSolo; vLock = q.vLock; vHide = q.vHide; tHide = q.tHide; tLock = q.tLock
+        aTracks.clear(); aTracks.addAll(q.aTracks.map { Track(it.mute, it.solo, it.lock) })
     }
 
     companion object {
@@ -166,7 +175,9 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
             o.optJSONArray("audio")?.let { a -> for (i in 0 until a.length()) audio.add(AudioItem.from(a.getJSONObject(i))) }
             duck = o.optBoolean("duck", true)
             o.optJSONObject("tracks")?.let { t -> vMute = t.optBoolean("vm"); vSolo = t.optBoolean("vs"); vLock = t.optBoolean("vl"); vHide = t.optBoolean("vh"); tHide = t.optBoolean("th"); tLock = t.optBoolean("tl")
-                aMute = t.optBoolean("am"); aSolo = t.optBoolean("as"); aLock = t.optBoolean("al") }
+                aTracks[0] = Track(t.optBoolean("am"), t.optBoolean("as"), t.optBoolean("al")) }
+            o.optJSONArray("atracks")?.let { a -> aTracks.clear(); for (i in 0 until a.length()) a.getJSONObject(i).let { aTracks.add(Track(it.optBoolean("m"), it.optBoolean("s"), it.optBoolean("l"))) }; if (aTracks.isEmpty()) aTracks.add(Track()) }
+            audio.forEach { it.track = it.track.coerceIn(0, aTracks.size - 1) }
         }
     }
 }

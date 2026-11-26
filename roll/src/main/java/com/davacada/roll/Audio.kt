@@ -23,15 +23,16 @@ class AudioItem(
 ) {
     var volume = 1f
     var fadeIn = 0L; var fadeOut = 0L
+    var track = 0                     // 0 = A2, 1 = A3, …
     val endMs get() = startMs + lengthMs
 
     fun json(): JSONObject = JSONObject().put("id", id).put("u", uri).put("n", name).put("k", kind).put("s", startMs).put("in", inMs)
-        .put("len", lengthMs).put("src", sourceMs).put("v", volume.toDouble()).put("fi", fadeIn).put("fo", fadeOut)
+        .put("len", lengthMs).put("src", sourceMs).put("v", volume.toDouble()).put("fi", fadeIn).put("fo", fadeOut).put("tr", track)
 
     companion object {
         fun from(o: JSONObject) = AudioItem(o.getString("u"), o.optString("n"), o.optString("k", "music"), o.optLong("s"), o.optLong("in"),
             o.optLong("len"), o.optLong("src"), o.optString("id", UUID.randomUUID().toString())).apply {
-            volume = o.optDouble("v", 1.0).toFloat(); fadeIn = o.optLong("fi"); fadeOut = o.optLong("fo")
+            volume = o.optDouble("v", 1.0).toFloat(); fadeIn = o.optLong("fi"); fadeOut = o.optLong("fo"); track = o.optInt("tr", 0)
         }
     }
 }
@@ -126,20 +127,20 @@ object Audio {
         mr.release(); d
     } catch (e: Exception) { 0L }
 
-    fun key(p: Project) = p.audio.joinToString("|") { it.json().toString() } + "#" + p.lengthMs + p.duck
+    fun key(p: Project) = p.audio.joinToString("|") { it.json().toString() } + "#" + p.lengthMs + p.duck + p.aTracks.indices.joinToString("") { if (p.trackSound(it)) "1" else "0" }
 
     /**
      * The soundtrack for the whole edit: every music and voice item mixed, as a 48 kHz stereo WAV.
      * Music dips under voiceovers when [Project.duck] is on. Returns null when there's nothing to mix.
      */
     fun mix(ctx: Context, p: Project): File? {
-        if (p.audio.isEmpty() || p.lengthMs <= 0) return null
+        if (p.audio.none { p.trackSound(it.track) } || p.lengthMs <= 0) return null
         val out = File(File(ctx.cacheDir, "mix").apply { mkdirs() }, "mix-" + key(p).hashCode().toUInt().toString(16) + ".wav")
         if (out.exists() && out.length() > 44) return out
         File(ctx.cacheDir, "mix").listFiles()?.forEach { if (it != out) it.delete() }
         val n = (p.lengthMs * RATE / 1000).toInt()
         val acc = FloatArray(n * 2)
-        val voices = p.audio.filter { it.kind == "voice" }.map { it.startMs to it.endMs }
+        val voices = p.audio.filter { it.kind == "voice" && p.trackSound(it.track) }.map { it.startMs to it.endMs }
         fun duckAt(ms: Long): Float {
             if (!p.duck || voices.isEmpty()) return 1f
             var g = 1f
@@ -150,6 +151,7 @@ object Audio {
             return g
         }
         for (it in p.audio) {
+            if (!p.trackSound(it.track)) continue
             val len = min(it.lengthMs, p.lengthMs - it.startMs)
             if (len <= 0) continue
             val pcm = decode(ctx, it.uri, it.inMs, len)

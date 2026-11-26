@@ -115,7 +115,7 @@ class RollActivity : Activity() {
                         // a tour of the panels, for screenshots
                         val steps = if (intent?.getStringExtra("selftest") == "tour-tracks") listOf<Pair<String, () -> Unit>>(
                             "tracks" to { seekTimeline(4500); timeline?.selected = -1; refresh() },
-                            "tracks-on" to { p.vMute = true; p.tLock = true; p.aSolo = true; store.save(p); clipParams(); timeline?.invalidate() },
+                            "tracks-on" to { p.vMute = true; p.tLock = true; p.aTracks[0].solo = true; p.aTracks.add(Project.Track()); store.save(p); clipParams(); timeline?.invalidate() },
                             "add-sound" to { trackControl("a+") },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
@@ -627,7 +627,7 @@ class RollActivity : Activity() {
             else { row.addView(col, LinearLayout.LayoutParams(0, -1, 1f)); row.addView(side, LinearLayout.LayoutParams(sideW, -1)) }
             screen.addView(row, FrameLayout.LayoutParams(-1, -1))
         } else {
-            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(352)))
+            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(360)))
             screen.addView(col, FrameLayout.LayoutParams(-1, -1))
         }
         editBottom()
@@ -653,15 +653,16 @@ class RollActivity : Activity() {
         tl.onHold = { i -> clipMenu(i) }
         tl.onJoint = { i -> transitionPanel(i) }
         tl.onText = { id -> p.texts.firstOrNull { it.id == id }?.let { textEditor(it) } }
-        tl.onAudio = { id -> p.audio.firstOrNull { it.id == id }?.let { audioEditor(it) } }
+        tl.onAudio = { id -> p.audio.firstOrNull { it.id == id }?.let { audioTarget = it.track; audioEditor(it) } }
         tl.onTrack = { k -> trackControl(k) }
+        tl.onTrackHold = { i -> trackMenu(i) }
         tl.onLocked = { lane -> toast("$lane track is locked · tap its lock to change it") }
         tl.onLaneDown = { snapshotBefore = p.json().toString() }
         tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); updateFrame(); refreshSoundtrack() }
         // sideways the panel is tall: timeline and tools sit at the bottom, under your thumbs, with room above
         val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         if (sideways) col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
-        col.addView(tl, LinearLayout.LayoutParams(-1, dp(206)))
+        col.addView(tl, LinearLayout.LayoutParams(-1, dp(214)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) },
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (sideways) 8 else 18); if (sideways) bottomMargin = dp(10) })
@@ -679,7 +680,7 @@ class RollActivity : Activity() {
         val sel = timeline?.selected ?: -1
         val dim = if (sel >= 0) C.TEXT else C.FAINT
         listOf(
-            bare(R.drawable.i_split, "Split") { split() },
+            bare(R.drawable.i_split, "Blade") { split() },
             bare(R.drawable.i_speed, "Speed", dim) { if (sel >= 0) speedMenu(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_aspect, "Frame", dim) { if (sel >= 0) framePanel(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_trans, "Transition", if (sel >= 0 && sel < (project?.clips?.size ?: 0) - 1) C.TEXT else C.FAINT) {
@@ -749,7 +750,6 @@ class RollActivity : Activity() {
         val c = p.clips.getOrNull(pl.currentMediaItemIndex) ?: return
         pl.playbackParameters = PlaybackParameters(c.speed)
         pl.volume = if (!p.clipSound()) 0f else c.volume
-        bed?.volume = if (p.musicSound()) 1f else 0f
         refreshSoundtrack()
     }
 
@@ -899,6 +899,20 @@ class RollActivity : Activity() {
         val p = project ?: return
         if (p.clips.isEmpty()) return
         val t = timeline?.time() ?: 0L
+        // blade: a selected title or sound is cut at the playhead
+        val selId = timeline?.selectedText
+        p.texts.firstOrNull { it.id == selId }?.let { x ->
+            if (t - x.startMs < 200 || x.endMs - t < 200) { toast("Put the playhead inside the title"); return }
+            snapshot(); val b = TextItem.from(x.json().put("id", java.util.UUID.randomUUID().toString())); b.startMs = t; x.endMs = t
+            p.texts.add(b); store.save(p); timeline?.invalidate(); updateFrame(); toast("Title cut in two"); return
+        }
+        p.audio.firstOrNull { it.id == selId }?.let { x ->
+            if (t - x.startMs < 200 || x.endMs - t < 200) { toast("Put the playhead inside the sound"); return }
+            snapshot(); val b = AudioItem.from(x.json().put("id", java.util.UUID.randomUUID().toString()))
+            val cut = t - x.startMs
+            b.startMs = t; b.inMs = x.inMs + cut; b.lengthMs = x.lengthMs - cut; b.fadeIn = 0; x.lengthMs = cut; x.fadeOut = 0
+            p.audio.add(b); store.save(p); timeline?.invalidate(); refreshSoundtrack(); toast("Sound cut in two"); return
+        }
         val (i, off) = p.at(t)
         val c = p.clips[i]
         val cut = c.startMs + (off * c.speed).toLong()
@@ -1209,7 +1223,7 @@ class RollActivity : Activity() {
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener {
                 if (t.text.isBlank()) p.texts.remove(t)
-                editingText = null; timeline?.selectedText = null; closeClipPanel(true) } })
+                editingText = null; closeClipPanel(true) } })
         }, LinearLayout.LayoutParams(-1, dp(46)))
         openClipPanel(col)
         changed()
@@ -1243,33 +1257,72 @@ class RollActivity : Activity() {
 
     // ---------------------------------------------------------------- track controls
 
-    /** The buttons beside each track: mute, solo, lock, hide, add. */
+    /** The audio track new sounds go on (0 = A2). */
+    private var audioTarget = 0
+
+    /** [audioTarget] if it's free from [a] to [b] (and unlocked), else the first track that is, else a new track. */
+    private fun freeTrack(a: Long, b: Long): Int {
+        val p = project ?: return 0
+        fun free(i: Int) = !p.trackLocked(i) && p.audio.none { it.track == i && it.startMs < b && it.endMs > a }
+        if (audioTarget in p.aTracks.indices && free(audioTarget)) return audioTarget
+        p.aTracks.indices.firstOrNull { free(it) }?.let { return it }
+        p.aTracks.add(Project.Track()); return p.aTracks.size - 1
+    }
+
+    /** The buttons beside each track: hide, lock, mute, solo, add. */
     private fun trackControl(k: String) {
         val p = project ?: return
         fun say(m: String) { toast(m) }
-        when (k) {
-            "vM" -> { p.vMute = !p.vMute; say(if (p.vMute) "Clips' sound muted" else "Clips' sound on") }
-            "vS" -> { p.vSolo = !p.vSolo; say(if (p.vSolo) "Only the clips' sound" else "Solo off") }
-            "vH" -> { p.vHide = !p.vHide; say(if (p.vHide) "Video hidden: the picture is black (also in the export)" else "Video showing") }
-            "vL" -> { p.vLock = !p.vLock; say(if (p.vLock) "Video locked: no trimming, moving or clip changes" else "Video unlocked") }
-            "v+" -> { if (p.vLock) { say("Video track is locked"); return }; addingTo = p; pickVideos(); return }
-            "tH" -> { p.tHide = !p.tHide; textKey = ""; say(if (p.tHide) "Titles and captions hidden (also in the export)" else "Titles and captions showing") }
-            "tL" -> { p.tLock = !p.tLock; say(if (p.tLock) "Titles locked" else "Titles unlocked") }
-            "t+" -> { if (p.tLock) { say("Titles track is locked"); return }; addText(); return }
-            "aM" -> { p.aMute = !p.aMute; say(if (p.aMute) "Music and voiceovers muted" else "Music and voiceovers on") }
-            "aS" -> { p.aSolo = !p.aSolo; say(if (p.aSolo) "Only the music and voiceovers" else "Solo off") }
-            "aL" -> { p.aLock = !p.aLock; say(if (p.aLock) "Audio locked" else "Audio unlocked") }
-            "a+" -> {
-                if (p.aLock) { say("Audio track is locked"); return }
+        when {
+            k == "vH" -> { p.vHide = !p.vHide; say(if (p.vHide) "V1 hidden: the picture is black (also in the export)" else "V1 showing") }
+            k == "vL" -> { p.vLock = !p.vLock; say(if (p.vLock) "V1 locked: no trimming or clip changes" else "V1 unlocked") }
+            k == "vM" -> { p.vMute = !p.vMute; say(if (p.vMute) "A1 (the clips' sound) muted" else "A1 on") }
+            k == "vS" -> { p.vSolo = !p.vSolo; say(if (p.vSolo) "A1 solo" else "Solo off") }
+            k == "v+" -> { if (p.vLock) { say("V1 is locked"); return }; addingTo = p; pickVideos(); return }
+            k == "tH" -> { p.tHide = !p.tHide; textKey = ""; say(if (p.tHide) "Titles and captions hidden (also in the export)" else "Titles and captions showing") }
+            k == "tL" -> { p.tLock = !p.tLock; say(if (p.tLock) "T1 locked" else "T1 unlocked") }
+            k == "t+" -> { if (p.tLock) { say("T1 is locked"); return }; addText(); return }
+            k == "a+" -> {
+                // a new audio track under the others, and something to put on it
+                snapshot(); p.aTracks.add(Project.Track()); audioTarget = p.aTracks.size - 1
+                store.save(p); timeline?.invalidate()
                 val col = vcol()
-                col.addView(headline("Add sound", "Goes in at ${fmt(timeline?.time() ?: 0, true)}"))
+                col.addView(headline("A${p.aTracks.size + 1} added", "Put something on it at ${fmt(timeline?.time() ?: 0, true)}"))
                 col.addView(action(R.drawable.i_music, "Music or a sound file", "From your phone") { closeSheet(); pickAudio() })
                 col.addView(action(R.drawable.i_mic, "Record a voiceover", "Plays the edit while you speak") { closeSheet(); recordVoice() })
                 sheet(col); return
             }
+            k.startsWith("a") -> {
+                val i = k.substring(1, k.length - 1).toIntOrNull() ?: return
+                val t = p.aTracks.getOrNull(i) ?: return
+                val n = "A${i + 2}"
+                when (k.last()) {
+                    'M' -> { t.mute = !t.mute; say(if (t.mute) "$n muted" else "$n on") }
+                    'S' -> { t.solo = !t.solo; say(if (t.solo) "$n solo" else "Solo off") }
+                    'L' -> { t.lock = !t.lock; say(if (t.lock) "$n locked" else "$n unlocked") }
+                }
+                audioTarget = i
+            }
         }
-        store.save(p); clipParams(); updateFrame(); timeline?.invalidate()
+        store.save(p); clipParams(); updateFrame(); refreshSoundtrack(); timeline?.invalidate()
         glView.hideVideo = p.vHide
+    }
+
+    /** Held an audio track's name: put new sounds there, or delete the track. */
+    private fun trackMenu(i: Int) {
+        val p = project ?: return
+        val n = "A${i + 2}"; val count = p.audio.count { it.track == i }
+        val col = vcol()
+        col.addView(headline(n, if (count == 0) "Empty" else "$count sound${if (count == 1) "" else "s"}"))
+        col.addView(action(R.drawable.i_music, "New sounds go here", "Music and voiceovers you add go on $n") { audioTarget = i; closeSheet(); toast("New sounds go on $n") })
+        if (p.aTracks.size > 1) col.addView(action(R.drawable.i_trash, "Delete $n", if (count == 0) "The track goes" else "With its $count sound${if (count == 1) "" else "s"}") {
+            snapshot()
+            p.audio.removeAll { it.track == i }
+            p.audio.forEach { if (it.track > i) it.track-- }
+            p.aTracks.removeAt(i); audioTarget = 0
+            store.save(p); closeSheet(); refreshSoundtrack(); timeline?.invalidate()
+        })
+        sheet(col)
     }
 
     // ---------------------------------------------------------------- music and voiceovers
@@ -1291,7 +1344,6 @@ class RollActivity : Activity() {
                 if (f == null) { bed?.release(); bed = null; return@post }
                 val b = bed ?: ExoPlayer.Builder(this).build().also { bed = it }
                 b.setMediaItem(MediaItem.fromUri(Uri.fromFile(f))); b.prepare()
-                b.volume = if (project?.musicSound() == true) 1f else 0f
                 b.seekTo(timelineTime())
                 if (player?.isPlaying == true) b.play()
             }
@@ -1355,6 +1407,7 @@ class RollActivity : Activity() {
                 snapshot()
                 val at = (timeline?.time() ?: 0L).let { if (it > p.lengthMs - 1000) 0L else it }
                 val a = AudioItem(u.toString(), name, "music", at, 0, minOf(len, maxOf(1000, p.lengthMs - at)), len).apply { fadeOut = minOf(1500, lengthMs / 4) }
+                a.track = freeTrack(at, at + a.lengthMs)
                 p.audio.add(a); store.save(p); refreshSoundtrack(); timeline?.invalidate()
                 audioEditor(a)
             }
@@ -1407,6 +1460,7 @@ class RollActivity : Activity() {
                     snapshot()
                     val n = p.audio.count { it.kind == "voice" } + 1
                     val a = AudioItem(Uri.fromFile(file).toString(), "Voiceover $n", "voice", start, 0, minOf(ms, maxOf(500, p.lengthMs - start)), ms)
+                    a.track = freeTrack(start, start + a.lengthMs)
                     p.audio.add(a); store.save(p); refreshSoundtrack(); timeline?.invalidate(); audioPanel()
                 }
             }
@@ -1446,7 +1500,7 @@ class RollActivity : Activity() {
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(bare(R.drawable.i_trash, null, 0xFFFF6B5E.toInt(), 18) { p.audio.remove(a); timeline?.selectedText = null; closeClipPanel(true) })
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { timeline?.selectedText = null; closeClipPanel(true) } })
+            addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { closeClipPanel(true) } })
         }, LinearLayout.LayoutParams(-1, dp(46)))
         openClipPanel(col)
     }
