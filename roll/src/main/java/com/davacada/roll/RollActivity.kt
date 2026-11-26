@@ -654,7 +654,11 @@ class RollActivity : Activity() {
         tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); updateFrame(); refreshSoundtrack() }
         col.addView(tl, LinearLayout.LayoutParams(-1, dp(178)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+        // sideways the panel is tall: the tools sit at the bottom, under your thumb
+        val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        if (sideways) col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) },
+            LinearLayout.LayoutParams(-1, -2).apply { if (sideways) bottomMargin = dp(10) else topMargin = dp(18) })
         b.addView(col, FrameLayout.LayoutParams(-1, -1))
         editBottomTools()
         // remember the edit before a trim starts, so it can be undone
