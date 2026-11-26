@@ -1963,12 +1963,15 @@ class RollActivity : Activity() {
         store.save(p)
         prefs().edit().putString("exFormat", exFormat).putInt("exShort", exShort).putInt("exFps", exFps).putInt("exQuality", exQuality)
             .putInt("gifW", gifW).putInt("gifFps", gifFps).putInt("gifSecs", gifSecs).putString("gifLoop", gifLoop).putBoolean("stSquare", stSquare).putInt("stFps", stFps).apply()
+        if (exporting != null && exDissolve == null) return      // one export at a time
         if (exDissolve == null && p.clips.any { it.trans == "dissolve" }) {
+            var gone = false
+            exporting = Render.Job { gone = true }
             renderExport("Getting ready…", 0)
             val copy = Project.from(p.json())
             work {
                 val m = Render.dissolveFrames(this, copy.clips)
-                main.post { exDissolve = m; startExport() }
+                main.post { if (gone) return@post; exporting = null; exDissolve = m; startExport() }
             }
             return
         }
