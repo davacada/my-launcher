@@ -18,7 +18,7 @@ sleep 8
 adb logcat -d -s ROLLTEST:I
 adb exec-out screencap -p > share0.png
 adb shell uiautomator dump /sdcard/ui.xml >/dev/null; adb pull /sdcard/ui.xml ui.xml >/dev/null
-B=$(grep -o 'text="New project"[^>]*bounds="[^"]*"' ui.xml | grep -o 'bounds="[^"]*"' | head -1)
+B=$(grep -o 'text="New project"[^>]*bounds="[^"]*"' ui.xml | grep -o 'bounds="[^"]*"' | tail -1)
 echo "button $B"
 read X1 Y1 X2 Y2 <<< $(echo $B | grep -o '[0-9]\+' | tr '\n' ' ')
 [ -n "$X1" ] && adb shell input tap $(( (X1+X2)/2 )) $(( (Y1+Y2)/2 ))
