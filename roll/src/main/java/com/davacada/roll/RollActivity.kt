@@ -652,13 +652,13 @@ class RollActivity : Activity() {
         tl.onAudio = { id -> p.audio.firstOrNull { it.id == id }?.let { audioEditor(it) } }
         tl.onLaneDown = { snapshotBefore = p.json().toString() }
         tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); updateFrame(); refreshSoundtrack() }
-        col.addView(tl, LinearLayout.LayoutParams(-1, dp(178)))
-        toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        // sideways the panel is tall: the tools sit at the bottom, under your thumb
+        // sideways the panel is tall: timeline and tools sit at the bottom, under your thumbs, with room above
         val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         if (sideways) col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(tl, LinearLayout.LayoutParams(-1, dp(178)))
+        toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) },
-            LinearLayout.LayoutParams(-1, -2).apply { if (sideways) bottomMargin = dp(10) else topMargin = dp(18) })
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (sideways) 8 else 18); if (sideways) bottomMargin = dp(10) })
         b.addView(col, FrameLayout.LayoutParams(-1, -1))
         editBottomTools()
         // remember the edit before a trim starts, so it can be undone
