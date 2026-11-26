@@ -85,6 +85,7 @@ class RollActivity : Activity() {
      */
     private fun selfTest() {
         fun log(m: String) = android.util.Log.i("ROLLTEST", m)
+        if (intent?.getStringExtra("selftest") == "tour-land") requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         work {
             try {
                 val dir = File(filesDir, "selftest")
