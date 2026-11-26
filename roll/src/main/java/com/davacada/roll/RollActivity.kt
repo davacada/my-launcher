@@ -76,6 +76,71 @@ class RollActivity : Activity() {
         setContentView(root)
         home()
         if (savedInstanceState == null) intent?.getStringExtra("selftest")?.let { selfTest() }
+        if (savedInstanceState == null) intent?.let { receiveShare(it) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveShare(intent)
+    }
+
+    // ================================================================ shared from other apps
+
+    /** Videos, photos and sounds shared to Roll from another app (gallery, Files, WhatsApp, …). */
+    @Suppress("DEPRECATION")
+    private fun receiveShare(i: Intent) {
+        if (i.action != Intent.ACTION_SEND && i.action != Intent.ACTION_SEND_MULTIPLE) return
+        val uris = ArrayList<Uri>()
+        if (i.action == Intent.ACTION_SEND) (i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris.add(it) }
+        else i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+        if (uris.isEmpty()) i.clipData?.let { cd -> for (k in 0 until cd.itemCount) cd.getItemAt(k).uri?.let { uris.add(it) } }
+        i.action = Intent.ACTION_MAIN   // handled: don't take it again after a rotation
+        if (uris.isEmpty()) { toast("Nothing Roll can use was shared"); return }
+        toast("Getting ${uris.size} file${if (uris.size == 1) "" else "s"}…")
+        // the other app only lends the files for a moment, so Roll keeps its own copy
+        work {
+            val dir = File(filesDir, "shared").apply { mkdirs() }
+            val got = uris.mapNotNull { u ->
+                try {
+                    val type = contentResolver.getType(u) ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(u.toString().substringAfterLast('.', "").lowercase()) ?: ""
+                    val name = contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                    val ext = name?.substringAfterLast('.', "")?.takeIf { it.length in 1..5 } ?: android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(type) ?: "bin"
+                    val f = File(dir, java.util.UUID.randomUUID().toString() + "." + ext)
+                    contentResolver.openInputStream(u)!!.use { inp -> f.outputStream().use { inp.copyTo(it) } }
+                    Shared(Uri.fromFile(f), type, name?.substringBeforeLast('.') ?: "Sound")
+                } catch (e: Exception) { null }
+            }
+            main.post { if (got.isEmpty()) toast("Couldn't read what was shared") else shareSheet(got) }
+        }
+    }
+
+    private class Shared(val uri: Uri, val type: String, val name: String) { val audio get() = type.startsWith("audio/") }
+
+    /** Where shared things go: a new project, the one that's open, or a recent one. */
+    private fun shareSheet(items: List<Shared>) {
+        val pics = items.filter { !it.audio }; val sounds = items.filter { it.audio }
+        val what = listOfNotNull(
+            pics.count { it.type.startsWith("video/") }.takeIf { it > 0 }?.let { "$it video${if (it == 1) "" else "s"}" },
+            pics.count { !it.type.startsWith("video/") }.takeIf { it > 0 }?.let { "$it photo${if (it == 1) "" else "s"}" },
+            sounds.size.takeIf { it > 0 }?.let { "$it sound${if (it == 1) "" else "s"}" }).joinToString(" · ")
+        fun into(p: Project, fresh: Boolean) {
+            closeSheet()
+            if (project !== p) { if (fresh) store.save(p); if (pics.isEmpty()) open(p) }
+            if (pics.isNotEmpty()) { addingTo = p; importClips(pics.map { it.uri }) { sounds.forEach { s -> addMusicNamed(s.uri, s.name) } } }
+            else sounds.forEach { s -> addMusicNamed(s.uri, s.name) }
+        }
+        val col = vcol()
+        col.addView(headline("Add to Roll", what))
+        if (pics.isNotEmpty()) col.addView(action(R.drawable.i_add, "New project", "Starts with what you shared") {
+            into(Project(name = "Roll " + SimpleDateFormat("d MMM", Locale.getDefault()).format(Date())), true) })
+        val open = project
+        if (open != null) col.addView(action(R.drawable.i_film, "Add to “${open.name}”", if (pics.isEmpty()) "On a free audio track at the playhead" else "After the selected clip") { into(open, false) })
+        store.all().filter { it.id != open?.id && it.clips.isNotEmpty() }.take(if (open != null) 2 else 3).forEach { p ->
+            col.addView(action(R.drawable.i_reel, "Add to “${p.name}”", "${fmt(p.lengthMs)} · ${p.clips.size} clip${if (p.clips.size == 1) "" else "s"} · at the end") { into(p, false) })
+        }
+        if (pics.isEmpty() && open == null && store.all().none { it.clips.isNotEmpty() }) { toast("Sounds need a project with clips: start one first"); return }
+        sheet(col)
     }
 
     /**
@@ -484,6 +549,11 @@ class RollActivity : Activity() {
         if (requestCode == 3) { data.data?.let { addMusic(it) }; return }
         val uris = ArrayList<Uri>()
         data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) } ?: data.data?.let { uris.add(it) }
+        importClips(uris)
+    }
+
+    /** Reads picked or shared videos and photos and puts them into [addingTo]. */
+    private fun importClips(uris: List<Uri>, then: (() -> Unit)? = null) {
         val p = addingTo ?: return
         addingTo = null
         toast("Reading ${uris.size} clip${if (uris.size == 1) "" else "s"}…")
@@ -510,6 +580,7 @@ class RollActivity : Activity() {
                 if (project === p && addingOverlay) { addingOverlay = false; placeOverlays(clips) }
                 else if (project === p) { snapshot(); val at = (timeline?.selected ?: -1).let { if (it >= 0) it + 1 else p.clips.size }; p.clips.addAll(at, clips); store.save(p); reloadPlayer(keepTime = true); refresh() }
                 else { p.clips.addAll(clips); store.save(p); open(p) }
+                then?.invoke()
             }
         }
     }
@@ -1571,9 +1642,13 @@ class RollActivity : Activity() {
     }
 
     private fun addMusic(u: Uri) {
-        val p = project ?: return
         try { contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) {}
         val name = (contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "Music").substringBeforeLast('.')
+        addMusicNamed(u, name)
+    }
+
+    private fun addMusicNamed(u: Uri, name: String) {
+        val p = project ?: return
         work {
             val len = Audio.lengthOf(this, u.toString())
             main.post {
