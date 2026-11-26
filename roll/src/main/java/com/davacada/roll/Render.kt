@@ -139,7 +139,7 @@ object Render {
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
             // titles and captions go on top of the grade
-            if (p.texts.isNotEmpty()) video.add(androidx.media3.effect.OverlayEffect(listOf(TextOverlay(ctx, p.texts.map { TextItem.from(it.json()) }, fromMs + clips.take(idx).sumOf { it.lengthMs }))))
+            if (p.texts.isNotEmpty() && !p.tHide) video.add(androidx.media3.effect.OverlayEffect(listOf(TextOverlay(ctx, p.texts.map { TextItem.from(it.json()) }, fromMs + clips.take(idx).sumOf { it.lengthMs }))))
             val b = EditedMediaItem.Builder(mi).setEffects(Effects(audio, video)).setRemoveAudio(!withSound)
             if (level == 0 && c.sourceMs > 0) b.setDurationUs(c.sourceMs * 1000)
             b.build()

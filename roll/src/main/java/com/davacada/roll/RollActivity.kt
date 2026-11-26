@@ -623,7 +623,7 @@ class RollActivity : Activity() {
             else { row.addView(col, LinearLayout.LayoutParams(0, -1, 1f)); row.addView(side, LinearLayout.LayoutParams(sideW, -1)) }
             screen.addView(row, FrameLayout.LayoutParams(-1, -1))
         } else {
-            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(326)))
+            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(334)))
             screen.addView(col, FrameLayout.LayoutParams(-1, -1))
         }
         editBottom()
@@ -650,12 +650,14 @@ class RollActivity : Activity() {
         tl.onJoint = { i -> transitionPanel(i) }
         tl.onText = { id -> p.texts.firstOrNull { it.id == id }?.let { textEditor(it) } }
         tl.onAudio = { id -> p.audio.firstOrNull { it.id == id }?.let { audioEditor(it) } }
+        tl.onTrack = { k -> trackControl(k) }
+        tl.onLocked = { lane -> toast("$lane track is locked · tap its lock to change it") }
         tl.onLaneDown = { snapshotBefore = p.json().toString() }
         tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); updateFrame(); refreshSoundtrack() }
         // sideways the panel is tall: timeline and tools sit at the bottom, under your thumbs, with room above
         val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         if (sideways) col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
-        col.addView(tl, LinearLayout.LayoutParams(-1, dp(178)))
+        col.addView(tl, LinearLayout.LayoutParams(-1, dp(186)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) },
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (sideways) 8 else 18); if (sideways) bottomMargin = dp(10) })
@@ -742,7 +744,8 @@ class RollActivity : Activity() {
         val p = project ?: return; val pl = player ?: return
         val c = p.clips.getOrNull(pl.currentMediaItemIndex) ?: return
         pl.playbackParameters = PlaybackParameters(c.speed)
-        pl.volume = if (p.mute) 0f else c.volume
+        pl.volume = if (!p.clipSound()) 0f else c.volume
+        bed?.volume = if (p.musicSound()) 1f else 0f
         refreshSoundtrack()
     }
 
@@ -833,7 +836,7 @@ class RollActivity : Activity() {
         val p = project ?: return
         val w = glView.width; val h = glView.height
         if (w <= 0 || h <= 0) return
-        if (p.texts.isEmpty()) { if (textKey != "") { textKey = ""; glView.textBitmap = null }; return }
+        if (p.texts.isEmpty() || p.tHide) { if (textKey != "") { textKey = ""; glView.textBitmap = null }; return }
         val key = TextDraw.key(p.texts, t, w, h) + (editingText?.id ?: "")
         if (key == textKey) return
         textKey = key
@@ -1234,6 +1237,35 @@ class RollActivity : Activity() {
         }
     }
 
+    // ---------------------------------------------------------------- track controls
+
+    /** The buttons beside each track: mute, solo, lock, hide, add. */
+    private fun trackControl(k: String) {
+        val p = project ?: return
+        fun say(m: String) { toast(m) }
+        when (k) {
+            "vM" -> { p.vMute = !p.vMute; say(if (p.vMute) "Clips' sound muted" else "Clips' sound on") }
+            "vS" -> { p.vSolo = !p.vSolo; say(if (p.vSolo) "Only the clips' sound" else "Solo off") }
+            "vL" -> { p.vLock = !p.vLock; say(if (p.vLock) "Video locked: no trimming, moving or clip changes" else "Video unlocked") }
+            "v+" -> { if (p.vLock) { say("Video track is locked"); return }; addingTo = p; pickVideos(); return }
+            "tH" -> { p.tHide = !p.tHide; textKey = ""; say(if (p.tHide) "Titles and captions hidden (also in the export)" else "Titles and captions showing") }
+            "tL" -> { p.tLock = !p.tLock; say(if (p.tLock) "Titles locked" else "Titles unlocked") }
+            "t+" -> { if (p.tLock) { say("Titles track is locked"); return }; addText(); return }
+            "aM" -> { p.aMute = !p.aMute; say(if (p.aMute) "Music and voiceovers muted" else "Music and voiceovers on") }
+            "aS" -> { p.aSolo = !p.aSolo; say(if (p.aSolo) "Only the music and voiceovers" else "Solo off") }
+            "aL" -> { p.aLock = !p.aLock; say(if (p.aLock) "Audio locked" else "Audio unlocked") }
+            "a+" -> {
+                if (p.aLock) { say("Audio track is locked"); return }
+                val col = vcol()
+                col.addView(headline("Add sound", "Goes in at ${fmt(timeline?.time() ?: 0, true)}"))
+                col.addView(action(R.drawable.i_music, "Music or a sound file", "From your phone") { closeSheet(); pickAudio() })
+                col.addView(action(R.drawable.i_mic, "Record a voiceover", "Plays the edit while you speak") { closeSheet(); recordVoice() })
+                sheet(col); return
+            }
+        }
+        store.save(p); clipParams(); updateFrame(); timeline?.invalidate()
+    }
+
     // ---------------------------------------------------------------- music and voiceovers
 
     /** Plays the mixed music + voiceovers alongside the clips. */
@@ -1253,6 +1285,7 @@ class RollActivity : Activity() {
                 if (f == null) { bed?.release(); bed = null; return@post }
                 val b = bed ?: ExoPlayer.Builder(this).build().also { bed = it }
                 b.setMediaItem(MediaItem.fromUri(Uri.fromFile(f))); b.prepare()
+                b.volume = if (project?.musicSound() == true) 1f else 0f
                 b.seekTo(timelineTime())
                 if (player?.isPlaying == true) b.play()
             }

@@ -122,6 +122,14 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     val texts = mutableListOf<TextItem>()
     val audio = mutableListOf<AudioItem>()
     var duck = true                // music dips under voiceovers
+    // track controls: video (clips), titles, audio (music + voice)
+    var vMute = false; var vSolo = false; var vLock = false
+    var tHide = false; var tLock = false
+    var aMute = false; var aSolo = false; var aLock = false
+    /** Whether the clips' own sound is heard (mute / solo). */
+    fun clipSound() = !mute && !vMute && !(aSolo && !vSolo)
+    /** Whether music and voiceovers are heard. */
+    fun musicSound() = !mute && !aMute && !(vSolo && !aSolo)
     var mute = false
 
     val lengthMs get() = clips.sumOf { it.lengthMs }
@@ -140,11 +148,13 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
         .put("clips", JSONArray().apply { clips.forEach { put(it.json()) } }).put("grade", grade.json()).put("aspect", aspect).put("mute", mute)
         .put("texts", JSONArray().apply { texts.forEach { put(it.json()) } })
         .put("audio", JSONArray().apply { audio.forEach { put(it.json()) } }).put("duck", duck)
+        .put("tracks", JSONObject().put("vm", vMute).put("vs", vSolo).put("vl", vLock).put("th", tHide).put("tl", tLock).put("am", aMute).put("as", aSolo).put("al", aLock))
 
     /** Takes everything from [q] (undo / redo). */
     fun copyFrom(q: Project) {
         clips.clear(); clips.addAll(q.clips); grade = q.grade; aspect = q.aspect; mute = q.mute; name = q.name
         texts.clear(); texts.addAll(q.texts); audio.clear(); audio.addAll(q.audio); duck = q.duck
+        vMute = q.vMute; vSolo = q.vSolo; vLock = q.vLock; tHide = q.tHide; tLock = q.tLock; aMute = q.aMute; aSolo = q.aSolo; aLock = q.aLock
     }
 
     companion object {
@@ -155,6 +165,8 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
             o.optJSONArray("texts")?.let { a -> for (i in 0 until a.length()) texts.add(TextItem.from(a.getJSONObject(i))) }
             o.optJSONArray("audio")?.let { a -> for (i in 0 until a.length()) audio.add(AudioItem.from(a.getJSONObject(i))) }
             duck = o.optBoolean("duck", true)
+            o.optJSONObject("tracks")?.let { t -> vMute = t.optBoolean("vm"); vSolo = t.optBoolean("vs"); vLock = t.optBoolean("vl"); tHide = t.optBoolean("th"); tLock = t.optBoolean("tl")
+                aMute = t.optBoolean("am"); aSolo = t.optBoolean("as"); aLock = t.optBoolean("al") }
         }
     }
 }

@@ -46,6 +46,10 @@ class Timeline(ctx: Context) : View(ctx) {
         set(v) { field = v; invalidate() }
     /** Tapped a music / voice bar (its id). */
     var onAudio: ((String) -> Unit)? = null
+    /** A track control: vM vS vL v+ · tH tL t+ · aM aS aL a+ */
+    var onTrack: ((String) -> Unit)? = null
+    /** Tried to change something on a locked track. */
+    var onLocked: ((String) -> Unit)? = null
 
     private val d = resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -57,7 +61,9 @@ class Timeline(ctx: Context) : View(ctx) {
     private val clipH get() = dp(64f)
     private val handleW get() = dp(12f)
     private val textTop get() = clipTop + clipH + dp(10f)
-    private val laneH get() = dp(20f)
+    private val laneH get() = dp(24f)
+    /** The track controls on the left (mute, solo, lock, add …). */
+    private val headW get() = dp(98f)
     private val audioTop get() = textTop + laneH + dp(8f)
 
     // the timeline has its own colour: deep steel blue, so the tracks stand apart from the black app
@@ -91,7 +97,51 @@ class Timeline(ctx: Context) : View(ctx) {
     fun setTime(t: Long) { timeMs = t; invalidate() }
     fun time() = timeMs
 
-    private val edgeX get() = width / 2f - timeMs * pxPerMs  // x where the edit starts
+    /** The playhead: in the middle of the part beside the track controls. */
+    private val midX get() = headW + (width - headW) / 2f
+    private val edgeX get() = midX - timeMs * pxPerMs  // x where the edit starts
+
+    private val headBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF0C1117.toInt() }
+    private val headEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x22FFFFFF }
+    private val btnBg = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val btnText = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.BOLD) }
+    private val icons = HashMap<Int, android.graphics.drawable.Drawable>()
+
+    /** The buttons of each track: key, label (or icon), on. */
+    private fun buttons(p: Project): List<Triple<RectF, String, Boolean>> {
+        val out = ArrayList<Triple<RectF, String, Boolean>>()
+        val cw = dp(22f); val gap = dp(1.5f)
+        fun row(y: Float, h: Float, keys: List<Pair<String, Boolean>>) {
+            keys.forEachIndexed { i, (k, on) -> val x = dp(4f) + i * (cw + gap); out.add(Triple(RectF(x, y, x + cw, y + h), k, on)) }
+        }
+        val bh = dp(24f)
+        row(clipTop + clipH / 2 - bh - dp(2f), bh, listOf("vM" to p.vMute, "vS" to p.vSolo))
+        row(clipTop + clipH / 2 + dp(2f), bh, listOf("vL" to p.vLock, "v+" to false))
+        row(textTop, laneH, listOf("tH" to p.tHide, "tL" to p.tLock, "t+" to false))
+        row(audioTop, laneH, listOf("aM" to p.aMute, "aS" to p.aSolo, "aL" to p.aLock, "a+" to false))
+        return out
+    }
+
+    private fun icon(res: Int) = icons.getOrPut(res) { context.getDrawable(res)!!.mutate() }
+
+    private fun drawHeaders(c: Canvas, p: Project) {
+        c.drawRect(0f, 0f, headW, height.toFloat(), headBg)
+        c.drawRect(headW - dp(1f), 0f, headW, height.toFloat(), headEdge)
+        for ((r, k, on) in buttons(p)) {
+            val active = when (k[1]) { 'M' -> 0xFFFF6B5E.toInt(); 'S' -> 0xFFFFD24A.toInt(); 'L' -> 0xFFEFE8DF.toInt(); 'H' -> 0xFFB794FF.toInt(); else -> 0xFFF2A541.toInt() }
+            btnBg.color = if (on) active else 0xFF1A232C.toInt()
+            c.drawRoundRect(r, dp(5f), dp(5f), btnBg)
+            val fg = if (on) 0xFF0A0A0A.toInt() else 0xFFB8C2CC.toInt()
+            when (k[1]) {
+                'M', 'S' -> { btnText.color = fg; btnText.textSize = dp(11.5f); c.drawText(k[1].toString(), r.centerX(), r.centerY() + dp(4f), btnText) }
+                else -> {
+                    val d = icon(when (k[1]) { 'L' -> R.drawable.i_lock; 'H' -> if (on) R.drawable.i_eye_off else R.drawable.i_eye; else -> R.drawable.i_add })
+                    val s = dp(14f).toInt(); val cx = r.centerX().toInt(); val cy = r.centerY().toInt()
+                    d.setBounds(cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2); d.setTint(if (k[1] == '+') 0xFFF2A541.toInt() else fg); d.draw(c)
+                }
+            }
+        }
+    }
 
     override fun onDraw(c: Canvas) {
         val p = project ?: return
@@ -164,7 +214,7 @@ class Timeline(ctx: Context) : View(ctx) {
         }
         // titles and captions lane
         c.drawRoundRect(dp(6f), textTop - dp(2f), width - dp(6f), textTop + laneH + dp(2f), dp(7f), dp(7f), lane)
-        if (p.texts.isEmpty()) c.drawText("T  titles and captions show here", dp(14f), textTop + laneH * 0.68f, laneHint)
+        if (p.texts.isEmpty()) c.drawText("T  titles and captions show here", headW + dp(10f), textTop + laneH * 0.68f, laneHint)
         for (it in p.texts) {
             val a = x0 + it.startMs * pxPerMs; val b = x0 + it.endMs * pxPerMs
             if (b < 0 || a > width) continue
@@ -178,7 +228,7 @@ class Timeline(ctx: Context) : View(ctx) {
         }
         // music and voiceover lane
         c.drawRoundRect(dp(6f), audioTop - dp(2f), width - dp(6f), audioTop + laneH + dp(2f), dp(7f), dp(7f), lane)
-        if (p.audio.isEmpty()) c.drawText("♪  music and voiceovers show here", dp(14f), audioTop + laneH * 0.68f, laneHint)
+        if (p.audio.isEmpty()) c.drawText("♪  music and voiceovers show here", headW + dp(10f), audioTop + laneH * 0.68f, laneHint)
         for (it in p.audio) {
             val a = x0 + it.startMs * pxPerMs; val b = x0 + it.endMs * pxPerMs
             if (b < 0 || a > width) continue
@@ -190,14 +240,19 @@ class Timeline(ctx: Context) : View(ctx) {
             c.drawText((if (it.kind == "voice") "● " else "♪ ") + it.name, r.left + dp(6f), r.top + laneH * 0.7f, barText)
             c.restore()
         }
+        // dim what you can't hear or see
+        if (!p.clipSound()) { bar.color = 0x66000000; c.drawRect(0f, clipTop - dp(4f), width.toFloat(), clipTop + clipH + dp(4f), bar) }
+        if (p.tHide) { bar.color = 0x99000000.toInt(); c.drawRect(0f, textTop - dp(2f), width.toFloat(), textTop + laneH + dp(2f), bar) }
+        if (!p.musicSound()) { bar.color = 0x99000000.toInt(); c.drawRect(0f, audioTop - dp(2f), width.toFloat(), audioTop + laneH + dp(2f), bar) }
         // add button after the last clip
         val ax = x0 + p.lengthMs * pxPerMs + dp(28f); val ay = clipTop + clipH / 2
         c.drawCircle(ax, ay, dp(18f), plus)
         c.drawLine(ax - dp(7f), ay, ax + dp(7f), ay, plusLine); c.drawLine(ax, ay - dp(7f), ax, ay + dp(7f), plusLine)
         // playhead
-        val cx = width / 2f
+        val cx = midX
         c.drawRect(cx - dp(1f), dp(20f), cx + dp(1f), clipTop + clipH + dp(10f), head)
         c.drawRoundRect(cx - dp(7f), dp(16f), cx + dp(7f), dp(24f), dp(3f), dp(3f), head)
+        drawHeaders(c, p)
     }
 
     private fun trim(f: Float) = if (f == f.toInt().toFloat()) f.toInt().toString() else f.toString()
@@ -242,18 +297,18 @@ class Timeline(ctx: Context) : View(ctx) {
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             val p = project ?: return true
             val ax = edgeX + p.lengthMs * pxPerMs + dp(28f)
-            if (abs(e.x - ax) < dp(26f) && abs(e.y - (clipTop + clipH / 2)) < dp(30f)) { onAdd?.invoke(); return true }
+            if (abs(e.x - ax) < dp(26f) && abs(e.y - (clipTop + clipH / 2)) < dp(30f)) { if (p.vLock) onLocked?.invoke("Video") else onAdd?.invoke(); return true }
             // a title / caption bar
             if (e.y in (textTop - dp(4f))..(textTop + laneH + dp(4f))) {
                 val t = ((e.x - edgeX) / pxPerMs).toLong()
-                p.texts.lastOrNull { t in it.startMs..it.endMs }?.let { onText?.invoke(it.id); return true }
+                p.texts.lastOrNull { t in it.startMs..it.endMs }?.let { if (p.tLock) onLocked?.invoke("Titles") else onText?.invoke(it.id); return true }
             }
             if (e.y in (audioTop - dp(4f))..(audioTop + laneH + dp(4f))) {
                 val t = ((e.x - edgeX) / pxPerMs).toLong()
-                p.audio.lastOrNull { t in it.startMs..it.endMs }?.let { onAudio?.invoke(it.id); return true }
+                p.audio.lastOrNull { t in it.startMs..it.endMs }?.let { if (p.aLock) onLocked?.invoke("Audio") else onAudio?.invoke(it.id); return true }
             }
             // a joint between clips
-            if (abs(e.y - (clipTop + clipH / 2)) < dp(22f)) {
+            if (!p.vLock && abs(e.y - (clipTop + clipH / 2)) < dp(22f)) {
                 var jt = 0L
                 for (i in 0 until p.clips.size - 1) {
                     jt += p.clips[i].lengthMs
@@ -264,7 +319,8 @@ class Timeline(ctx: Context) : View(ctx) {
             onSelect?.invoke(if (i == selected) -1 else i); return true
         }
         override fun onLongPress(e: MotionEvent) {
-            val i = clipAt(e.x, e.y); if (i >= 0) { performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); onHold?.invoke(i) }
+            val i = clipAt(e.x, e.y)
+            if (i >= 0) { if (project?.vLock == true) { onLocked?.invoke("Video"); return }; performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); onHold?.invoke(i) }
         }
     })
 
@@ -295,6 +351,15 @@ class Timeline(ctx: Context) : View(ctx) {
         val p = project ?: return false
         pinch.onTouchEvent(e)
         if (pinch.isInProgress) return true
+        // the track controls
+        if (e.actionMasked == MotionEvent.ACTION_DOWN && e.x < headW) {
+            headTouch = true
+            buttons(p).firstOrNull { (r, _, _) -> r.contains(e.x, e.y) || RectF(r).apply { inset(-dp(3f), -dp(5f)) }.contains(e.x, e.y) }?.let { (_, k, _) ->
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); onTrack?.invoke(k); invalidate()
+            }
+            return true
+        }
+        if (headTouch) { if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) headTouch = false; return true }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 trimming = 0; moving = null
@@ -302,9 +367,9 @@ class Timeline(ctx: Context) : View(ctx) {
                 val t0 = ((e.x - edgeX) / pxPerMs).toLong()
                 val selT = p.texts.firstOrNull { it.id == selectedText }
                 val selA = p.audio.firstOrNull { it.id == selectedText }
-                if (selT != null && e.y in (textTop - dp(4f))..(textTop + laneH + dp(4f)) && t0 in selT.startMs..selT.endMs) { moving = selT; moveOrig = selT.startMs; downX = e.x; onLaneDown?.invoke(); return true }
-                if (selA != null && e.y in (audioTop - dp(4f))..(audioTop + laneH + dp(4f)) && t0 in selA.startMs..selA.endMs) { moving = selA; moveOrig = selA.startMs; downX = e.x; onLaneDown?.invoke(); return true }
-                if (selected in p.clips.indices && e.y in clipTop..(clipTop + clipH)) {
+                if (selT != null && !p.tLock && e.y in (textTop - dp(4f))..(textTop + laneH + dp(4f)) && t0 in selT.startMs..selT.endMs) { moving = selT; moveOrig = selT.startMs; downX = e.x; onLaneDown?.invoke(); return true }
+                if (selA != null && !p.aLock && e.y in (audioTop - dp(4f))..(audioTop + laneH + dp(4f)) && t0 in selA.startMs..selA.endMs) { moving = selA; moveOrig = selA.startMs; downX = e.x; onLaneDown?.invoke(); return true }
+                if (selected in p.clips.indices && !p.vLock && e.y in clipTop..(clipTop + clipH)) {
                     val a = edgeX + p.startOf(selected) * pxPerMs; val b = a + p.clips[selected].lengthMs * pxPerMs
                     if (abs(e.x - a) < handleW * 1.6f) { trimming = -1; trimClip = selected; trimOrig = p.clips[selected].startMs }
                     else if (abs(e.x - b) < handleW * 1.6f) { trimming = 1; trimClip = selected; trimOrig = p.clips[selected].endMs }
@@ -338,6 +403,7 @@ class Timeline(ctx: Context) : View(ctx) {
         return gestures.onTouchEvent(e)
     }
     private var downX = 0f
+    private var headTouch = false
     private var moving: Any? = null
     private var moveOrig = 0L
 }

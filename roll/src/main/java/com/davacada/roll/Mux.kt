@@ -29,7 +29,7 @@ object Mux {
         val acc = FloatArray(n * 2)
         var t = 0L
         p.clips.forEachIndexed { i, c ->
-            if (!p.mute && c.volume > 0f && c.still.isEmpty() && c.revOf == null) {
+            if (p.clipSound() && c.volume > 0f && c.still.isEmpty() && c.revOf == null) {
                 var pcm = Audio.decode(ctx, c.uri, c.startMs, (c.endMs - c.startMs))     // source time, speed 1
                 if (c.speed != 1f && pcm.isNotEmpty()) pcm = stretch(pcm, c.speed)
                 val at = (t * rate / 1000).toInt()
@@ -43,7 +43,7 @@ object Mux {
             progress((i + 1) * 60 / maxOf(1, p.clips.size))
         }
         val clipsOnly = acc.copyOf()
-        if (!p.mute) Audio.mix(ctx, p)?.also { android.util.Log.i("ROLLTEST", "soundtrack ${it.length()} bytes") }?.let { f ->
+        if (p.musicSound()) Audio.mix(ctx, p)?.also { android.util.Log.i("ROLLTEST", "soundtrack ${it.length()} bytes") }?.let { f ->
             // music + voice (already mixed with fades and ducking)
             val bytes = f.readBytes()
             val bb = ByteBuffer.wrap(bytes, 44, bytes.size - 44).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
