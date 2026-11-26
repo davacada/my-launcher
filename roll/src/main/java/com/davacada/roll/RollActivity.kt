@@ -113,7 +113,11 @@ class RollActivity : Activity() {
                     store.save(p); open(p)
                     if (intent?.getStringExtra("selftest")?.startsWith("tour") == true) {
                         // a tour of the panels, for screenshots
-                        val steps = listOf<Pair<String, () -> Unit>>(
+                        val steps = if (intent?.getStringExtra("selftest") == "tour-tracks") listOf<Pair<String, () -> Unit>>(
+                            "tracks" to { seekTimeline(4500); timeline?.selected = -1; refresh() },
+                            "tracks-on" to { p.vMute = true; p.tLock = true; p.aSolo = true; store.save(p); clipParams(); timeline?.invalidate() },
+                            "add-sound" to { trackControl("a+") },
+                        ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
                             "frame" to { framePanel(0) },
                             "transition" to { closeClipPanel(false); transitionPanel(0) },
