@@ -179,18 +179,26 @@ class RollActivity : Activity() {
         if (project != null && exportView == null) relayout()
     }
 
+    /** True while the editor is rebuilt around the same player and viewer (turning the phone, moving the panel). */
+    private var reusing = false
+
     private fun relayout() {
         val p = project ?: return
-        val t = timeline?.time() ?: 0L
-        val wasPlaying = player?.isPlaying == true
-        closeSheet(); editingText = null; framing = -1; clipPanelBefore = null
+        closeSheet(); editingText = null; framing = -1; clipPanelBefore = null; gradeBefore = null
         store.save(p)
+        // keep the player and the picture; only the layout around them changes
+        (glView.parent as? android.view.ViewGroup)?.removeView(glView)
+        main.removeCallbacks(ticker); timeline?.release(); timeline = null
         val u = ArrayList(undo); val r = ArrayList(redo)
-        releasePlayer()
-        open(p, keepHistory = true)
+        val t = timelineTime()
+        reusing = true
+        try { open(p, keepHistory = true) } finally { reusing = false }
         undo.clear(); undo.addAll(u); redo.clear(); redo.addAll(r)
-        main.postDelayed({ seekTimeline(t); if (wasPlaying) player?.play() }, 300)
+        timeline?.setTime(t); refreshTime(); applyGrade(); updateFrame()
+        playBtn?.setImageResource(if (player?.isPlaying == true) R.drawable.i_pause else R.drawable.i_play)
+        if (player?.isPlaying == true) main.post(ticker)
     }
+
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -545,10 +553,12 @@ class RollActivity : Activity() {
                 glView.measure(MeasureSpec.makeMeasureSpec(sw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(sh, MeasureSpec.EXACTLY))
             }
         }
-        glView = GlPreview(this, store.lutDir)
-        glView.onSurface = { sf ->
-            videoSurface = sf
-            player?.let { pl -> pl.setVideoSurface(sf); if (!pl.isPlaying) pl.seekTo(pl.currentMediaItemIndex, pl.currentPosition) }
+        if (!reusing) {
+            glView = GlPreview(this, store.lutDir)
+            glView.onSurface = { sf ->
+                videoSurface = sf
+                player?.let { pl -> pl.setVideoSurface(sf); if (!pl.isPlaying) pl.seekTo(pl.currentMediaItemIndex, pl.currentPosition) }
+            }
         }
         previewBox.addView(glView, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         lookTag = text("", 10.5f, C.AMBER, true).apply { letterSpacing = 0.12f; setPadding(dp(8), dp(3), dp(8), dp(3)); background = pill(0x73000000, dpf(6f)) }
@@ -616,7 +626,7 @@ class RollActivity : Activity() {
             screen.addView(col, FrameLayout.LayoutParams(-1, -1))
         }
         editBottom()
-        setupPlayer()
+        if (!reusing) setupPlayer()
     }
 
     private var showingOriginal = false
