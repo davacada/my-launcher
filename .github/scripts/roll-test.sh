@@ -13,7 +13,7 @@ for i in $(seq 1 900); do
   adb logcat -d -s ROLLTEST:I > rt.txt
   c=$(grep -c "shot " rt.txt || true)
   while [ $n -lt $c ]; do sleep 1.2; adb exec-out screencap -p > shot$n.png; n=$((n+1)); done
-  if grep -q "export ok\|export failed\|failed:" rt.txt; then break; fi
+  if [ "$(grep -c "export ok\|export failed\|failed:" rt.txt)" -ge 2 ]; then break; fi
 done
 adb exec-out screencap -p > shotend.png
 # sideways: back to the editor, turn the phone
@@ -23,7 +23,7 @@ adb exec-out screencap -p > shotland.png
 adb shell settings put system user_rotation 0; sleep 3
 cat rt.txt
 adb logcat -d > logcat.txt || true
-P=$(grep -o "export ok [^ ]*" rt.txt | awk '{print $3}')
+P=$(grep -o "export ok [^ ]*" rt.txt | head -1 | awk '{print $3}')
 if [ -n "$P" ]; then adb shell run-as com.davacada.roll cat "$P" > out.mp4; fi
 ls -la out.mp4 || true
 for f in shot*.png; do echo "BEGIN-$f"; base64 -w0 $f; echo; echo "END-$f"; done

@@ -112,7 +112,14 @@ class RollActivity : Activity() {
                     val shots = listOf(1500L, starts[1] - 10, starts[1] + 300, starts[2] - 150, starts[2] + 1500, starts[3] + 800)
                     shots.forEachIndexed { k, t -> main.postDelayed({ seekTimeline(t); log("shot $k at $t") }, 4000L + k * 4000L) }
                     main.postDelayed({
-                        log("export start"); openExport(); exFormat = "video"; exShort = 720; exFps = 25; startExport()
+                        log("export start (with music)"); openExport(); exFormat = "video"; exShort = 360; exFps = 25; startExport()
+                        // then once more without the music, to compare
+                        val again = object : Runnable { override fun run() {
+                            if (exporting != null || exportView == null || exDissolve != null) { main.postDelayed(this, 1000); return }
+                            if (p.audio.isEmpty()) return
+                            p.audio.clear(); store.save(p); log("export start (no music)"); startExport()
+                        } }
+                        main.postDelayed(again, 5000)
                     }, 4000L + shots.size * 4000L)
                 }
             } catch (e: Throwable) { log("failed: $e"); android.util.Log.e("ROLLTEST", "failed", e) }

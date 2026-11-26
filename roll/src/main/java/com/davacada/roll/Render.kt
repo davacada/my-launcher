@@ -205,8 +205,8 @@ object Render {
             .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
             .setEnableFallback(true).build()
         var finished = false
-        // no "nothing written for a while" abort: heavy looks on a slow phone are fine, just slower
-        val tr = Transformer.Builder(ctx).setVideoMimeType(mime).setEncoderFactory(enc).setMaxDelayBetweenMuxerSamplesMs(androidx.media3.common.C.TIME_UNSET)
+        // a generous wait before calling an export stuck (heavy looks on a slow phone are just slower); a stuck one is retried
+        val tr = Transformer.Builder(ctx).setVideoMimeType(mime).setEncoderFactory(enc).setMaxDelayBetweenMuxerSamplesMs(60_000)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) { finished = true; done(null) }
                 override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) { finished = true; done(reason(exportException)) }
