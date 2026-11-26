@@ -46,6 +46,8 @@ class RollActivity : Activity() {
     private lateinit var screen: FrameLayout
     private val main = Handler(Looper.getMainLooper())
     private val bg = Executors.newFixedThreadPool(2)
+    /** Runs [f] in the background, unless the screen is already gone (then there's nothing to update). */
+    private fun work(f: () -> Unit) { if (!bg.isShutdown && !isDestroyed) try { bg.execute(f) } catch (e: java.util.concurrent.RejectedExecutionException) {} }
     private var insetTop = 0; private var insetBottom = 0
 
     private var project: Project? = null
@@ -73,7 +75,7 @@ class RollActivity : Activity() {
         }
         setContentView(root)
         home()
-        intent?.getStringExtra("selftest")?.let { selfTest() }
+        if (savedInstanceState == null) intent?.getStringExtra("selftest")?.let { selfTest() }
     }
 
     /**
@@ -83,7 +85,7 @@ class RollActivity : Activity() {
      */
     private fun selfTest() {
         fun log(m: String) = android.util.Log.i("ROLLTEST", m)
-        bg.execute {
+        work {
             try {
                 val dir = File(filesDir, "selftest")
                 val vids = (dir.listFiles { f -> f.name.endsWith(".mp4") } ?: emptyArray()).sortedBy { it.name }
@@ -128,7 +130,7 @@ class RollActivity : Activity() {
 
     override fun onPause() { super.onPause(); player?.pause(); project?.let { store.save(it) }; if (project != null && ::glView.isInitialized) glView.onPause() }
     override fun onResume() { super.onResume(); if (project != null && ::glView.isInitialized) glView.onResume() }
-    override fun onDestroy() { releasePlayer(); exporting?.cancel?.invoke(); bg.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { main.removeCallbacksAndMessages(null); releasePlayer(); exporting?.cancel?.invoke(); bg.shutdownNow(); super.onDestroy() }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
@@ -216,7 +218,7 @@ class RollActivity : Activity() {
         background = ripple(); setOnClickListener { open(p) }
         setOnLongClickListener { projectMenu(p); true }
         p.clips.firstOrNull()?.let { c ->
-            bg.execute {
+            work {
                 val bm = frameAt(c, c.startMs + 800, 400)
                 main.post { if (bm != null) img.setImageBitmap(gradePreview(bm, p.grade)) }
             }
@@ -444,7 +446,7 @@ class RollActivity : Activity() {
         val p = addingTo ?: return
         addingTo = null
         toast("Reading ${uris.size} clip${if (uris.size == 1) "" else "s"}…")
-        bg.execute {
+        work {
             val clips = uris.mapNotNull { u ->
                 if (contentResolver.getType(u)?.startsWith("image/") == true) {
                     // a photo becomes a still clip (3 s, slow push-in)
@@ -471,7 +473,7 @@ class RollActivity : Activity() {
     }
 
     private fun importLut(u: Uri) {
-        bg.execute {
+        work {
             val name = (contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "look.cube")
                 .replace(Regex("[^A-Za-z0-9._ -]"), "_")
             val textLines = try { contentResolver.openInputStream(u)?.bufferedReader()?.readLines() } catch (e: Exception) { null }
@@ -757,7 +759,7 @@ class RollActivity : Activity() {
         if (key == dissolveKey) return
         dissolveKey = key
         val list = p.clips.map { Clip.from(it.json()) }
-        bg.execute { val m = Render.dissolveFrames(this, list); main.post { if (dissolveKey == key) { dissolves = m; updateFrame() } } }
+        work { val m = Render.dissolveFrames(this, list); main.post { if (dissolveKey == key) { dissolves = m; updateFrame() } } }
     }
 
     /** Tells the viewer how the clip under the playhead sits in the frame right now. */
@@ -1195,7 +1197,7 @@ class RollActivity : Activity() {
         bedKey = key
         if (p.audio.isEmpty() || p.mute) { bed?.release(); bed = null; return }
         val copy = Project.from(p.json())
-        bg.execute {
+        work {
             val f = try { Audio.mix(this, copy) } catch (e: Throwable) { null }
             main.post {
                 if (bedKey != key || project == null) return@post
@@ -1258,7 +1260,7 @@ class RollActivity : Activity() {
         val p = project ?: return
         try { contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) {}
         val name = (contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "Music").substringBeforeLast('.')
-        bg.execute {
+        work {
             val len = Audio.lengthOf(this, u.toString())
             main.post {
                 if (len <= 0) { toast("Couldn't read that sound file"); return@post }
@@ -1310,7 +1312,7 @@ class RollActivity : Activity() {
         stop.setOnClickListener {
             recorder = null; player?.pause(); player?.volume = keepVol; bed?.volume = 1f
             val ms = android.os.SystemClock.elapsedRealtime() - t0
-            bg.execute {
+            work {
                 r.stop()
                 main.post {
                     if (ms < 400) { file.delete(); toast("Too short"); audioPanel(); return@post }
@@ -1402,7 +1404,7 @@ class RollActivity : Activity() {
             if (capRun != null) return@cta
             status.text = "Listening to the edit…"; bar.visibility = View.VISIBLE; bar.progress = 0
             val copy = Project.from(p.json())
-            bg.execute {
+            work {
                 val pcm = Captions.sound(this, copy) { pr -> main.post { bar.progress = pr } }
                 val ph = Captions.phrases(pcm)
                 main.post {
@@ -1460,7 +1462,7 @@ class RollActivity : Activity() {
         if (c.lengthMs > 60_000) toast("A long clip: reversing it takes a while")
         val (pct, bar) = busySheet("Reversing clip ${i + 1}")
         val before = p.json().toString()
-        bg.execute {
+        work {
             val r = try { Stills.reverse(this, c) { pr -> main.post { pct.text = "$pr%"; bar.progress = pr } } } catch (e: Throwable) { null }
             main.post {
                 closeSheet()
@@ -1483,7 +1485,7 @@ class RollActivity : Activity() {
         val c = p.clips[i]
         val srcMs = c.startMs + (off * c.speed).toLong()
         toast("Freezing ${fmt(t, true)}…")
-        bg.execute {
+        work {
             val still = try {
                 val mr = MediaMetadataRetriever(); mr.setDataSource(this, Uri.parse(c.uri))
                 val k = minOf(1f, 1920f / maxOf(c.w, c.h, 1))
@@ -1607,7 +1609,7 @@ class RollActivity : Activity() {
             LinearLayout.LayoutParams(dp(76), -2))
         background = ripple(); setOnClickListener { onClick() }
         layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) }
-        bg.execute {
+        work {
             val s = sample ?: project?.let { p -> p.clips.getOrNull(p.at(timeline?.time() ?: 0).first)?.let { c -> frameAt(c, c.startMs + 500, 180) } }?.also { sample = it }
             if (s != null) {
                 val g = preset ?: Grade(look = when { l != null -> l.id; lut != null -> "lut:$lut"; else -> "none" })
@@ -1764,7 +1766,7 @@ class RollActivity : Activity() {
         background = ripple()
         setOnClickListener { project?.grade?.let { g -> g.overlay = id; if (g.overlayAmount < 0.05f) g.overlayAmount = 0.8f }; applyGrade(); val keep = gradeBefore; panelOpen = false; overlayPanel(); gradeBefore = keep }
         layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) }
-        bg.execute {
+        work {
             val p = project ?: return@execute
             val s0 = sample ?: p.clips.getOrNull(p.at(timeline?.time() ?: 0).first)?.let { c -> frameAt(c, c.startMs + 500, 180) }?.also { sample = it } ?: return@execute
             val base = gradePreview(s0, p.grade).copy(Bitmap.Config.ARGB_8888, true)
@@ -1858,7 +1860,7 @@ class RollActivity : Activity() {
         val fh = dp(170); val fw = minOf(resources.displayMetrics.widthPixels - dp(36), (fh * shape).toInt())
         body.addView(FrameLayout(this).apply { addView(frame, FrameLayout.LayoutParams(fw, if (fw < (fh * shape).toInt()) (fw / shape).toInt() else fh, Gravity.CENTER)) },
             LinearLayout.LayoutParams(-1, fh).apply { topMargin = dp(16) })
-        exPreview?.let { frame.setImageBitmap(it) } ?: bg.execute {
+        exPreview?.let { frame.setImageBitmap(it) } ?: work {
             val (ci, off) = p.at(timeline?.time() ?: 0)
             val c = p.clips.getOrNull(ci)
             val bm = c?.let { frameAt(it, it.startMs + (off * it.speed).toLong(), 480, exact = true) }?.let { gradePreview(it, p.grade) }
@@ -1961,18 +1963,16 @@ class RollActivity : Activity() {
         store.save(p)
         prefs().edit().putString("exFormat", exFormat).putInt("exShort", exShort).putInt("exFps", exFps).putInt("exQuality", exQuality)
             .putInt("gifW", gifW).putInt("gifFps", gifFps).putInt("gifSecs", gifSecs).putString("gifLoop", gifLoop).putBoolean("stSquare", stSquare).putInt("stFps", stFps).apply()
-        if (exDissolve == null && (p.clips.any { it.trans == "dissolve" } || (p.audio.isNotEmpty() && exFormat == "video"))) {
+        if (exDissolve == null && p.clips.any { it.trans == "dissolve" }) {
             renderExport("Getting ready…", 0)
             val copy = Project.from(p.json())
-            bg.execute {
+            work {
                 val m = Render.dissolveFrames(this, copy.clips)
-                exSoundtrack = if (exFormat == "video" && !copy.mute) try { Audio.mix(this, copy) } catch (e: Throwable) { null } else null
                 main.post { exDissolve = m; startExport() }
             }
             return
         }
         val diss = exDissolve ?: emptyMap(); exDissolve = null
-        val soundtrack = exSoundtrack; exSoundtrack = null
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val safe = p.name.replace(Regex("[^A-Za-z0-9 _-]"), "").trim().ifBlank { "Roll" }
         try {
@@ -1980,12 +1980,33 @@ class RollActivity : Activity() {
                 "video" -> {
                     val (w, h) = Render.size(p, exShort)
                     val out = File(outDir(), "$safe-$stamp.mp4")
-                    exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir, lvl, diss, 0, soundtrack) },
-                        out, MimeTypes.VIDEO_H264, videoBitrate(w, h), { pr -> renderExport("Exporting…", pr) }) { err, note ->
+                    fun finished(err: String?, note: String?) {
                         exporting = null
                         android.util.Log.i("ROLLTEST", if (err != null) "export failed: $err" else "export ok ${out.path} ${out.length()} ${note ?: ""}")
                         if (err != null) renderExport("Couldn't export: $err")
                         else { val u = Render.saveToGallery(this, out, out.name, "video/mp4"); renderExport(note ?: "Saved to Movies/Roll", 100, out, "video/mp4", u) }
+                    }
+                    if (p.audio.isNotEmpty() && !p.mute) {
+                        // with music or voiceovers: the picture first (no sound), then Roll mixes every sound and puts them together
+                        val pic = File(outDir(), "picture-$stamp.mp4")
+                        val copy = Project.from(p.json())
+                        exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, false, store.lutDir, lvl, diss) },
+                            pic, MimeTypes.VIDEO_H264, videoBitrate(w, h), { pr -> renderExport("Exporting the picture…", pr * 85 / 100) }) { err, _ ->
+                            if (err != null) { finished(err, null); return@export }
+                            renderExport("Mixing the sound…", 86)
+                            work {
+                                val e2 = try {
+                                    val pcm = Mux.fullMix(this, copy) { pr -> main.post { if (exporting != null) renderExport("Mixing the sound…", 86 + pr * 8 / 100) } }
+                                    Mux.join(pic, pcm, out) { pr -> main.post { if (exporting != null) renderExport("Putting it together…", 94 + pr * 6 / 100) } }
+                                    null
+                                } catch (e: Throwable) { Render.reason(e) }
+                                pic.delete()
+                                main.post { finished(e2, null) }
+                            }
+                        }
+                    } else {
+                        exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir, lvl, diss) },
+                            out, MimeTypes.VIDEO_H264, videoBitrate(w, h), { pr -> renderExport("Exporting…", pr) }) { err, note -> finished(err, note) }
                     }
                     renderExport("Exporting…", 0)
                 }
@@ -1996,7 +2017,7 @@ class RollActivity : Activity() {
                         tmp, MimeTypes.VIDEO_H264, 6_000_000, { pr -> renderExport("Rendering frames…", pr / 2) }) { err, _ ->
                         if (err != null) { exporting = null; renderExport("Couldn't export: $err"); return@export }
                         renderExport("Making the GIF…", 50)
-                        bg.execute {
+                        work {
                             val ok = try { Render.gif(tmp, out, gifFps, gifLoop) { pr -> main.post { if (exporting != null) renderExport("Making the GIF…", 50 + pr / 2) } }; true } catch (e: Exception) { false }
                             main.post {
                                 exporting = null
@@ -2016,7 +2037,7 @@ class RollActivity : Activity() {
                         tmp, MimeTypes.VIDEO_H264, 8_000_000, { pr -> renderExport("Rendering…", pr / 2) }) { err, _ ->
                         if (err != null) { exporting = null; renderExport("Couldn't export: $err"); return@export }
                         renderExport("Encoding VP9…", 60)
-                        bg.execute {
+                        work {
                             var rate = 650_000; var ok = false; var tries = 0
                             while (tries++ < 6) {
                                 ok = try { Render.webm(tmp, out, rate) } catch (e: Exception) { false }
