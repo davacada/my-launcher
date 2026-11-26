@@ -122,7 +122,7 @@ object Render {
     } catch (e: Exception) { null }
 
     fun composition(ctx: Context, p: Project, clips: List<Clip>, w: Int, h: Int, fps: Int, withSoundAsked: Boolean, lutDir: File, level: Int = 0,
-                    dissolve: Map<String, Bitmap> = emptyMap(), fromMs: Long = 0): Composition {
+                    dissolve: Map<String, Bitmap> = emptyMap(), fromMs: Long = 0, soundtrack: File? = null): Composition {
         val withSound = withSoundAsked && level < 2
         val grade = gradeEffects(ctx, p.grade, lutDir)
         val items = clips.mapIndexed { idx, c ->
@@ -144,7 +144,14 @@ object Render {
             if (level == 0 && c.sourceMs > 0) b.setDurationUs(c.sourceMs * 1000)
             b.build()
         }
-        return Composition.Builder(EditedMediaItemSequence(items))
+        val sequences = arrayListOf(EditedMediaItemSequence(items))
+        // music and voiceovers: one mixed soundtrack alongside the clips
+        if (withSound && soundtrack != null && soundtrack.exists()) {
+            val st = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(soundtrack))).setRemoveVideo(true)
+                .setEffects(Effects(listOf(androidx.media3.common.audio.ToInt16PcmAudioProcessor(), resample()), emptyList())).build()
+            sequences.add(EditedMediaItemSequence(listOf(st)))
+        }
+        return Composition.Builder(sequences)
             .setHdrMode(if (level == 0) Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL else Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_MEDIACODEC)
             .experimentalSetForceAudioTrack(withSound && level == 0)
             .build()

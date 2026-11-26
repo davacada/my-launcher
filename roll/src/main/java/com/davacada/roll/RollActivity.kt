@@ -102,6 +102,7 @@ class RollActivity : Activity() {
                 val r = Stills.reverse(this, clip(vids[0]).apply { endMs = 3000 }) { } ?: error("reverse failed")
                 p.clips.addAll(listOf(a, ph, b, r))
                 p.texts.add(TextItem("Hello Roll", 300, 5200).apply { style = "box"; font = "anton"; y = 0.2f })
+                vids.getOrNull(1)?.let { f -> p.audio.add(AudioItem(Uri.fromFile(f).toString(), "Test music", "music", 2000, 0, 4000, 5000).apply { fadeIn = 500; fadeOut = 1000 }) }
                 p.texts.add(TextItem("a caption line here", 7000, 11000).apply { caption = true; style = "shadow"; y = 0.8f; size = 0.045f; words.addAll(listOf(0L, 800L, 1600L, 2400L)) })
                 log("clips " + p.clips.joinToString { "${it.lengthMs}" })
                 main.post {
@@ -133,6 +134,11 @@ class RollActivity : Activity() {
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 9) { if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) recordVoice() else toast("Roll needs the microphone for voiceovers") }
+    }
 
     // ================================================================ home
 
@@ -403,6 +409,7 @@ class RollActivity : Activity() {
         @Suppress("DEPRECATION") super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK || data == null) { if (requestCode == 1 && project == null) addingTo = null; return }
         if (requestCode == 2) { data.data?.let { importLut(it) }; return }
+        if (requestCode == 3) { data.data?.let { addMusic(it) }; return }
         val uris = ArrayList<Uri>()
         data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) } ?: data.data?.let { uris.add(it) }
         val p = addingTo ?: return
@@ -517,7 +524,7 @@ class RollActivity : Activity() {
         tr.addView(bare(R.drawable.i_aspect, null, size = 20) { aspectMenu() })
         col.addView(tr)
         bottom = FrameLayout(this)
-        col.addView(bottom, LinearLayout.LayoutParams(-1, dp(300)))
+        col.addView(bottom, LinearLayout.LayoutParams(-1, dp(326)))
         screen.addView(col, FrameLayout.LayoutParams(-1, -1))
         editBottom()
         setupPlayer()
@@ -542,9 +549,10 @@ class RollActivity : Activity() {
         tl.onHold = { i -> clipMenu(i) }
         tl.onJoint = { i -> transitionPanel(i) }
         tl.onText = { id -> p.texts.firstOrNull { it.id == id }?.let { textEditor(it) } }
+        tl.onAudio = { id -> p.audio.firstOrNull { it.id == id }?.let { audioEditor(it) } }
         tl.onLaneDown = { snapshotBefore = p.json().toString() }
-        tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); updateFrame() }
-        col.addView(tl, LinearLayout.LayoutParams(-1, dp(150)))
+        tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); updateFrame(); refreshSoundtrack() }
+        col.addView(tl, LinearLayout.LayoutParams(-1, dp(178)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
         b.addView(col, FrameLayout.LayoutParams(-1, -1))
@@ -569,6 +577,8 @@ class RollActivity : Activity() {
             bare(R.drawable.i_reverse, "Reverse", if (sel >= 0 && project?.clips?.getOrNull(sel)?.still?.isEmpty() == true) C.TEXT else C.FAINT) { if (sel >= 0) reverseClip(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_freeze, "Freeze") { freezeFrame() },
             bare(R.drawable.i_text, "Text") { textsPanel() },
+            bare(R.drawable.i_music, "Audio") { audioPanel() },
+            bare(R.drawable.i_cc, "Captions") { captionsPanel() },
             bare(R.drawable.i_filter, "Film") { filmPanel(Looks.FILM) },
             bare(R.drawable.i_adjust, "Adjust") { adjustPanel() },
             bare(R.drawable.i_fx, "Overlay") { overlayPanel() },
@@ -590,14 +600,18 @@ class RollActivity : Activity() {
         glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p))
         pl.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { clipParams(); updateFrame() }
-            override fun onIsPlayingChanged(isPlaying: Boolean) { playBtn?.setImageResource(if (isPlaying) R.drawable.i_pause else R.drawable.i_play); if (isPlaying) main.post(ticker) }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playBtn?.setImageResource(if (isPlaying) R.drawable.i_pause else R.drawable.i_play)
+                if (isPlaying) main.post(ticker)
+                bed?.let { b -> if (isPlaying) { b.seekTo(timelineTime()); b.play() } else b.pause() }
+            }
             override fun onPlayerError(error: PlaybackException) { toast("Playback: ${error.errorCodeName}") }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 if (videoSize.width > 0 && videoSize.height > 0) { videoRatio = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height; project?.let { glView.setRatios(videoRatio, Render.ratio(it)) } }
             }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) { pl.pause(); pl.seekTo(0, 0) } }
         })
-        loadItems(); pl.prepare(); refreshDissolves()
+        loadItems(); pl.prepare(); refreshDissolves(); refreshSoundtrack()
         updateLookTag(); refreshTime(); updateFrame()
         if (p.clips.isEmpty()) toast("Add a clip with +")
     }
@@ -621,12 +635,13 @@ class RollActivity : Activity() {
 
     private fun reloadPlayer(keepTime: Boolean) {
         val t = timeline?.time() ?: 0L
-        loadItems(); player?.prepare(); refreshDissolves()
+        loadItems(); player?.prepare(); refreshDissolves(); refreshSoundtrack()
         if (keepTime) seekTimeline(t.coerceAtMost(maxOf(0, (project?.lengthMs ?: 0) - 1)))
         timeline?.invalidate(); refreshTime()
     }
 
     private fun releasePlayer() {
+        bed?.release(); bed = null; bedKey = ""
         main.removeCallbacks(ticker); player?.release(); player = null; timeline?.release(); timeline = null
         if (::glView.isInitialized) glView.release(); videoSurface = null
     }
@@ -637,6 +652,7 @@ class RollActivity : Activity() {
         val (i, off) = p.at(t)
         pl.seekTo(i, (off * p.clips[i].speed).toLong())
         timeline?.setTime(t); refreshTime(); updateFrame(i, off)
+        bed?.seekTo(t)
     }
 
     private fun timelineTime(): Long {
@@ -651,6 +667,7 @@ class RollActivity : Activity() {
             val pl = player ?: return
             if (!pl.isPlaying) return
             timeline?.setTime(timelineTime()); refreshTime(); updateFrame()
+            bed?.let { b -> val t = timelineTime(); if (b.isPlaying && kotlin.math.abs(b.currentPosition - t) > 150) b.seekTo(t) }
             main.postDelayed(this, 16)
         }
     }
@@ -1102,6 +1119,256 @@ class RollActivity : Activity() {
             }
             android.view.MotionEvent.ACTION_POINTER_UP -> { tDist = 0f; val k = if (e.actionIndex == 0) 1 else 0; touchX = e.getX(k); touchY = e.getY(k) }
         }
+    }
+
+    // ---------------------------------------------------------------- music and voiceovers
+
+    /** Plays the mixed music + voiceovers alongside the clips. */
+    private var bed: ExoPlayer? = null
+    private var bedKey = ""
+    private fun refreshSoundtrack() {
+        val p = project ?: return
+        val key = Audio.key(p) + p.mute
+        if (key == bedKey) return
+        bedKey = key
+        if (p.audio.isEmpty() || p.mute) { bed?.release(); bed = null; return }
+        val copy = Project.from(p.json())
+        bg.execute {
+            val f = try { Audio.mix(this, copy) } catch (e: Throwable) { null }
+            main.post {
+                if (bedKey != key || project == null) return@post
+                if (f == null) { bed?.release(); bed = null; return@post }
+                val b = bed ?: ExoPlayer.Builder(this).build().also { bed = it }
+                b.setMediaItem(MediaItem.fromUri(Uri.fromFile(f))); b.prepare()
+                b.seekTo(timelineTime())
+                if (player?.isPlaying == true) b.play()
+            }
+        }
+    }
+
+    private fun audioPanel() {
+        val p = project ?: return
+        player?.pause()
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), dp(6)) }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun big(icon: Int, label: String, color: Int, onClick: () -> Unit) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(dp(12), dp(12), dp(12), dp(12))
+            background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x22FFFFFF), pill(0, dpf(16f), dp(1), (color and 0x00FFFFFF) or 0x66000000), pill(Color.WHITE, dpf(16f)))
+            addView(ImageView(context).apply { setImageResource(icon); setColorFilter(color) }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(8) })
+            addView(context.text(label, 14f, C.TEXT, true))
+            setOnClickListener { onClick() }
+        }
+        row.addView(big(R.drawable.i_music, "Add music", 0xFF7CD1FF.toInt()) { pickAudio() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+        row.addView(big(R.drawable.i_mic, "Voiceover", 0xFFFF7E6B.toInt()) { recordVoice() }, LinearLayout.LayoutParams(0, -2, 1f))
+        s.addView(row)
+        s.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(2), dp(10), 0, dp(4))
+            addView(context.text("Music dips under the voice", 13.5f, C.TEXT), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(context.word(if (p.duck) "On" else "Off", p.duck, 14f) { snapshot(); p.duck = !p.duck; store.save(p); refreshSoundtrack(); audioPanel() })
+        })
+        s.addView(LrSlider(this, "Sound of the clips", p.clips.firstOrNull()?.volume ?: 1f, 0f, 2f, null, { "${(it * 100).toInt()}%" }) { v -> p.clips.forEach { it.volume = v }; clipParams() })
+        p.audio.sortedBy { it.startMs }.forEach { a ->
+            s.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(2), dp(12), dp(2), dp(12)); background = ripple()
+                addView(ImageView(context).apply { setImageResource(if (a.kind == "voice") R.drawable.i_mic else R.drawable.i_music); setColorFilter(if (a.kind == "voice") 0xFFFF7E6B.toInt() else 0xFF7CD1FF.toInt()) }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(12) })
+                addView(context.text(a.name, 14.5f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(context.text("${fmt(a.startMs, true)} · ${fmt(a.lengthMs)}", 11.5f, C.SUB, mono = true))
+                setOnClickListener { audioEditor(a) }
+            })
+        }
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(context.text("Music goes in at the playhead", 11.5f, C.FAINT), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { store.save(p); panelOpen = false; editBottom() } })
+        }, LinearLayout.LayoutParams(-1, dp(46)))
+        val b = bottom ?: return
+        panelOpen = true; b.removeAllViews(); b.addView(col, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun pickAudio() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*"; addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) }
+        try { startActivityForResult(i, 3) } catch (e: Exception) { toast("No file picker found") }
+    }
+
+    private fun addMusic(u: Uri) {
+        val p = project ?: return
+        try { contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) {}
+        val name = (contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "Music").substringBeforeLast('.')
+        bg.execute {
+            val len = Audio.lengthOf(this, u.toString())
+            main.post {
+                if (len <= 0) { toast("Couldn't read that sound file"); return@post }
+                snapshot()
+                val at = (timeline?.time() ?: 0L).let { if (it > p.lengthMs - 1000) 0L else it }
+                val a = AudioItem(u.toString(), name, "music", at, 0, minOf(len, maxOf(1000, p.lengthMs - at)), len).apply { fadeOut = minOf(1500, lengthMs / 4) }
+                p.audio.add(a); store.save(p); refreshSoundtrack(); timeline?.invalidate()
+                audioEditor(a)
+            }
+        }
+    }
+
+    private var recorder: VoiceRecorder? = null
+    /** Voiceover: plays the edit from the playhead (quietly) while you speak; Stop puts it on the timeline. */
+    private fun recordVoice() {
+        val p = project ?: return
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) { requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 9); return }
+        val start = (timeline?.time() ?: 0L).let { if (it > p.lengthMs - 500) 0L else it }
+        val file = File(Stills.dir(this), "voice-" + java.util.UUID.randomUUID() + ".wav")
+        val r = VoiceRecorder(file)
+        if (!r.start()) { toast("Couldn't use the microphone"); return }
+        recorder = r
+        seekTimeline(start)
+        val keepVol = player?.volume ?: 1f
+        player?.volume = 0.15f; bed?.volume = 0.15f; player?.play()
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(18), dp(10), dp(18), dp(10)) }
+        val clock = text("0:00.0", 34f, C.TEXT, true, mono = true)
+        val meter = View(this).apply { background = pill(0xFFFF7E6B.toInt(), dpf(3f)) }
+        col.addView(text("RECORDING FROM ${fmt(start, true)}", 11f, 0xFFFF7E6B.toInt(), true).apply { letterSpacing = 0.14f })
+        col.addView(clock)
+        col.addView(FrameLayout(this).apply { addView(meter, FrameLayout.LayoutParams(dp(4), dp(6), Gravity.CENTER_VERTICAL)) }, LinearLayout.LayoutParams(-1, dp(14)).apply { setMargins(dp(40), dp(6), dp(40), dp(12)) })
+        val stop = FrameLayout(this).apply {
+            background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(0xFFFF5A4A.toInt()) }
+            addView(View(context).apply { background = pill(Color.WHITE, dpf(4f)) }, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        }
+        col.addView(stop, LinearLayout.LayoutParams(dp(72), dp(72)))
+        col.addView(text("Tap to stop · headphones keep the edit's sound out of the recording", 11.5f, C.SUB).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, 0) })
+        val b = bottom ?: return
+        panelOpen = true; b.removeAllViews(); b.addView(col, FrameLayout.LayoutParams(-1, -1))
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        val tick = object : Runnable { override fun run() {
+            if (recorder !== r) return
+            val ms = android.os.SystemClock.elapsedRealtime() - t0
+            clock.text = fmt(ms, true)
+            meter.layoutParams = (meter.layoutParams as FrameLayout.LayoutParams).apply { width = (dp(4) + (col.width - dp(80)) * minOf(1f, r.level * 2.5f)).toInt() }; meter.requestLayout()
+            main.postDelayed(this, 50)
+        } }
+        main.post(tick)
+        stop.setOnClickListener {
+            recorder = null; player?.pause(); player?.volume = keepVol; bed?.volume = 1f
+            val ms = android.os.SystemClock.elapsedRealtime() - t0
+            bg.execute {
+                r.stop()
+                main.post {
+                    if (ms < 400) { file.delete(); toast("Too short"); audioPanel(); return@post }
+                    snapshot()
+                    val n = p.audio.count { it.kind == "voice" } + 1
+                    val a = AudioItem(Uri.fromFile(file).toString(), "Voiceover $n", "voice", start, 0, minOf(ms, maxOf(500, p.lengthMs - start)), ms)
+                    p.audio.add(a); store.save(p); refreshSoundtrack(); timeline?.invalidate(); audioPanel()
+                }
+            }
+        }
+    }
+
+    private fun audioEditor(a: AudioItem) {
+        val p = project ?: return
+        player?.pause()
+        timeline?.selectedText = a.id
+        fun again() { val keep = clipPanelBefore; audioEditor(a); clipPanelBefore = keep }
+        fun changed() { timeline?.invalidate() }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(18), 0, dp(18), dp(4))
+            addView(ImageView(context).apply { setImageResource(if (a.kind == "voice") R.drawable.i_mic else R.drawable.i_music); setColorFilter(if (a.kind == "voice") 0xFFFF7E6B.toInt() else 0xFF7CD1FF.toInt()) }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(10) })
+            addView(context.text(a.name, 16f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(context.text("${fmt(a.startMs, true)} – ${fmt(a.endMs, true)}", 11.5f, C.SUB, mono = true))
+        })
+        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), dp(6)) }
+        s.addView(LrSlider(this, "Volume", a.volume, 0f, 2f, null, { "${(it * 100).toInt()}%" }) { a.volume = it })
+        s.addView(LrSlider(this, "Fade in", a.fadeIn / 1000f, 0f, 5f, null, { "%.1f s".format(it) }) { a.fadeIn = (it * 1000).toLong() })
+        s.addView(LrSlider(this, "Fade out", a.fadeOut / 1000f, 0f, 5f, null, { "%.1f s".format(it) }) { a.fadeOut = (it * 1000).toLong() })
+        if (a.sourceMs > 1500) s.addView(LrSlider(this, "Starts in the file at", a.inMs / 1000f, 0f, maxOf(0.1f, (a.sourceMs - 1000) / 1000f), null, { fmt((it * 1000).toLong(), true) }) { v ->
+            a.inMs = (v * 1000).toLong(); a.lengthMs = minOf(a.lengthMs, a.sourceMs - a.inMs); changed() })
+        s.addView(LrSlider(this, "Length", a.lengthMs / 1000f, 0.5f, maxOf(0.6f, minOf((a.sourceMs - a.inMs) / 1000f, maxOf(1f, (p.lengthMs - a.startMs) / 1000f))), null, { "%.1f s".format(it) }) { v -> a.lengthMs = (v * 1000).toLong(); changed() })
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        r.addView(bare(R.drawable.i_left, "Starts here", size = 20) { a.startMs = (timeline?.time() ?: 0L).coerceAtMost(maxOf(0, p.lengthMs - 500)); changed(); again() })
+        r.addView(bare(R.drawable.i_film, "From the start", size = 20) { a.startMs = 0; changed(); again() })
+        r.addView(bare(R.drawable.i_play, "Listen", size = 20) { store.save(p); bedKey = ""; refreshSoundtrack(); seekTimeline(a.startMs); main.postDelayed({ player?.play() }, 600) })
+        s.addView(r)
+        s.addView(text("Drag its bar on the timeline to move it.", 11.5f, C.FAINT).apply { setPadding(dp(4), dp(4), 0, 0) })
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(context.word("Cancel", false, 14f) { timeline?.selectedText = null; closeClipPanel(false) })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(bare(R.drawable.i_trash, null, 0xFFFF6B5E.toInt(), 18) { p.audio.remove(a); timeline?.selectedText = null; closeClipPanel(true) })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { timeline?.selectedText = null; closeClipPanel(true) } })
+        }, LinearLayout.LayoutParams(-1, dp(46)))
+        openClipPanel(col)
+    }
+
+    // ---------------------------------------------------------------- captions
+
+    private var capLang = Locale.getDefault().toLanguageTag().let { t -> Captions.LANGS.firstOrNull { it.first.substringBefore('-') == t.substringBefore('-') }?.first ?: "en-US" }
+    private var capStyle = "karaoke"
+    private var capRun: Captions.Run? = null
+
+    private fun captionsPanel() {
+        val p = project ?: return
+        player?.pause()
+        val caps = p.texts.filter { it.caption }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), dp(6)) }
+        s.addView(text("LANGUAGE SPOKEN", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(2), 0, 0, dp(2)) })
+        val lr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        Captions.LANGS.forEach { (k, l) -> lr.addView(word(l, capLang == k, 14f) { capLang = k; captionsPanel() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(14) }) }
+        s.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(lr) })
+        s.addView(text("LOOK", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(2), dp(10), 0, dp(2)) })
+        val sr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        Captions.STYLES.forEach { st -> sr.addView(word(st.name, capStyle == st.id, 14f) {
+            capStyle = st.id
+            if (caps.isNotEmpty()) { snapshot(); caps.forEach { c -> st.apply(c) }; store.save(p); textKey = ""; updateFrame() }
+            captionsPanel() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(14) }) }
+        s.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(sr) })
+        if (caps.isNotEmpty()) {
+            val pr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            listOf(0.16f to "Top", 0.5f to "Middle", 0.8f to "Bottom").forEach { (y, l) -> pr.addView(word(l, kotlin.math.abs(caps[0].y - y) < 0.05f, 14f) {
+                snapshot(); caps.forEach { it.y = y }; store.save(p); textKey = ""; updateFrame(); captionsPanel() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(14) }) }
+            s.addView(pr)
+            s.addView(text("${caps.size} caption lines · tap one on the picture or the timeline to fix a word", 12f, C.SUB).apply { setPadding(dp(2), dp(6), 0, 0) })
+        }
+        val status = text("", 12.5f, C.SUB).apply { setPadding(dp(2), dp(10), 0, 0) }
+        s.addView(status)
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100; visibility = View.GONE; progressTintList = android.content.res.ColorStateList.valueOf(C.AMBER); progressBackgroundTintList = android.content.res.ColorStateList.valueOf(0x22FFFFFF)
+        }
+        s.addView(bar, LinearLayout.LayoutParams(-1, dp(12)).apply { topMargin = dp(6) })
+        val act = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, 0) }
+        act.addView(cta(if (caps.isEmpty()) "Make captions" else "Make them again", R.drawable.i_cc, true) {
+            if (capRun != null) return@cta
+            status.text = "Listening to the edit…"; bar.visibility = View.VISIBLE; bar.progress = 0
+            val copy = Project.from(p.json())
+            bg.execute {
+                val pcm = Captions.sound(this, copy) { pr -> main.post { bar.progress = pr } }
+                val ph = Captions.phrases(pcm)
+                main.post {
+                    status.text = "Writing out ${ph.size} phrase${if (ph.size == 1) "" else "s"}…"
+                    capRun = Captions.recognise(this, pcm, ph, capLang, { pr -> bar.progress = pr }) { items, err ->
+                        capRun = null; bar.visibility = View.GONE
+                        if (items == null) { status.text = err; return@recognise }
+                        snapshot()
+                        val st = Captions.STYLES.firstOrNull { it.id == capStyle } ?: Captions.STYLES[0]
+                        p.texts.removeAll { it.caption }
+                        items.forEach { st.apply(it); p.texts.add(it) }
+                        store.save(p); textKey = ""; updateFrame(); timeline?.invalidate()
+                        toast("${items.size} caption lines"); captionsPanel()
+                    }
+                }
+            }
+        }.apply { layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f) })
+        if (caps.isNotEmpty()) act.addView(cta("Remove", R.drawable.i_trash, false) { snapshot(); p.texts.removeAll { it.caption }; store.save(p); textKey = ""; updateFrame(); timeline?.invalidate(); captionsPanel() }
+            .apply { layoutParams = LinearLayout.LayoutParams(-2, dp(52)).apply { marginStart = dp(8) }; setPadding(dp(18), 0, dp(18), 0) })
+        s.addView(act)
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(context.text("Uses the phone's speech recogniser", 11.5f, C.FAINT), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { capRun?.cancel?.invoke(); capRun = null; panelOpen = false; editBottom() } })
+        }, LinearLayout.LayoutParams(-1, dp(46)))
+        val b = bottom ?: return
+        panelOpen = true; b.removeAllViews(); b.addView(col, FrameLayout.LayoutParams(-1, -1))
     }
 
     // ---------------------------------------------------------------- reverse, freeze
@@ -1566,16 +1833,22 @@ class RollActivity : Activity() {
     private fun outDir() = File(cacheDir, "export").apply { mkdirs() }
 
     private var exDissolve: Map<String, Bitmap>? = null
+    private var exSoundtrack: File? = null
     private fun startExport() {
         val p = project ?: return
         store.save(p)
-        if (exDissolve == null && p.clips.any { it.trans == "dissolve" }) {
+        if (exDissolve == null && (p.clips.any { it.trans == "dissolve" } || (p.audio.isNotEmpty() && exFormat == "video"))) {
             renderExport("Getting ready…", 0)
-            val list = p.clips.map { Clip.from(it.json()) }
-            bg.execute { val m = Render.dissolveFrames(this, list); main.post { exDissolve = m; startExport() } }
+            val copy = Project.from(p.json())
+            bg.execute {
+                val m = Render.dissolveFrames(this, copy.clips)
+                exSoundtrack = if (exFormat == "video" && !copy.mute) try { Audio.mix(this, copy) } catch (e: Throwable) { null } else null
+                main.post { exDissolve = m; startExport() }
+            }
             return
         }
         val diss = exDissolve ?: emptyMap(); exDissolve = null
+        val soundtrack = exSoundtrack; exSoundtrack = null
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val safe = p.name.replace(Regex("[^A-Za-z0-9 _-]"), "").trim().ifBlank { "Roll" }
         try {
@@ -1583,7 +1856,7 @@ class RollActivity : Activity() {
                 "video" -> {
                     val (w, h) = Render.size(p, exShort)
                     val out = File(outDir(), "$safe-$stamp.mp4")
-                    exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir, lvl, diss) },
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir, lvl, diss, 0, soundtrack) },
                         out, MimeTypes.VIDEO_H264, videoBitrate(w, h), { pr -> renderExport("Exporting…", pr) }) { err, note ->
                         exporting = null
                         android.util.Log.i("ROLLTEST", if (err != null) "export failed: $err" else "export ok ${out.path} ${out.length()} ${note ?: ""}")

@@ -44,6 +44,8 @@ class Timeline(ctx: Context) : View(ctx) {
     var onLaneDown: (() -> Unit)? = null
     var selectedText: String? = null
         set(v) { field = v; invalidate() }
+    /** Tapped a music / voice bar (its id). */
+    var onAudio: ((String) -> Unit)? = null
 
     private val d = resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -56,6 +58,7 @@ class Timeline(ctx: Context) : View(ctx) {
     private val handleW get() = dp(12f)
     private val textTop get() = clipTop + clipH + dp(10f)
     private val laneH get() = dp(20f)
+    private val audioTop get() = textTop + laneH + dp(8f)
 
     // the timeline has its own colour: deep steel blue, so the tracks stand apart from the black app
     private val panel = Paint().apply { color = 0xFF0A1218.toInt() }
@@ -173,6 +176,20 @@ class Timeline(ctx: Context) : View(ctx) {
             c.drawText(it.text.replace('\n', ' '), r.left + dp(6f), r.top + laneH * 0.7f, barText)
             c.restore()
         }
+        // music and voiceover lane
+        c.drawRoundRect(dp(6f), audioTop - dp(2f), width - dp(6f), audioTop + laneH + dp(2f), dp(7f), dp(7f), lane)
+        if (p.audio.isEmpty()) c.drawText("♪  music and voiceovers show here", dp(14f), audioTop + laneH * 0.68f, laneHint)
+        for (it in p.audio) {
+            val a = x0 + it.startMs * pxPerMs; val b = x0 + it.endMs * pxPerMs
+            if (b < 0 || a > width) continue
+            r.set(a + dp(1f), audioTop, b - dp(1f), audioTop + laneH)
+            bar.color = if (it.kind == "voice") 0xFFFF7E6B.toInt() else 0xFF7CD1FF.toInt()
+            c.drawRoundRect(r, dp(5f), dp(5f), bar)
+            if (it.id == selectedText) c.drawRoundRect(r, dp(5f), dp(5f), barLine)
+            c.save(); c.clipRect(r)
+            c.drawText((if (it.kind == "voice") "● " else "♪ ") + it.name, r.left + dp(6f), r.top + laneH * 0.7f, barText)
+            c.restore()
+        }
         // add button after the last clip
         val ax = x0 + p.lengthMs * pxPerMs + dp(28f); val ay = clipTop + clipH / 2
         c.drawCircle(ax, ay, dp(18f), plus)
@@ -231,6 +248,10 @@ class Timeline(ctx: Context) : View(ctx) {
                 val t = ((e.x - edgeX) / pxPerMs).toLong()
                 p.texts.lastOrNull { t in it.startMs..it.endMs }?.let { onText?.invoke(it.id); return true }
             }
+            if (e.y in (audioTop - dp(4f))..(audioTop + laneH + dp(4f))) {
+                val t = ((e.x - edgeX) / pxPerMs).toLong()
+                p.audio.lastOrNull { t in it.startMs..it.endMs }?.let { onAudio?.invoke(it.id); return true }
+            }
             // a joint between clips
             if (abs(e.y - (clipTop + clipH / 2)) < dp(22f)) {
                 var jt = 0L
@@ -278,11 +299,11 @@ class Timeline(ctx: Context) : View(ctx) {
             MotionEvent.ACTION_DOWN -> {
                 trimming = 0; moving = null
                 // press on the selected bar: drag to move it in time
-                val sel = p.texts.firstOrNull { it.id == selectedText }
-                if (sel != null && e.y in (textTop - dp(4f))..(textTop + laneH + dp(4f))) {
-                    val t = ((e.x - edgeX) / pxPerMs).toLong()
-                    if (t in sel.startMs..sel.endMs) { moving = sel; moveOrig = sel.startMs; downX = e.x; onLaneDown?.invoke(); return true }
-                }
+                val t0 = ((e.x - edgeX) / pxPerMs).toLong()
+                val selT = p.texts.firstOrNull { it.id == selectedText }
+                val selA = p.audio.firstOrNull { it.id == selectedText }
+                if (selT != null && e.y in (textTop - dp(4f))..(textTop + laneH + dp(4f)) && t0 in selT.startMs..selT.endMs) { moving = selT; moveOrig = selT.startMs; downX = e.x; onLaneDown?.invoke(); return true }
+                if (selA != null && e.y in (audioTop - dp(4f))..(audioTop + laneH + dp(4f)) && t0 in selA.startMs..selA.endMs) { moving = selA; moveOrig = selA.startMs; downX = e.x; onLaneDown?.invoke(); return true }
                 if (selected in p.clips.indices && e.y in clipTop..(clipTop + clipH)) {
                     val a = edgeX + p.startOf(selected) * pxPerMs; val b = a + p.clips[selected].lengthMs * pxPerMs
                     if (abs(e.x - a) < handleW * 1.6f) { trimming = -1; trimClip = selected; trimOrig = p.clips[selected].startMs }
@@ -291,8 +312,11 @@ class Timeline(ctx: Context) : View(ctx) {
                 }
             }
             MotionEvent.ACTION_MOVE -> if (moving != null) {
-                val m = moving!!; val len = m.endMs - m.startMs
-                m.startMs = (moveOrig + ((e.x - downX) / pxPerMs).toLong()).coerceIn(0, maxOf(0, p.lengthMs - 200)); m.endMs = m.startMs + len
+                val to = (moveOrig + ((e.x - downX) / pxPerMs).toLong()).coerceIn(0, maxOf(0, p.lengthMs - 200))
+                when (val m = moving) {
+                    is TextItem -> { val len = m.endMs - m.startMs; m.startMs = to; m.endMs = to + len }
+                    is AudioItem -> m.startMs = to
+                }
                 invalidate(); return true
             } else if (trimming != 0) {
                 val c = p.clips[trimClip]
@@ -302,7 +326,11 @@ class Timeline(ctx: Context) : View(ctx) {
                 invalidate()
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (moving != null) { val moved = abs(e.x - downX) > dp(4f); moving = null; if (moved) onLaneMoved?.invoke() else selectedText?.let { onText?.invoke(it) }; return true }
+                if (moving != null) {
+                    val m = moving; val moved = abs(e.x - downX) > dp(4f); moving = null
+                    if (moved) onLaneMoved?.invoke() else selectedText?.let { if (m is AudioItem) onAudio?.invoke(it) else onText?.invoke(it) }
+                    return true
+                }
                 if (trimming != 0) { trimming = 0; onTrimmed?.invoke(trimClip); return true }
             }
         }
@@ -310,6 +338,6 @@ class Timeline(ctx: Context) : View(ctx) {
         return gestures.onTouchEvent(e)
     }
     private var downX = 0f
-    private var moving: TextItem? = null
+    private var moving: Any? = null
     private var moveOrig = 0L
 }

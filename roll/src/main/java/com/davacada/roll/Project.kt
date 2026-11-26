@@ -106,6 +106,8 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     var grade = Grade()
     var aspect = "original"        // original, 9:16, 4:5, 1:1, 4:3, 16:9, 21:9
     val texts = mutableListOf<TextItem>()
+    val audio = mutableListOf<AudioItem>()
+    var duck = true                // music dips under voiceovers
     var mute = false
 
     val lengthMs get() = clips.sumOf { it.lengthMs }
@@ -123,11 +125,12 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("created", created).put("updated", updated)
         .put("clips", JSONArray().apply { clips.forEach { put(it.json()) } }).put("grade", grade.json()).put("aspect", aspect).put("mute", mute)
         .put("texts", JSONArray().apply { texts.forEach { put(it.json()) } })
+        .put("audio", JSONArray().apply { audio.forEach { put(it.json()) } }).put("duck", duck)
 
     /** Takes everything from [q] (undo / redo). */
     fun copyFrom(q: Project) {
         clips.clear(); clips.addAll(q.clips); grade = q.grade; aspect = q.aspect; mute = q.mute; name = q.name
-        texts.clear(); texts.addAll(q.texts)
+        texts.clear(); texts.addAll(q.texts); audio.clear(); audio.addAll(q.audio); duck = q.duck
     }
 
     companion object {
@@ -136,6 +139,8 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
             o.optJSONArray("clips")?.let { a -> for (i in 0 until a.length()) clips.add(Clip.from(a.getJSONObject(i))) }
             grade = Grade.from(o.optJSONObject("grade")); aspect = o.optString("aspect", "original"); mute = o.optBoolean("mute")
             o.optJSONArray("texts")?.let { a -> for (i in 0 until a.length()) texts.add(TextItem.from(a.getJSONObject(i))) }
+            o.optJSONArray("audio")?.let { a -> for (i in 0 until a.length()) audio.add(AudioItem.from(a.getJSONObject(i))) }
+            duck = o.optBoolean("duck", true)
         }
     }
 }
