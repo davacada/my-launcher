@@ -181,6 +181,7 @@ class RollActivity : Activity() {
 
     /** True while the editor is rebuilt around the same player and viewer (turning the phone, moving the panel). */
     private var reusing = false
+    private var lastRecover = 0L
 
     private fun relayout() {
         val p = project ?: return
@@ -704,7 +705,15 @@ class RollActivity : Activity() {
                 if (isPlaying) main.post(ticker)
                 bed?.let { b -> if (isPlaying) { b.seekTo(timelineTime()); b.play() } else b.pause() }
             }
-            override fun onPlayerError(error: PlaybackException) { toast("Playback: ${error.errorCodeName}") }
+            override fun onPlayerError(error: PlaybackException) {
+                // a hiccup in the phone's decoder (e.g. when the picture's surface changes): quietly reload and carry on
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastRecover > 4000) {
+                    lastRecover = now
+                    val i = pl.currentMediaItemIndex; val pos = pl.currentPosition
+                    pl.prepare(); pl.seekTo(i, pos)
+                } else toast("Playback: ${error.errorCodeName}")
+            }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 if (videoSize.width > 0 && videoSize.height > 0) { videoRatio = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height; project?.let { glView.setRatios(videoRatio, Render.ratio(it)) } }
             }
