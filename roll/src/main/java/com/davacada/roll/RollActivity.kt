@@ -101,6 +101,8 @@ class RollActivity : Activity() {
                 log("reversing")
                 val r = Stills.reverse(this, clip(vids[0]).apply { endMs = 3000 }) { } ?: error("reverse failed")
                 p.clips.addAll(listOf(a, ph, b, r))
+                p.texts.add(TextItem("Hello Roll", 300, 5200).apply { style = "box"; font = "anton"; y = 0.2f })
+                p.texts.add(TextItem("a caption line here", 7000, 11000).apply { caption = true; style = "shadow"; y = 0.8f; size = 0.045f; words.addAll(listOf(0L, 800L, 1600L, 2400L)) })
                 log("clips " + p.clips.joinToString { "${it.lengthMs}" })
                 main.post {
                     store.save(p); open(p)
