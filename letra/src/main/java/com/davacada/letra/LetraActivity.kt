@@ -162,7 +162,7 @@ class LetraActivity : Activity() {
 
         // filters
         val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(20), dp(10), dp(20), dp(10)) }
-        listOf("all" to "All", Note.NOTE to "Notes", Note.LIST to "Lists", Note.SONG to "Songs", Note.SCRIPT to "Scripts").forEach { (k, l) ->
+        listOf("all" to "All", Note.NOTE to "Notes", Note.LIST to "Lists", Note.SONG to "Songs", Note.SCRIPT to "Scripts", Note.WORK to "Work").forEach { (k, l) ->
             val c = if (k == "all") Look.UMBER else Look.color(k)
             chips.addView(chip(l, c, filter == k, if (k == "all") null else Look.icon(k)) { filter = k; home() })
         }
@@ -218,6 +218,7 @@ class LetraActivity : Activity() {
         Note.LIST -> n.items.joinToString(" ") { it.text }
         Note.SONG -> n.lines.joinToString(" ") { it.text } + " " + n.takes.joinToString(" ") { t -> t.heard.joinToString(" ") { it.text } }
         Note.SCRIPT -> n.els.joinToString(" ") { it.text }
+        Note.WORK -> Work.text(n)
         else -> Rich.plain(n.html)
     }).lowercase()
 
@@ -272,6 +273,7 @@ class LetraActivity : Activity() {
     }
 
     private fun preview(n: Note) = when (n.mode) {
+        Note.WORK -> n.shifts.maxByOrNull { it.day }?.let { s -> Work.dayLabel(s.day) + "   in " + Work.clock(s.inMin) + "  →  out " + Work.clock(s.outMin) } ?: ""
         Note.LIST -> n.items.take(4).joinToString("   ") { (if (it.done) "✓ " else "○ ") + it.text }
         Note.SONG -> n.lines.filter { !it.section && it.text.isNotBlank() }.take(2).joinToString(" / ") { it.text }
         Note.SCRIPT -> n.els.filter { it.text.isNotBlank() }.take(2).joinToString(" — ") { if (it.kind == Export.SCENE || it.kind == Export.CHARACTER) it.text.uppercase() else it.text }
@@ -284,6 +286,7 @@ class LetraActivity : Activity() {
             Note.LIST -> "${n.items.count { it.done }}/${n.items.size} done"
             Note.SONG -> listOfNotNull(n.key.ifBlank { null }?.let { "Key $it" }, n.takes.size.takeIf { it > 0 }?.let { "$it take" + if (it > 1) "s" else "" }).joinToString(" · ")
             Note.SCRIPT -> n.els.count { it.kind == Export.SCENE }.let { "$it scene" + if (it != 1) "s" else "" }
+            Note.WORK -> Work.today().substring(0, 7).let { m -> "This month " + Work.dur(n.shifts.filter { Work.monthKey(it.day) == m }.sumOf { it.minutes() ?: 0 }) }
             else -> Rich.plain(n.html).split(Regex("\\s+")).count { it.isNotBlank() }.let { "$it words" }
         }
         return listOf(Look.name(n.mode), extra, time).filter { it.isNotBlank() }.joinToString("  ·  ")
@@ -318,6 +321,7 @@ class LetraActivity : Activity() {
             Triple(Note.LIST, "List", "Checklists, groceries, to-dos"),
             Triple(Note.SONG, "Song", "Lyrics, chords, rhymes, voice takes written out"),
             Triple(Note.SCRIPT, "Script", "Scenes, characters, dialogue"),
+            Triple(Note.WORK, "Work", "When you came in and left, month by month"),
         )
         modes.chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -339,6 +343,8 @@ class LetraActivity : Activity() {
     }
 
     private fun create(mode: String) {
+        // there's one timesheet: open it rather than starting another
+        if (mode == Note.WORK) store.all().firstOrNull { it.mode == Note.WORK }?.let { open(it); return }
         val n = Note(mode = mode)
         when (mode) {
             Note.LIST -> n.items.add(Item("", false))
@@ -353,7 +359,7 @@ class LetraActivity : Activity() {
     fun open(n: Note, fresh: Boolean = false) {
         searching = false
         screen.removeAllViews()
-        val e = when (n.mode) { Note.LIST -> ListEditor(this, n); Note.SONG -> SongEditor(this, n); Note.SCRIPT -> ScriptEditor(this, n); else -> NoteEditor(this, n) }
+        val e = when (n.mode) { Note.LIST -> ListEditor(this, n); Note.SONG -> SongEditor(this, n); Note.SCRIPT -> ScriptEditor(this, n); Note.WORK -> WorkEditor(this, n); else -> NoteEditor(this, n) }
         editor = e
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // top bar
@@ -390,7 +396,7 @@ class LetraActivity : Activity() {
             col.addView(t)
         }
         screen.addView(col, FrameLayout.LayoutParams(-1, -1))
-        if (fresh) main.postDelayed({ if (n.mode == Note.NOTE || n.mode == Note.LIST) e.focusFirst() else { title.requestFocus(); showKeyboard(title) } }, 120)
+        if (fresh && n.mode != Note.WORK) main.postDelayed({ if (n.mode == Note.NOTE || n.mode == Note.LIST) e.focusFirst() else { title.requestFocus(); showKeyboard(title) } }, 120)
     }
 
     fun closeEditor() {
@@ -405,6 +411,7 @@ class LetraActivity : Activity() {
         Note.LIST -> items.all { it.text.isBlank() }
         Note.SONG -> lines.all { it.section || it.text.isBlank() }
         Note.SCRIPT -> els.all { it.text.isBlank() }
+        Note.WORK -> shifts.isEmpty()
         else -> Rich.plain(html).isBlank()
     }
 
@@ -425,6 +432,10 @@ class LetraActivity : Activity() {
                 act(R.drawable.i_file, "Fountain (.fountain)") { Export.send(this, Export.textFile(this, n, Export.fountain(n), "fountain"), "text/plain", t) },
                 act(R.drawable.i_text, "Plain text") { Export.sendText(this, Export.scriptText(n), t) },
                 act(R.drawable.i_list, "Scene list") { Export.sendText(this, Export.sceneList(n), "$t – scenes") },
+            )
+            Note.WORK -> listOf(
+                act(R.drawable.i_text, "Timesheet (text)") { Export.sendText(this, Work.text(n), t) },
+                act(R.drawable.i_pdf, "Timesheet (PDF)") { Export.send(this, Export.plainPdf(this, n, Work.text(n).substringAfter("\n")), "application/pdf", t) },
             )
             Note.LIST -> listOf(
                 act(R.drawable.i_text, "Text") { Export.sendText(this, Export.listText(n), t) },

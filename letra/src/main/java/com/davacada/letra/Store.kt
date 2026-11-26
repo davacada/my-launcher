@@ -36,8 +36,9 @@ class Note(
     val lines = mutableListOf<SongLine>()
     val takes = mutableListOf<Take>()
     val els = mutableListOf<El>()                 // script
+    val shifts = mutableListOf<Shift>()           // work
 
-    fun displayTitle() = title.ifBlank { when (mode) { SONG -> "Untitled song"; SCRIPT -> "Untitled script"; LIST -> "Untitled list"; else -> "Untitled note" } }
+    fun displayTitle() = title.ifBlank { when (mode) { SONG -> "Untitled song"; SCRIPT -> "Untitled script"; WORK -> "Work hours"; LIST -> "Untitled list"; else -> "Untitled note" } }
 
     fun json(): JSONObject = JSONObject().apply {
         put("id", id); put("mode", mode); put("title", title); put("created", created); put("updated", updated)
@@ -53,10 +54,11 @@ class Note(
                 .put("fl", JSONArray().apply { t.flags.forEach { put(it) } }))
         } })
         put("els", JSONArray().apply { els.forEach { put(JSONObject().put("k", it.kind).put("t", it.text)) } })
+        put("sh", JSONArray().apply { shifts.forEach { put(JSONObject().put("d", it.day).put("i", it.inMin ?: -1).put("o", it.outMin ?: -1)) } })
     }
 
     companion object {
-        const val NOTE = "note"; const val LIST = "list"; const val SONG = "song"; const val SCRIPT = "script"
+        const val NOTE = "note"; const val LIST = "list"; const val SONG = "song"; const val SCRIPT = "script"; const val WORK = "work"
 
         fun from(o: JSONObject) = Note(o.getString("id"), o.optString("mode", NOTE), o.optString("title"), o.optLong("created"), o.optLong("updated")).apply {
             html = o.optString("html")
@@ -74,6 +76,7 @@ class Note(
                 takes.add(tk)
             } }
             o.optJSONArray("els")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { els.add(El(it.optString("k"), it.optString("t"))) } }
+            o.optJSONArray("sh")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { shifts.add(Shift(it.optString("d"), it.optInt("i", -1).takeIf { v -> v >= 0 }, it.optInt("o", -1).takeIf { v -> v >= 0 })) } }
         }
     }
 }

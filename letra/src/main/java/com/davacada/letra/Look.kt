@@ -39,15 +39,16 @@ object Look {
     const val OLIVE = 0xFF5A7A3A.toInt()
     const val WALNUT = 0xFF6B5443.toInt()
     const val RED = 0xFFC0392B.toInt()
+    const val TEAL = 0xFF2F6F6A.toInt()
 
     fun color(mode: String) = when (mode) {
-        Note.SONG -> TERRACOTTA; Note.SCRIPT -> SLATE; Note.LIST -> OLIVE; else -> WALNUT
+        Note.SONG -> TERRACOTTA; Note.SCRIPT -> SLATE; Note.LIST -> OLIVE; Note.WORK -> TEAL; else -> WALNUT
     }
     fun icon(mode: String) = when (mode) {
-        Note.SONG -> R.drawable.i_song; Note.SCRIPT -> R.drawable.i_script; Note.LIST -> R.drawable.i_list; else -> R.drawable.i_note
+        Note.SONG -> R.drawable.i_song; Note.SCRIPT -> R.drawable.i_script; Note.LIST -> R.drawable.i_list; Note.WORK -> R.drawable.i_work; else -> R.drawable.i_note
     }
     fun name(mode: String) = when (mode) {
-        Note.SONG -> "Song"; Note.SCRIPT -> "Script"; Note.LIST -> "List"; else -> "Note"
+        Note.SONG -> "Song"; Note.SCRIPT -> "Script"; Note.LIST -> "List"; Note.WORK -> "Work"; else -> "Note"
     }
 
     /** Fine sand grain laid over the whole screen (a small tile of warm brown specks, repeated). */
