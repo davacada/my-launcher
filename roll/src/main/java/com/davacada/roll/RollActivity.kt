@@ -126,6 +126,7 @@ class RollActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            recorder != null -> toast("Tap the red button to stop recording")
             sheetView != null -> closeSheet()
             exportView != null -> { if (exporting == null) closeExport() else toast("Exporting · wait or tap Cancel") }
             panelOpen -> if (clipPanelBefore != null) { editingText = null; timeline?.selectedText = null; closeClipPanel(false) } else if (bottom?.findViewWithTag<View>("grade") != null || gradeBefore != null) closePanel(false) else { panelOpen = false; editBottom() }
@@ -684,6 +685,7 @@ class RollActivity : Activity() {
         val c = p.clips.getOrNull(pl.currentMediaItemIndex) ?: return
         pl.playbackParameters = PlaybackParameters(c.speed)
         pl.volume = if (p.mute) 0f else c.volume
+        refreshSoundtrack()
     }
 
     private fun reloadPlayer(keepTime: Boolean) {
