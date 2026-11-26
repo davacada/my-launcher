@@ -95,6 +95,7 @@ class RollActivity : Activity() {
         if (i.action == Intent.ACTION_SEND) (i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris.add(it) }
         else i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
         if (uris.isEmpty()) i.clipData?.let { cd -> for (k in 0 until cd.itemCount) cd.getItemAt(k).uri?.let { uris.add(it) } }
+        android.util.Log.i("ROLLTEST", "share: ${uris.size} file(s) ${i.type}")
         i.action = Intent.ACTION_MAIN   // handled: don't take it again after a rotation
         if (uris.isEmpty()) { toast("Nothing Roll can use was shared"); return }
         toast("Getting ${uris.size} file${if (uris.size == 1) "" else "s"}…")
@@ -111,6 +112,7 @@ class RollActivity : Activity() {
                     Shared(Uri.fromFile(f), type, name?.substringBeforeLast('.') ?: "Sound")
                 } catch (e: Exception) { null }
             }
+            android.util.Log.i("ROLLTEST", "share: copied ${got.size}")
             main.post { if (got.isEmpty()) toast("Couldn't read what was shared") else shareSheet(got) }
         }
     }
