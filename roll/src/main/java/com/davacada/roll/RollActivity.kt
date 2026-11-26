@@ -107,7 +107,9 @@ class RollActivity : Activity() {
                     val type = contentResolver.getType(u) ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(u.toString().substringAfterLast('.', "").lowercase()) ?: ""
                     val name = contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
                     val ext = name?.substringAfterLast('.', "")?.takeIf { it.length in 1..5 } ?: android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(type) ?: "bin"
-                    val f = File(dir, java.util.UUID.randomUUID().toString() + "." + ext)
+                    // its own folder, so the clip keeps the name it had
+                    val safe = (name?.substringBeforeLast('.') ?: "shared").replace(Regex("[^\\p{L}\\p{N} ._-]"), "_").take(60).ifBlank { "shared" }
+                    val f = File(File(dir, java.util.UUID.randomUUID().toString().take(8)).apply { mkdirs() }, "$safe.$ext")
                     contentResolver.openInputStream(u)!!.use { inp -> f.outputStream().use { inp.copyTo(it) } }
                     Shared(Uri.fromFile(f), type, name?.substringBeforeLast('.') ?: "Sound")
                 } catch (e: Exception) { android.util.Log.i("ROLLTEST", "share: couldn't copy $u: $e"); null }
