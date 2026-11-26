@@ -1767,8 +1767,8 @@ class RollActivity : Activity() {
         setOnClickListener { project?.grade?.let { g -> g.overlay = id; if (g.overlayAmount < 0.05f) g.overlayAmount = 0.8f }; applyGrade(); val keep = gradeBefore; panelOpen = false; overlayPanel(); gradeBefore = keep }
         layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) }
         work {
-            val p = project ?: return@execute
-            val s0 = sample ?: p.clips.getOrNull(p.at(timeline?.time() ?: 0).first)?.let { c -> frameAt(c, c.startMs + 500, 180) }?.also { sample = it } ?: return@execute
+            val p = project ?: return@work
+            val s0 = sample ?: p.clips.getOrNull(p.at(timeline?.time() ?: 0).first)?.let { c -> frameAt(c, c.startMs + 500, 180) }?.also { sample = it } ?: return@work
             val base = gradePreview(s0, p.grade).copy(Bitmap.Config.ARGB_8888, true)
             if (id != "none") {
                 val ov = Overlays.draw(id, base.width, base.height, 0)
