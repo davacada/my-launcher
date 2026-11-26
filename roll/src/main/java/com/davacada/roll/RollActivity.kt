@@ -110,7 +110,7 @@ class RollActivity : Activity() {
                     val f = File(dir, java.util.UUID.randomUUID().toString() + "." + ext)
                     contentResolver.openInputStream(u)!!.use { inp -> f.outputStream().use { inp.copyTo(it) } }
                     Shared(Uri.fromFile(f), type, name?.substringBeforeLast('.') ?: "Sound")
-                } catch (e: Exception) { null }
+                } catch (e: Exception) { android.util.Log.i("ROLLTEST", "share: couldn't copy $u: $e"); null }
             }
             android.util.Log.i("ROLLTEST", "share: copied ${got.size}")
             main.post { if (got.isEmpty()) toast("Couldn't read what was shared") else shareSheet(got) }

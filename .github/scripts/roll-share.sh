@@ -9,7 +9,11 @@ sleep 4
 ID=$(adb shell content query --uri content://media/external/video/media --projection _id:_display_name | grep share-test | sed 's/.*_id=\([0-9]*\).*/\1/' | head -1)
 echo "media id: $ID"
 adb logcat -c
-adb shell am start -a android.intent.action.SEND -t video/mp4 --eu android.intent.extra.STREAM content://media/external/video/media/$ID --grant-read-uri-permission -n com.davacada.roll/.RollActivity
+# the emulator shell can't lend a file the way a real app does, so the test video is served by Roll's own provider
+adb push a.mp4 /data/local/tmp/
+adb shell run-as com.davacada.roll mkdir -p cache/share/t
+adb shell run-as com.davacada.roll cp /data/local/tmp/a.mp4 cache/share/t/holiday.mp4
+adb shell am start -a android.intent.action.SEND -t video/mp4 --eu android.intent.extra.STREAM content://com.davacada.roll.share/t/holiday.mp4 -n com.davacada.roll/.RollActivity
 sleep 8
 adb logcat -d -s ROLLTEST:I
 adb exec-out screencap -p > share0.png
