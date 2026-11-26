@@ -137,7 +137,7 @@ class RollActivity : Activity() {
         val open = project
         if (open != null) col.addView(action(R.drawable.i_film, "Add to “${open.name}”", if (pics.isEmpty()) "On a free audio track at the playhead" else "After the selected clip") { into(open, false) })
         store.all().filter { it.id != open?.id && it.clips.isNotEmpty() }.take(if (open != null) 2 else 3).forEach { p ->
-            col.addView(action(R.drawable.i_reel, "Add to “${p.name}”", "${fmt(p.lengthMs)} · ${p.clips.size} clip${if (p.clips.size == 1) "" else "s"} · at the end") { into(p, false) })
+            col.addView(action(R.drawable.ic_reel, "Add to “${p.name}”", "${fmt(p.lengthMs)} · ${p.clips.size} clip${if (p.clips.size == 1) "" else "s"} · at the end") { into(p, false) })
         }
         if (pics.isEmpty() && open == null && store.all().none { it.clips.isNotEmpty() }) { toast("Sounds need a project with clips: start one first"); return }
         sheet(col)
