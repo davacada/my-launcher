@@ -230,7 +230,44 @@ class WorkEditor(a: LetraActivity, n: Note) : Editor(a, n) {
             Places.setEnabled(a, false); Places.arm(a); a.closeSheet(); a.toast("Location reminders are off"); a.open(n)
         }, LinearLayout.LayoutParams(-2, a.dp(52)).apply { marginStart = a.dp(10) })
         box.addView(row)
+        box.addView(urnikSection())
         a.showSheet("Location reminders", ScrollView(a).apply { addView(box) })
+    }
+
+    /** Urnik.NET: clock in and out there too when you answer Yes. */
+    private fun urnikSection(): View {
+        val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(0, a.dp(22), 0, 0) }
+        box.addView(a.text("Urnik.NET", 17f, Look.UMBER, true).apply { typeface = Typeface.create("serif", Typeface.BOLD); setPadding(a.dp(6), 0, 0, a.dp(4)) })
+        val pkg = Urnik.pkg(a)
+        val svc = Urnik.serviceOn(a)
+        val on = Urnik.enabled(a) && svc
+        val learnedIn = Urnik.learned(a, Places.ASK_IN); val learnedOut = Urnik.learned(a, Places.ASK_OUT)
+        val lines = buildList {
+            add(if (pkg != null) "✓ Urnik.NET is installed" else "✗ Urnik.NET isn't installed on this phone")
+            add(if (svc) "✓ Letra may tap buttons in it" else "✗ Letra isn't allowed to tap buttons yet (Accessibility)")
+            add("Clock-in button: " + (learnedIn ?: "looks for Prihod / Prijava / Začetek"))
+            add("Clock-out button: " + (learnedOut ?: "looks for Odhod / Odjava / Konec"))
+        }
+        box.addView(a.text("When you answer Yes, Letra opens Urnik.NET and taps the clock-in or clock-out button for you, then goes back to the home screen. If the phone is locked, it happens when you unlock it. Urnik.NET records the moment of the tap, so a time you type that's more than 15 minutes off isn't sent there.", 13.5f, Look.SUB).apply { setLineSpacing(0f, 1.15f); setPadding(a.dp(6), 0, a.dp(6), a.dp(8)) })
+        box.addView(a.text(lines.joinToString("\n"), 13f, Look.SOFT).apply { setLineSpacing(0f, 1.25f); setPadding(a.dp(6), 0, a.dp(6), a.dp(10)) })
+        val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        when {
+            pkg == null -> {}
+            !svc -> row.addView(a.bigButton("Allow in Accessibility", null, color, true) {
+                AlertDialog.Builder(a, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert)
+                    .setTitle("Let Letra tap Urnik.NET")
+                    .setMessage("On the next screen open “Letra · Urnik.NET clock in/out” and turn it on.\n\nIf it's greyed out: go to Settings › Apps › Letra, tap ⋮ (top right) › Allow restricted settings, then try again.")
+                    .setPositiveButton("Open settings") { _, _ -> Urnik.setEnabled(a, true); a.startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                    .setNegativeButton("Cancel", null).show()
+            }, LinearLayout.LayoutParams(0, a.dp(52), 1f))
+            on -> {
+                row.addView(a.bigButton("Clock in/out is on", null, color, true) {}, LinearLayout.LayoutParams(0, a.dp(52), 1f))
+                row.addView(a.bigButton("Turn off", null, color, false) { Urnik.setEnabled(a, false); a.closeSheet(); placesSheet() }, LinearLayout.LayoutParams(-2, a.dp(52)).apply { marginStart = a.dp(10) })
+            }
+            else -> row.addView(a.bigButton("Clock in/out on Urnik.NET", null, color, true) { Urnik.setEnabled(a, true); a.closeSheet(); placesSheet() }, LinearLayout.LayoutParams(0, a.dp(52), 1f))
+        }
+        box.addView(row)
+        return box
     }
 
     /** Location while using the app, then "Allow all the time" (Android asks that one separately), then notifications. */

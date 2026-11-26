@@ -190,14 +190,28 @@ object Places {
             s.inMin = min
             store.save(note)
             confirm(c, "Came in at ${Work.clock(min)} · written in Letra")
+            toUrnik(c, kind, min)
         } else {
             val s = open ?: note.shifts.firstOrNull { it.day == today } ?: Shift(today, null, null).also { note.shifts.add(it) }
             s.outMin = min
             store.save(note)
             confirm(c, "Left at ${Work.clock(min)}" + (s.minutes()?.let { " · ${Work.dur(it)} today" } ?: "") + " · written in Letra")
+            toUrnik(c, kind, min)
         }
         Handler(Looper.getMainLooper()).post { Work.changed.toList().forEach { it() } }
     }
+}
+
+/**
+ * Sends the punch to Urnik.NET. It records the moment of the tap, so a time far from now (a correction like
+ * "came in at 7:50" an hour later) isn't sent: that would put the wrong time in your official record.
+ */
+private fun toUrnik(c: Context, kind: String, min: Int) {
+    if (!Urnik.enabled(c)) return
+    val now = Work.nowMin()
+    val diff = minOf(Math.abs(now - min), 1440 - Math.abs(now - min))
+    if (diff <= 15) Urnik.punch(c, kind)
+    else Places.confirm(c, "Written in Letra (${Work.clock(min)}). Not sent to Urnik.NET: it would record ${Work.clock(now)} instead, so fix it there.")
 }
 
 /** Geofence transitions: arriving at work, leaving it, getting home. */

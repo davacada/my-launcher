@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="urnik_desc">Lets Letra clock you in and out in Urnik.NET when you answer a Work reminder with Yes. It only looks at Urnik.NET, and only taps its Prihod / Odhod button (and a confirmation, if one appears).</string>
+</resources>
