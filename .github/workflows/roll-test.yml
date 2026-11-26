@@ -2,6 +2,9 @@ name: Roll test
 
 on:
   workflow_dispatch:
+    inputs:
+      script:
+        default: roll-test
 
 jobs:
   run:
@@ -31,4 +34,5 @@ jobs:
           arch: x86_64
           target: google_apis
           disable-animations: true
-          script: bash .github/scripts/roll-test.sh
+          profile: pixel_6
+          script: bash .github/scripts/${{ inputs.script }}.sh

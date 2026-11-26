@@ -110,6 +110,26 @@ class RollActivity : Activity() {
                 log("clips " + p.clips.joinToString { "${it.lengthMs}" })
                 main.post {
                     store.save(p); open(p)
+                    if (intent?.getStringExtra("selftest") == "tour") {
+                        // a tour of the panels, for screenshots
+                        val steps = listOf<Pair<String, () -> Unit>>(
+                            "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
+                            "frame" to { framePanel(0) },
+                            "transition" to { closeClipPanel(false); transitionPanel(0) },
+                            "text-style" to { closeClipPanel(false); seekTimeline(1500); textTab = "style"; textEditor(p.texts[0]) },
+                            "text-font" to { val k = clipPanelBefore; textTab = "font"; textEditor(p.texts[0]); clipPanelBefore = k },
+                            "text-motion" to { val k = clipPanelBefore; textTab = "motion"; textEditor(p.texts[0]); clipPanelBefore = k },
+                            "audio" to { editingText = null; closeClipPanel(false); audioPanel() },
+                            "captions" to { panelOpen = false; editBottom(); captionsPanel() },
+                            "film" to { panelOpen = false; editBottom(); seekTimeline(5000); filmPanel(Looks.CINEMA) },
+                            "adjust-split" to { closePanel(false); adjTab = "split"; adjustPanel() },
+                            "adjust-effects" to { closePanel(false); adjTab = "effects"; adjustPanel() },
+                            "aspect" to { closePanel(false); aspectMenu() },
+                        )
+                        steps.forEachIndexed { k, (name, f) -> main.postDelayed({ try { f() } catch (e: Throwable) { log("step $name failed: $e") }; main.postDelayed({ log("shot $k $name") }, 2500) }, 5000L + k * 6000L) }
+                        main.postDelayed({ closeSheet(); log("tour done") }, 5000L + steps.size * 6000L)
+                        return@post
+                    }
                     val starts = (0..3).map { p.startOf(it) }
                     val shots = listOf(1500L, starts[1] - 10, starts[1] + 300, starts[2] - 150, starts[2] + 1500, starts[3] + 800)
                     shots.forEachIndexed { k, t -> main.postDelayed({ seekTimeline(t); log("shot $k at $t") }, 4000L + k * 4000L) }
