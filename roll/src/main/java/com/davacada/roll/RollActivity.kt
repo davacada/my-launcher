@@ -110,7 +110,7 @@ class RollActivity : Activity() {
                 log("clips " + p.clips.joinToString { "${it.lengthMs}" })
                 main.post {
                     store.save(p); open(p)
-                    if (intent?.getStringExtra("selftest") == "tour") {
+                    if (intent?.getStringExtra("selftest")?.startsWith("tour") == true) {
                         // a tour of the panels, for screenshots
                         val steps = listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
@@ -125,7 +125,12 @@ class RollActivity : Activity() {
                             "adjust-split" to { closePanel(false); adjTab = "split"; adjustPanel() },
                             "adjust-effects" to { closePanel(false); adjTab = "effects"; adjustPanel() },
                             "aspect" to { closePanel(false); aspectMenu() },
-                        )
+                        ) + (if (intent?.getStringExtra("selftest") == "tour-land") listOf<Pair<String, () -> Unit>>(
+                            "panel-left" to { closeSheet(); prefs().edit().putBoolean("panelLeft", true).apply(); relayout() },
+                            "left-film" to { filmPanel(Looks.MOODS) },
+                            "left-text" to { closePanel(false); seekTimeline(1500); textTab = "color"; textEditor(p.texts[0]) },
+                            "left-timeline" to { editingText = null; closeClipPanel(false); seekTimeline(6500) },
+                        ) else emptyList())
                         steps.forEachIndexed { k, (name, f) -> main.postDelayed({ try { f() } catch (e: Throwable) { log("step $name failed: $e") }; main.postDelayed({ log("shot $k $name") }, 2500) }, 5000L + k * 6000L) }
                         main.postDelayed({ closeSheet(); log("tour done") }, 5000L + steps.size * 6000L)
                         return@post
