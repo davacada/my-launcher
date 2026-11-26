@@ -137,14 +137,47 @@ class Paper(ctx: Context) : View(ctx) {
 }
 
 /** The tuner needle, drawn in pencil: ticks over ±50 cents, highlighter on the in-tune zone. */
+/**
+ * A needle with a little mass: readings set where it wants to go, and a damped spring moves it there
+ * frame by frame, so it glides, settles with a tiny overshoot and drifts home when the sound stops.
+ */
+class Spring(private val stiffness: Double = 90.0, private val damping: Double = 14.0) {
+    var pos = 0.0; private set
+    private var vel = 0.0
+    var target = 0.0
+    /** Advances by [dt] seconds; returns true while still moving. */
+    fun step(dt: Double): Boolean {
+        var t = dt.coerceIn(0.0, 0.05)
+        while (t > 0) {                         // small sub-steps keep it stable on slow frames
+            val h = minOf(t, 0.008)
+            val a = stiffness * (target - pos) - damping * vel
+            vel += a * h; pos += vel * h; t -= h
+        }
+        return abs(target - pos) > 0.05 || abs(vel) > 0.05
+    }
+}
+
 class Needle(ctx: Context) : View(ctx) {
-    private var cents = 0.0; private var active = false; private var shown = 0.0
+    private var active = false
+    private val spring = Spring()
+    private var lastFrame = 0L
+    private var glow = 0f                        // fades the needle ink in and out
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
-    fun set(c: Double?, on: Boolean) { active = on; if (c != null) cents = c.coerceIn(-50.0, 50.0); invalidate() }
+    fun set(c: Double?, on: Boolean) {
+        active = on
+        spring.target = if (on && c != null) c.coerceIn(-55.0, 55.0) else 0.0
+        if (lastFrame == 0L) lastFrame = System.nanoTime()
+        postInvalidateOnAnimation()
+    }
     override fun onDraw(c: Canvas) {
+        val now = System.nanoTime()
+        val dt = if (lastFrame == 0L) 0.016 else (now - lastFrame) / 1e9
+        lastFrame = now
+        val moving = spring.step(dt)
+        glow += ((if (active) 1f else 0f) - glow) * (1f - Math.exp(-dt * 6).toFloat())
+
         val cx = width / 2f; val cy = height * 0.97f
         val r = min(width * 0.45f, height * 0.9f)
-        // highlighter on the in-tune zone
         p.style = Paint.Style.STROKE; p.color = C.MANGO; p.alpha = 200; p.strokeWidth = context.dpf(15f)
         val oval = RectF(cx - r * 0.97f, cy - r * 0.97f, cx + r * 0.97f, cy + r * 0.97f)
         c.drawArc(oval, -90f - 7f, 14f, false, p)
@@ -156,22 +189,33 @@ class Needle(ctx: Context) : View(ctx) {
             p.strokeWidth = context.dpf(if (a % 10 == 0) 2f else 1.2f)
             c.drawLine(cx + (inner * sin(rad)).toFloat(), cy - (inner * cos(rad)).toFloat(), cx + (r * sin(rad)).toFloat(), cy - (r * cos(rad)).toFloat(), p)
         }
-        p.alpha = 255
-        shown += (cents - shown) * 0.35
-        val rad = Math.toRadians(if (active) shown else 0.0)
-        p.color = if (active) C.INK else C.SUB
+        val rad = Math.toRadians(spring.pos.coerceIn(-55.0, 55.0))
+        p.color = blend(C.SUB, C.INK, glow); p.alpha = 255
         p.strokeWidth = context.dpf(2.6f)
         c.drawLine(cx, cy, cx + (r * 0.82f * sin(rad)).toFloat(), cy - (r * 0.82f * cos(rad)).toFloat(), p)
         p.color = C.RED; c.drawCircle(cx, cy, context.dpf(7f), p)
-        if (active && abs(shown - cents) > 0.3) postInvalidateOnAnimation()
+        if (moving || abs(glow - (if (active) 1f else 0f)) > 0.01f) postInvalidateOnAnimation() else lastFrame = 0L
     }
+    private fun blend(a: Int, b: Int, t: Float): Int = Color.rgb(
+        (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(),
+        (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt(),
+        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt())
 }
 
 /** Piano: a pencil line with the reading as a red dot. */
 class CentsBar(ctx: Context) : View(ctx) {
     var cents: Double? = null
+        set(v) { field = v; spring.target = v?.coerceIn(-50.0, 50.0) ?: 0.0; if (lastFrame == 0L) lastFrame = System.nanoTime(); postInvalidateOnAnimation() }
+    private val spring = Spring(110.0, 17.0)
+    private var lastFrame = 0L
+    private var alphaDot = 0f
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
     override fun onDraw(c: Canvas) {
+        val now = System.nanoTime()
+        val dt = if (lastFrame == 0L) 0.016 else (now - lastFrame) / 1e9
+        lastFrame = now
+        val moving = spring.step(dt)
+        alphaDot += ((if (cents != null) 1f else 0f) - alphaDot) * (1f - Math.exp(-dt * 7).toFloat())
         val y = height / 2f
         p.color = C.MANGO; p.alpha = 190; p.strokeWidth = context.dpf(14f)
         c.drawLine(width / 2f - width * 0.05f, y, width / 2f + width * 0.05f, y, p)
@@ -181,10 +225,11 @@ class CentsBar(ctx: Context) : View(ctx) {
             val x = width / 2f + k * (width / 2f - context.dpf(10f)) / 5f
             c.drawLine(x, y - context.dpf(if (k == 0) 11f else 6f), x, y + context.dpf(if (k == 0) 11f else 6f), p)
         }
-        cents?.let {
-            val x = (width / 2f + (it.coerceIn(-50.0, 50.0) / 50.0 * (width / 2f - context.dpf(10f)))).toFloat()
-            p.color = C.RED; c.drawCircle(x, y, context.dpf(9f), p)
+        if (alphaDot > 0.01f) {
+            val x = (width / 2f + (spring.pos / 50.0 * (width / 2f - context.dpf(10f)))).toFloat()
+            p.color = C.RED; p.alpha = (255 * alphaDot).toInt(); c.drawCircle(x, y, context.dpf(9f), p)
         }
+        if (moving || abs(alphaDot - (if (cents != null) 1f else 0f)) > 0.01f) postInvalidateOnAnimation() else lastFrame = 0L
     }
 }
 

@@ -195,7 +195,7 @@ class CuerdaActivity : Activity() {
         }
         val f = r.first
         if (recent.isNotEmpty() && abs(Notes.midiOf(f) - Notes.midiOf(recent.last())) > 0.7) recent.clear()
-        recent.add(f); if (recent.size > 5) recent.removeAt(0)
+        recent.add(f); if (recent.size > 3) recent.removeAt(0)
         val fm = recent.sorted()[recent.size / 2]
         lastHeard = now
         val midiF = Notes.midiOf(fm)
@@ -207,7 +207,13 @@ class CuerdaActivity : Activity() {
             else -> strings.minBy { abs(it - midiF) }
         }
         val stretch = if (instrument.id == "piano") Notes.pianoStretch(target) else 0.0
-        val cents = Notes.cents(fm, target.toDouble()) - stretch
+        val raw = Notes.cents(fm, target.toDouble()) - stretch
+        // steady the reading: follow quickly when the string is moved a lot, gently when it's close
+        val cents = if (target != lastTarget || smoothCents.isNaN()) raw else {
+            val d = raw - smoothCents
+            smoothCents + d * (if (abs(d) > 15) 0.6 else 0.3)
+        }
+        smoothCents = cents
         lastTarget = target
         noteText?.apply { text = Notes.name(target); setTextColor(C.INK) }
         octText?.text = Notes.octave(target).toString()
@@ -225,7 +231,7 @@ class CuerdaActivity : Activity() {
         }
         hzText?.text = String.format(Locale.US, "%.1f Hz → %.1f Hz", fm, Notes.freq(target + stretch / 100))
         needle?.set(cents, true)
-        centsBar?.apply { this.cents = cents; invalidate() }
+        centsBar?.cents = cents
         keyboard?.apply {
             lit = target
             if (target < startC || target >= startC + 24) { startC = Math.floorDiv(target, 12) * 12; keyboardStart = startC }
@@ -235,9 +241,12 @@ class CuerdaActivity : Activity() {
         if (tone.isPlaying) tone.freq = Notes.freq(target + stretch / 100)
     }
 
+    private var smoothCents = Double.NaN
+
     private fun showIdle() {
+        smoothCents = Double.NaN
         needle?.set(null, false)
-        centsBar?.apply { cents = null; invalidate() }
+        centsBar?.cents = null
         centsText?.apply { text = if (instrument.id == "piano") "play one key" else "play a string"; setTextColor(C.SUB); highlight(null) }
         hzText?.text = if (hasMic()) String.format(Locale.US, "A4 = %.0f Hz", Notes.a4) else "Allow the microphone to tune"
     }
