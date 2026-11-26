@@ -73,6 +73,46 @@ class RollActivity : Activity() {
         }
         setContentView(root)
         home()
+        intent?.getStringExtra("selftest")?.let { selfTest() }
+    }
+
+    /**
+     * A self-test for the build machine (adb shell am start ... --es selftest 1): builds a project from the
+     * files in files/selftest, shows framing, a dissolve, a photo and a reversed clip, then exports.
+     * Progress is written to the log under "ROLLTEST".
+     */
+    private fun selfTest() {
+        fun log(m: String) = android.util.Log.i("ROLLTEST", m)
+        bg.execute {
+            try {
+                val dir = File(filesDir, "selftest")
+                val vids = (dir.listFiles { f -> f.name.endsWith(".mp4") } ?: emptyArray()).sortedBy { it.name }
+                val photo = dir.listFiles { f -> f.name.endsWith(".jpg") }?.firstOrNull()
+                fun clip(f: File): Clip {
+                    val mr = MediaMetadataRetriever(); mr.setDataSource(f.path)
+                    val dur = mr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)!!.toLong()
+                    val w = mr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)!!.toInt(); val h = mr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)!!.toInt()
+                    mr.release(); return Clip(Uri.fromFile(f).toString(), dur, 0, minOf(dur, 4000), w = w, h = h)
+                }
+                val p = Project(name = "Selftest"); p.aspect = "9:16"
+                val a = clip(vids[0]).apply { fit = true; bg = "blur"; trans = "dissolve"; transMs = 1000 }
+                val ph = Stills.stillClip(this, Stills.decodePhoto(this, Uri.fromFile(photo!!)), "photo", 3000).apply { trans = "zoom"; transMs = 800 }
+                val b = clip(vids.getOrElse(1) { vids[0] }).apply { trans = "whip"; transMs = 800; rot = 8f; scale = 1.2f }
+                log("reversing")
+                val r = Stills.reverse(this, clip(vids[0]).apply { endMs = 3000 }) { } ?: error("reverse failed")
+                p.clips.addAll(listOf(a, ph, b, r))
+                log("clips " + p.clips.joinToString { "${it.lengthMs}" })
+                main.post {
+                    store.save(p); open(p)
+                    val starts = (0..3).map { p.startOf(it) }
+                    val shots = listOf(1500L, starts[1] - 10, starts[1] + 300, starts[2] - 150, starts[2] + 1500, starts[3] + 800)
+                    shots.forEachIndexed { k, t -> main.postDelayed({ seekTimeline(t); log("shot $k at $t") }, 4000L + k * 4000L) }
+                    main.postDelayed({
+                        log("export start"); exFormat = "video"; exShort = 720; exFps = 25; openExport(); startExport()
+                    }, 4000L + shots.size * 4000L)
+                }
+            } catch (e: Throwable) { log("failed: $e"); android.util.Log.e("ROLLTEST", "failed", e) }
+        }
     }
 
     override fun onPause() { super.onPause(); player?.pause(); project?.let { store.save(it) }; if (project != null && ::glView.isInitialized) glView.onPause() }
@@ -1320,6 +1360,7 @@ class RollActivity : Activity() {
                     exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, !p.mute, store.lutDir, lvl, diss) },
                         out, MimeTypes.VIDEO_H264, videoBitrate(w, h), { pr -> renderExport("Exporting…", pr) }) { err, note ->
                         exporting = null
+                        android.util.Log.i("ROLLTEST", if (err != null) "export failed: $err" else "export ok ${out.path} ${out.length()} ${note ?: ""}")
                         if (err != null) renderExport("Couldn't export: $err")
                         else { val u = Render.saveToGallery(this, out, out.name, "video/mp4"); renderExport(note ?: "Saved to Movies/Roll", 100, out, "video/mp4", u) }
                     }
