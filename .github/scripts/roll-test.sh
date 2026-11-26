@@ -16,6 +16,11 @@ for i in $(seq 1 240); do
   if grep -q "export ok\|export failed\|failed:" rt.txt; then break; fi
 done
 adb exec-out screencap -p > shotend.png
+# sideways: back to the editor, turn the phone
+adb shell input keyevent 4; sleep 2
+adb shell settings put system accelerometer_rotation 0; adb shell settings put system user_rotation 1; sleep 6
+adb exec-out screencap -p > shotland.png
+adb shell settings put system user_rotation 0; sleep 3
 cat rt.txt
 adb logcat -d > logcat.txt || true
 P=$(grep -o "export ok [^ ]*" rt.txt | awk '{print $3}')

@@ -170,7 +170,14 @@ vec3 frameColor(vec2 uv) {
   }
   if (uP2.w > 0.001) {                                                            // dissolve from the last frame before
     vec2 t = mapUv(uv, uP1.x, uA.y, uP1.y, uP1.z, uP2.xy, uP1.w, uP2.z);
-    vec3 p = inside(t) ? PREV(t).rgb : vec3(0.0);
+    vec3 p;
+    if (inside(t)) p = PREV(t).rgb;
+    else {                                                                        // its blurred background
+      vec2 f = mapUv(uv, uP1.x, uA.y, 0.0, 1.12, vec2(0.0), 0.0, uP2.z);
+      p = vec3(0.0);
+      for (int i = 0; i < 12; i++) { float a = float(i) * 2.39996; float r = 0.012 + 0.07 * sqrt(float(i) / 12.0); p += PREV(clamp(f + vec2(cos(a), sin(a)) * r, 0.0, 1.0)).rgb; }
+      p = p / 12.0 * 0.72;
+    }
     c = mix(c, p, uP2.w);
   }
   return clamp(c, 0.0, 1.0);
