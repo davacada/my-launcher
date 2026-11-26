@@ -125,6 +125,11 @@ object Render {
                     dissolve: Map<String, Bitmap> = emptyMap(), fromMs: Long = 0, soundtrack: File? = null): Composition {
         val withSound = withSoundAsked && level < 2
         val grade = gradeEffects(ctx, p.grade, lutDir)
+        // V2 / V3: one frame reader for the whole export (only the clips that fall in this stretch)
+        val endMs = fromMs + clips.sumOf { it.lengthMs }
+        val ovClips = p.overlays.filter { it.track < 2 && it.endAt > fromMs && it.at < endMs }.map { Clip.from(it.json()) }
+        val overlayFrames = if (ovClips.isEmpty()) null else OverlayFrames(ctx, ovClips)
+        val shown = (0..1).map { k -> p.vTracks.getOrNull(k)?.hide != true }
         val items = clips.mapIndexed { idx, c ->
             val mi = MediaItem.Builder().setUri(Uri.parse(c.uri)).setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder().setStartPositionMs(c.startMs).setEndPositionMs(c.endMs).build()).build()
@@ -135,7 +140,8 @@ object Render {
             }
             // Phones like the Red Magic record 24-bit sound; the mixers only take 16-bit, so convert first.
             if (withSound) { audio.add(0, androidx.media3.common.audio.ToInt16PcmAudioProcessor()); audio.add(volume(c.volume)); audio.add(resample()) }
-            video.add(RollFrame(clips, idx, w, h, clips.getOrNull(idx - 1)?.let { dissolve[it.id] }, p.grade.fx(), p.vHide))
+            video.add(RollFrame(clips, idx, w, h, clips.getOrNull(idx - 1)?.let { dissolve[it.id] }, p.grade.fx(), p.vHide,
+                overlayFrames, shown, fromMs + clips.take(idx).sumOf { it.lengthMs }))
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
             // titles and captions go on top of the grade

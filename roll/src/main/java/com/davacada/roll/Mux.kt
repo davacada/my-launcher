@@ -42,6 +42,14 @@ object Mux {
             t += c.lengthMs
             progress((i + 1) * 60 / maxOf(1, p.clips.size))
         }
+        // V2 / V3 clips' own sound, where they sit
+        if (p.clipSound()) for (o in p.overlays) {
+            if (o.volume <= 0f || o.still.isNotEmpty() || o.revOf != null || p.vTracks.getOrNull(o.track)?.hide == true) continue
+            var pcm = Audio.decode(ctx, o.uri, o.startMs, o.endMs - o.startMs)
+            if (o.speed != 1f && pcm.isNotEmpty()) pcm = stretch(pcm, o.speed)
+            val at0 = (o.at * rate / 1000).toInt()
+            for (k in 0 until pcm.size / 2) { val q = at0 + k; if (q >= n) break; acc[q * 2] += pcm[k * 2] / 32768f * o.volume; acc[q * 2 + 1] += pcm[k * 2 + 1] / 32768f * o.volume }
+        }
         val clipsOnly = acc.copyOf()
         if (p.musicSound()) Audio.mix(ctx, p)?.also { android.util.Log.i("ROLLTEST", "soundtrack ${it.length()} bytes") }?.let { f ->
             // music + voice (already mixed with fades and ducking)

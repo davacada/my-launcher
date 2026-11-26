@@ -19,7 +19,9 @@ import androidx.media3.effect.GlShaderProgram
  */
 @UnstableApi
 class RollFrame(private val clips: List<Clip>, private val index: Int, private val outW: Int, private val outH: Int, private val prevFrame: Bitmap?,
-                private val fx: FloatArray = FloatArray(4), private val hide: Boolean = false) : GlEffect {
+                private val fx: FloatArray = FloatArray(4), private val hide: Boolean = false,
+                /** V2 / V3: their frames, which tracks show, and where this clip starts in the edit. */
+                private val overlays: OverlayFrames? = null, private val shownTracks: List<Boolean> = emptyList(), private val clipStartMs: Long = 0) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program()
 
     private inner class Program : BaseGlShaderProgram(false, 1) {
@@ -29,6 +31,7 @@ class RollFrame(private val clips: List<Clip>, private val index: Int, private v
         private var inW = 1; private var inH = 1
         private var firstUs = Long.MIN_VALUE
         private var prevTex = 0
+        private val layerTex = IntArray(2); private val layerBmp = arrayOfNulls<Bitmap>(2)
 
         override fun configure(inputWidth: Int, inputHeight: Int): Size { inW = inputWidth; inH = inputHeight; return Size(outW, outH) }
 
@@ -45,7 +48,31 @@ class RollFrame(private val clips: List<Clip>, private val index: Int, private v
                 GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
                 GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, prevFrame, 0)
             }
+            // V2 / V3 frames for this moment
+            val layerU = Array(2) { floatArrayOf(1f, 0f, 1f, 0f) to floatArrayOf(0f, 0f, 0f, 0f) }
+            overlays?.let { ov ->
+                val t = clipStartMs + local
+                for (k in 0..1) {
+                    if (shownTracks.getOrElse(k) { true } == false) continue
+                    val o = ov.clips.lastOrNull { it.track == k && t >= it.at && t < it.endAt } ?: continue
+                    val bm = ov.frame(o, o.startMs + ((t - o.at) * o.speed).toLong()) ?: continue
+                    if (layerTex[k] == 0) {
+                        val tt = IntArray(1); GLES20.glGenTextures(1, tt, 0); layerTex[k] = tt[0]
+                        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, layerTex[k])
+                        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+                    }
+                    if (layerBmp[k] !== bm) { GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, layerTex[k]); GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bm, 0); layerBmp[k] = bm }
+                    layerU[k] = floatArrayOf(o.aspect, if (o.fit) 1f else 0f, o.scale, (o.rot * Math.PI / 180).toFloat()) to floatArrayOf(o.ox, o.oy, if (o.flip) 1f else 0f, o.opacity)
+                }
+            }
             prog.use()
+            for (k in 0..1) {
+                prog.setSamplerTexIdUniform("uL$k", if (layerTex[k] != 0) layerTex[k] else inputTexId, 2 + k)
+                prog.setFloatsUniform("uL${k}A", layerU[k].first); prog.setFloatsUniform("uL${k}B", if (layerTex[k] != 0) layerU[k].second else floatArrayOf(0f, 0f, 0f, 0f))
+            }
             prog.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             prog.setSamplerTexIdUniform("uPrev", if (prevTex != 0) prevTex else inputTexId, 1)
             val u = f.uniforms()
@@ -60,6 +87,7 @@ class RollFrame(private val clips: List<Clip>, private val index: Int, private v
         override fun release() {
             super.release()
             if (prevTex != 0) GLES20.glDeleteTextures(1, intArrayOf(prevTex), 0)
+            for (k in 0..1) if (layerTex[k] != 0) GLES20.glDeleteTextures(1, intArrayOf(layerTex[k]), 0)
             prog.delete()
         }
     }
@@ -76,11 +104,24 @@ uniform sampler2D uTexSampler;
 uniform sampler2D uPrev;
 uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uE;
 uniform float uHide;
+uniform sampler2D uL0; uniform sampler2D uL1;
+uniform vec4 uL0A; uniform vec4 uL0B; uniform vec4 uL1A; uniform vec4 uL1B;
 varying vec2 vUv;
 #define SRC(t) texture2D(uTexSampler, t)
 #define PREV(t) texture2D(uPrev, vec2((t).x, 1.0 - (t).y))
 """ + Scene.BODY + """
-void main() { gl_FragColor = vec4(uHide > 0.5 ? vec3(0.0) : frameColor(vUv), 1.0); }
+vec3 layer(vec3 c, vec2 uv, sampler2D s, vec4 A, vec4 B) {
+  if (B.w < 0.001) return c;
+  vec2 t = mapUv(uv, A.x, uA.y, A.y, A.z, B.xy, A.w, B.z);
+  if (!inside(t)) return c;
+  return mix(c, texture2D(s, vec2(t.x, 1.0 - t.y)).rgb, B.w);
+}
+void main() {
+  vec3 c = uHide > 0.5 ? vec3(0.0) : frameColor(vUv);
+  c = layer(c, vUv, uL0, uL0A, uL0B);
+  c = layer(c, vUv, uL1, uL1A, uL1B);
+  gl_FragColor = vec4(c, 1.0);
+}
 """
     }
 }

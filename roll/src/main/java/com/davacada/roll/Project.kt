@@ -35,6 +35,9 @@ class Clip(
     // what kind of clip
     var still = ""                 // "" a video · "photo" · "freeze"
     var revOf: String? = null      // JSON of the clip before it was reversed
+    // on V2 and up (overlays): where it starts in the edit, which track (0 = V2), how see-through
+    var at = 0L; var track = 0; var opacity = 1f
+    val endAt get() = at + lengthMs
 
     /** How long it lasts in the edit (after speed). */
     val lengthMs get() = ((endMs - startMs) / speed).toLong()
@@ -43,7 +46,7 @@ class Clip(
     fun json(): JSONObject = JSONObject().put("u", uri).put("src", sourceMs).put("s", startMs).put("e", endMs)
         .put("sp", speed.toDouble()).put("v", volume.toDouble()).put("w", w).put("h", h).put("id", id)
         .put("fit", fit).put("bg", bg).put("sc", scale.toDouble()).put("ox", ox.toDouble()).put("oy", oy.toDouble()).put("rot", rot.toDouble())
-        .put("fl", flip).put("kb", kenBurns).put("tr", trans).put("trm", transMs).put("still", still).apply { revOf?.let { put("rev", it) } }
+        .put("fl", flip).put("kb", kenBurns).put("tr", trans).put("trm", transMs).put("still", still).put("at", at).put("trk", track).put("op", opacity.toDouble()).apply { revOf?.let { put("rev", it) } }
 
     fun copy() = from(json().put("id", UUID.randomUUID().toString()))
     fun framingFrom(o: Clip) { fit = o.fit; bg = o.bg; scale = o.scale; ox = o.ox; oy = o.oy; rot = o.rot; flip = o.flip }
@@ -55,6 +58,7 @@ class Clip(
             ox = o.optDouble("ox", 0.0).toFloat(); oy = o.optDouble("oy", 0.0).toFloat(); rot = o.optDouble("rot", 0.0).toFloat()
             flip = o.optBoolean("fl"); kenBurns = o.optBoolean("kb"); trans = o.optString("tr", "none"); transMs = o.optLong("trm", 500L)
             still = o.optString("still", ""); revOf = if (o.has("rev")) o.optString("rev") else null
+            at = o.optLong("at"); track = o.optInt("trk"); opacity = o.optDouble("op", 1.0).toFloat()
         }
     }
 }
@@ -127,9 +131,15 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     var tHide = false; var tLock = false
     /** Audio tracks after A1 (A1 is the clips' own sound): A2, A3, … each with mute / solo / lock. */
     val aTracks = mutableListOf(Track())
-    class Track(var mute: Boolean = false, var solo: Boolean = false, var lock: Boolean = false) {
-        fun json(): JSONObject = JSONObject().put("m", mute).put("s", solo).put("l", lock)
+    class Track(var mute: Boolean = false, var solo: Boolean = false, var lock: Boolean = false, var hide: Boolean = false) {
+        fun json(): JSONObject = JSONObject().put("m", mute).put("s", solo).put("l", lock).put("h", hide)
     }
+    /** Clips on V2, V3 … (over V1), placed freely in time. */
+    val overlays = mutableListOf<Clip>()
+    /** V2, V3 …: hide and lock. */
+    val vTracks = mutableListOf<Track>()
+    /** The overlay showing on track [k] at [t], if any. */
+    fun overlayAt(k: Int, t: Long) = overlays.lastOrNull { it.track == k && t >= it.at && t < it.endAt }
     private fun anySolo() = vSolo || aTracks.any { it.solo }
     /** Whether the clips' own sound (A1) is heard. */
     fun clipSound() = !mute && !vMute && (!anySolo() || vSolo)
@@ -157,6 +167,7 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
         .put("audio", JSONArray().apply { audio.forEach { put(it.json()) } }).put("duck", duck)
         .put("tracks", JSONObject().put("vm", vMute).put("vs", vSolo).put("vl", vLock).put("vh", vHide).put("th", tHide).put("tl", tLock))
         .put("atracks", JSONArray().apply { aTracks.forEach { put(it.json()) } })
+        .put("overlays", JSONArray().apply { overlays.forEach { put(it.json()) } }).put("vtracks", JSONArray().apply { vTracks.forEach { put(it.json()) } })
 
     /** Takes everything from [q] (undo / redo). */
     fun copyFrom(q: Project) {
@@ -164,6 +175,7 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
         texts.clear(); texts.addAll(q.texts); audio.clear(); audio.addAll(q.audio); duck = q.duck
         vMute = q.vMute; vSolo = q.vSolo; vLock = q.vLock; vHide = q.vHide; tHide = q.tHide; tLock = q.tLock
         aTracks.clear(); aTracks.addAll(q.aTracks.map { Track(it.mute, it.solo, it.lock) })
+        overlays.clear(); overlays.addAll(q.overlays); vTracks.clear(); vTracks.addAll(q.vTracks.map { Track(it.mute, it.solo, it.lock, it.hide) })
     }
 
     companion object {
@@ -178,6 +190,9 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
                 aTracks[0] = Track(t.optBoolean("am"), t.optBoolean("as"), t.optBoolean("al")) }
             o.optJSONArray("atracks")?.let { a -> aTracks.clear(); for (i in 0 until a.length()) a.getJSONObject(i).let { aTracks.add(Track(it.optBoolean("m"), it.optBoolean("s"), it.optBoolean("l"))) }; if (aTracks.isEmpty()) aTracks.add(Track()) }
             audio.forEach { it.track = it.track.coerceIn(0, aTracks.size - 1) }
+            o.optJSONArray("vtracks")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { vTracks.add(Track(lock = it.optBoolean("l"), hide = it.optBoolean("h"))) } }
+            o.optJSONArray("overlays")?.let { a -> for (i in 0 until a.length()) overlays.add(Clip.from(a.getJSONObject(i))) }
+            while (vTracks.size < (overlays.maxOfOrNull { it.track + 1 } ?: 0)) vTracks.add(Track())
         }
     }
 }

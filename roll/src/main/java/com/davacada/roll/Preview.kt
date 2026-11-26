@@ -27,6 +27,13 @@ import javax.microedition.khronos.opengles.GL10
 class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GLSurfaceView.Renderer, SurfaceTexture.OnFrameAvailableListener {
     /** Gets the surface the player should draw into (again after the screen comes back). */
     var onSurface: ((Surface) -> Unit)? = null
+    /** Surfaces for the overlay players (V2, V3). */
+    var onLayerSurface: ((Int, Surface) -> Unit)? = null
+    /** V2 / V3 now: aspect, fit, scale, rotation (rad), x, y, flip, opacity — or null when nothing shows. */
+    @Volatile var layers = arrayOfNulls<FloatArray>(2)
+        set(v) { field = v; requestRender() }
+    private val layerTex = IntArray(2); private val layerSt = arrayOfNulls<SurfaceTexture>(2); private val layerSurf = arrayOfNulls<Surface>(2)
+    private val layerMat = Array(2) { FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) } }
     /** Show the picture without the grade (while the preview is held). */
     var bypass = false
         set(v) { field = v; requestRender() }
@@ -122,7 +129,7 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
         }
     }
 
-    fun release() { work.shutdownNow(); queueEvent { st?.release(); surface?.release() } }
+    fun release() { work.shutdownNow(); queueEvent { st?.release(); surface?.release(); for (k in 0..1) { layerSt[k]?.release(); layerSurf[k]?.release() } } }
 
     // ---------------------------------------------------------------- GL
 
@@ -150,6 +157,18 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glGenTextures(2, layerTex, 0)
+        for (k in 0..1) {
+            GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, layerTex[k])
+            GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            val lt = SurfaceTexture(layerTex[k]); lt.setOnFrameAvailableListener(this)
+            layerSt[k]?.release(); layerSt[k] = lt
+            val ls = Surface(lt); layerSurf[k]?.release(); layerSurf[k] = ls
+            main.post { onLayerSurface?.invoke(k, ls) }
+        }
         prog = program(VERT, FRAG)
         lutDirty = true; ovUploaded = null
         val tex = SurfaceTexture(oesTex)
@@ -175,6 +194,7 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
         val tex = st ?: return
         try { tex.updateTexImage() } catch (e: Exception) { return }
         tex.getTransformMatrix(stMatrix)
+        for (k in 0..1) layerSt[k]?.let { lt -> try { lt.updateTexImage(); lt.getTransformMatrix(layerMat[k]) } catch (e: Exception) {} }
         if (lutDirty) {
             lutDirty = false
             lutData?.let { d ->
@@ -207,6 +227,15 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
         val e = if (bypass) FloatArray(4) else fx
         GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uE"), e[0], e[1], e[2], e[3])
         GLES30.glUniform1f(GLES30.glGetUniformLocation(prog, "uHide"), if (hideVideo) 1f else 0f)
+        val ls = layers
+        for (k in 0..1) {
+            val v = ls.getOrNull(k)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE5 + k); GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, layerTex[k])
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "uL$k"), 5 + k)
+            GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(prog, "uL${k}M"), 1, false, layerMat[k], 0)
+            GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uL${k}A"), v?.get(0) ?: 1f, v?.get(1) ?: 0f, v?.get(2) ?: 1f, v?.get(3) ?: 0f)
+            GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uL${k}B"), v?.get(4) ?: 0f, v?.get(5) ?: 0f, v?.get(6) ?: 0f, if (v == null) 0f else v[7])
+        }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, prevTex)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "uPrev"), 3)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE4); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textTex)
@@ -276,14 +305,26 @@ uniform float uSeed;
 uniform vec2 uSize;
 uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uE;
 uniform float uHide;
+uniform samplerExternalOES uL0; uniform samplerExternalOES uL1;
+uniform mat4 uL0M; uniform mat4 uL1M;
+uniform vec4 uL0A; uniform vec4 uL0B; uniform vec4 uL1A; uniform vec4 uL1B;
 in vec2 vUv;
 out vec4 outColor;
 #define SRC(t) texture(uTex, (uSt * vec4((t), 0.0, 1.0)).xy)
 #define PREV(t) texture(uPrev, vec2((t).x, 1.0 - (t).y))
 """ + Scene.BODY + """
+/** An overlay (V2 / V3) laid over [c]: placed like a clip, but with nothing around it. */
+vec3 layer(vec3 c, vec2 uv, samplerExternalOES s, mat4 m, vec4 A, vec4 B) {
+  if (B.w < 0.001) return c;
+  vec2 t = mapUv(uv, A.x, uA.y, A.y, A.z, B.xy, A.w, B.z);
+  if (!inside(t)) return c;
+  return mix(c, texture(s, (m * vec4(t, 0.0, 1.0)).xy).rgb, B.w);
+}
 float rand(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233)) + uSeed * 0.731) * 43758.5453); }
 void main() {
   vec3 c = uHide > 0.5 ? vec3(0.0) : frameColor(vUv);
+  c = layer(c, vUv, uL0, uL0M, uL0A, uL0B);
+  c = layer(c, vUv, uL1, uL1M, uL1A, uL1B);
   if (uUseLut > 0.5) c = texture(uLut, c * uLutScale + uLutOffset).rgb;
   if (uOvA > 0.001) { vec4 o = texture(uOv, vec2(vUv.x, 1.0 - vUv.y)); c = mix(c, o.rgb / max(o.a, 0.001), o.a * uOvA); }
   vec2 d = vUv - 0.5;

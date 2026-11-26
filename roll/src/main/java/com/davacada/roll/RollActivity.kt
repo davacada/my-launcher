@@ -117,6 +117,8 @@ class RollActivity : Activity() {
                             "tracks" to { seekTimeline(4500); timeline?.selected = -1; refresh() },
                             "tracks-on" to { p.vMute = true; p.tLock = true; p.aTracks[0].solo = true; p.aTracks.add(Project.Track()); store.save(p); clipParams(); timeline?.invalidate() },
                             "add-sound" to { trackControl("a+") },
+                            "overlay" to { closeSheet(); seekTimeline(1200); placeOverlays(listOf(clip(vids.getOrElse(1) { vids[0] }).apply { endMs = 4000; fit = true; scale = 0.42f; ox = 0.3f; oy = 0.3f })); seekTimeline(2500) },
+                            "overlay-frame" to { p.overlays.firstOrNull()?.let { framePanelFor(it) } },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
                             "frame" to { framePanel(0) },
@@ -189,7 +191,7 @@ class RollActivity : Activity() {
 
     private fun relayout() {
         val p = project ?: return
-        closeSheet(); editingText = null; framing = -1; clipPanelBefore = null; gradeBefore = null
+        closeSheet(); editingText = null; framingClip = null; clipPanelBefore = null; gradeBefore = null
         store.save(p)
         // keep the player and the picture; only the layout around them changes
         (glView.parent as? android.view.ViewGroup)?.removeView(glView)
@@ -505,7 +507,8 @@ class RollActivity : Activity() {
             }
             main.post {
                 if (clips.isEmpty()) { toast("Couldn't read those files"); return@post }
-                if (project === p) { snapshot(); val at = (timeline?.selected ?: -1).let { if (it >= 0) it + 1 else p.clips.size }; p.clips.addAll(at, clips); store.save(p); reloadPlayer(keepTime = true); refresh() }
+                if (project === p && addingOverlay) { addingOverlay = false; placeOverlays(clips) }
+                else if (project === p) { snapshot(); val at = (timeline?.selected ?: -1).let { if (it >= 0) it + 1 else p.clips.size }; p.clips.addAll(at, clips); store.save(p); reloadPlayer(keepTime = true); refresh() }
                 else { p.clips.addAll(clips); store.save(p); open(p) }
             }
         }
@@ -560,6 +563,7 @@ class RollActivity : Activity() {
         }
         if (!reusing) {
             glView = GlPreview(this, store.lutDir)
+            glView.onLayerSurface = { k, sf -> layerSurfaces[k] = sf; ovPlayers[k]?.setVideoSurface(sf); updateFrame() }
             glView.onSurface = { sf ->
                 videoSurface = sf
                 player?.let { pl -> pl.setVideoSurface(sf); if (!pl.isPlaying) pl.seekTo(pl.currentMediaItemIndex, pl.currentPosition) }
@@ -570,7 +574,7 @@ class RollActivity : Activity() {
         previewBox.addView(lookTag, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { setMargins(dp(12), dp(10), 0, 0) })
         // hold the picture to see it without the look
         previewBox.setOnTouchListener { _, e ->
-            if (framing >= 0) { frameTouch(e); return@setOnTouchListener true }
+            if (framingClip != null) { frameTouch(e); return@setOnTouchListener true }
             if (editingText != null) { textTouch(e); return@setOnTouchListener true }
             when (e.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> { main.postDelayed(showOriginal, 250); true }
@@ -627,7 +631,7 @@ class RollActivity : Activity() {
             else { row.addView(col, LinearLayout.LayoutParams(0, -1, 1f)); row.addView(side, LinearLayout.LayoutParams(sideW, -1)) }
             screen.addView(row, FrameLayout.LayoutParams(-1, -1))
         } else {
-            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(360)))
+            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(392)))
             screen.addView(col, FrameLayout.LayoutParams(-1, -1))
         }
         editBottom()
@@ -656,16 +660,35 @@ class RollActivity : Activity() {
         tl.onAudio = { id -> p.audio.firstOrNull { it.id == id }?.let { audioTarget = it.track; audioEditor(it) } }
         tl.onTrack = { k -> trackControl(k) }
         tl.onTrackHold = { i -> trackMenu(i) }
+        tl.onOverlay = { id -> p.overlays.firstOrNull { it.id == id }?.let { overlayMenu(it) } }
         tl.onLocked = { lane -> toast("$lane track is locked · tap its lock to change it") }
         tl.onLaneDown = { snapshotBefore = p.json().toString() }
-        tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); updateFrame(); refreshSoundtrack() }
+        tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); reloadOverlays(); updateFrame(); refreshSoundtrack() }
         // sideways the panel is tall: timeline and tools sit at the bottom, under your thumbs, with room above
         val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         if (sideways) col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
-        col.addView(tl, LinearLayout.LayoutParams(-1, dp(214)))
+        // the editing bar on top of the timeline: copy, paste, blade, title, snap
+        val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setBackgroundColor(0xFF2A2B2F.toInt()); setPadding(dp(6), 0, dp(6), 0) }
+        fun barBtn(icon: Int, label: String, color: Int = C.TEXT, onClick: () -> Unit) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(10), 0, dp(10), 0); background = ripple()
+            addView(ImageView(context).apply { setImageResource(icon); setColorFilter(color) }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { marginEnd = dp(5) })
+            addView(context.text(label, 12f, color, true))
+            setOnClickListener { onClick() }
+        }
+        val snapOn = prefs().getBoolean("snap", true); tl.snapOn = snapOn
+        bar.addView(barBtn(R.drawable.i_copy, "Copy") { copySelected() }, LinearLayout.LayoutParams(-2, -1))
+        bar.addView(barBtn(R.drawable.i_paste, "Paste", if (clipboard != null) C.TEXT else C.FAINT) { pasteAtPlayhead() }, LinearLayout.LayoutParams(-2, -1))
+        bar.addView(barBtn(R.drawable.i_split, "Blade") { split() }, LinearLayout.LayoutParams(-2, -1))
+        bar.addView(barBtn(R.drawable.i_text, "Text") { textsPanel() }, LinearLayout.LayoutParams(-2, -1))
+        bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        bar.addView(barBtn(R.drawable.i_magnet, "Snap", if (snapOn) C.AMBER else C.FAINT) { prefs().edit().putBoolean("snap", !tl.snapOn).apply(); editBottom() }, LinearLayout.LayoutParams(-2, -1))
+        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(bar) }, LinearLayout.LayoutParams(-1, dp(38)))
+        // sideways the timeline takes all the height there is; upright it has a fixed height
+        col.addView(tl, if (sideways) LinearLayout.LayoutParams(-1, 0, 1f) else LinearLayout.LayoutParams(-1, dp(214)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) },
-            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (sideways) 8 else 18); if (sideways) bottomMargin = dp(10) })
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (sideways) 6 else 14); if (sideways) bottomMargin = dp(8) })
         b.addView(col, FrameLayout.LayoutParams(-1, -1))
         editBottomTools()
         // remember the edit before a trim starts, so it can be undone
@@ -680,22 +703,19 @@ class RollActivity : Activity() {
         val sel = timeline?.selected ?: -1
         val dim = if (sel >= 0) C.TEXT else C.FAINT
         listOf(
-            bare(R.drawable.i_split, "Blade") { split() },
             bare(R.drawable.i_speed, "Speed", dim) { if (sel >= 0) speedMenu(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_aspect, "Frame", dim) { if (sel >= 0) framePanel(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_trans, "Transition", if (sel >= 0 && sel < (project?.clips?.size ?: 0) - 1) C.TEXT else C.FAINT) {
                 when { sel < 0 -> toast("Tap a clip first"); sel >= (project?.clips?.size ?: 0) - 1 -> toast("The last clip has nothing after it"); else -> transitionPanel(sel) } },
             bare(R.drawable.i_reverse, "Reverse", if (sel >= 0 && project?.clips?.getOrNull(sel)?.still?.isEmpty() == true) C.TEXT else C.FAINT) { if (sel >= 0) reverseClip(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_freeze, "Freeze") { freezeFrame() },
-            bare(R.drawable.i_text, "Text") { textsPanel() },
             bare(R.drawable.i_music, "Audio") { audioPanel() },
             bare(R.drawable.i_cc, "Captions") { captionsPanel() },
             bare(R.drawable.i_filter, "Film") { filmPanel(Looks.FILM) },
             bare(R.drawable.i_adjust, "Adjust") { adjustPanel() },
             bare(R.drawable.i_fx, "Overlay") { overlayPanel() },
             bare(if (project?.mute == true) R.drawable.i_mute else R.drawable.i_volume, "Volume") { if (sel >= 0) volumeMenu(sel) else soundMenu() },
-            bare(R.drawable.i_copy, "Copy", dim) { if (sel >= 0) duplicate(sel) else toast("Tap a clip first") },
-            bare(R.drawable.i_trash, "Delete", dim) { if (sel >= 0) deleteClip(sel) else toast("Tap a clip first") },
+            bare(R.drawable.i_trash, "Delete", if (sel >= 0 || timeline?.selectedText != null) C.TEXT else C.FAINT) { deleteSelected() },
         ).forEach { row.addView(it, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(2); marginEnd = dp(2) }) }
     }
 
@@ -730,7 +750,7 @@ class RollActivity : Activity() {
             }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) { pl.pause(); pl.seekTo(0, 0) } }
         })
-        loadItems(); pl.prepare(); refreshDissolves(); refreshSoundtrack()
+        loadItems(); pl.prepare(); refreshDissolves(); refreshSoundtrack(); reloadOverlays()
         updateLookTag(); refreshTime(); updateFrame()
         if (p.clips.isEmpty()) toast("Add a clip with +")
     }
@@ -755,13 +775,14 @@ class RollActivity : Activity() {
 
     private fun reloadPlayer(keepTime: Boolean) {
         val t = timeline?.time() ?: 0L
-        loadItems(); player?.prepare(); refreshDissolves(); refreshSoundtrack()
+        loadItems(); player?.prepare(); refreshDissolves(); refreshSoundtrack(); reloadOverlays()
         if (keepTime) seekTimeline(t.coerceAtMost(maxOf(0, (project?.lengthMs ?: 0) - 1)))
         timeline?.invalidate(); refreshTime()
     }
 
     private fun releasePlayer() {
         bed?.release(); bed = null; bedKey = ""
+        for (k in 0..1) { ovPlayers[k]?.release(); ovPlayers[k] = null; ovKeys[k] = "" }
         main.removeCallbacks(ticker); player?.release(); player = null; timeline?.release(); timeline = null
         if (::glView.isInitialized) glView.release(); videoSurface = null
     }
@@ -829,6 +850,7 @@ class RollActivity : Activity() {
         glView.prevBitmap = f.prev?.let { dissolves[it.id] }
         glView.frame = f
         drawTexts(p.startOf(i) + local)
+        syncOverlays(p.startOf(i) + local)
     }
 
     // ---------------------------------------------------------------- titles on the viewer
@@ -949,7 +971,7 @@ class RollActivity : Activity() {
     private fun closeClipPanel(keep: Boolean) {
         val p = project ?: return
         val before = clipPanelBefore; clipPanelBefore = null
-        framing = -1
+        framingClip = null
         if (before != null) {
             if (!keep) p.copyFrom(Project.from(JSONObject(before)))
             else if (before != p.json().toString()) pushUndo(before)
@@ -967,18 +989,22 @@ class RollActivity : Activity() {
     }
 
     /** Which clip is being framed (drag and pinch on the picture move and zoom it), or -1. */
-    private var framing = -1
+    private var framingClip: Clip? = null
 
     /** Frame: fill or fit the shape, background, position, zoom, rotation, flip, Ken Burns. */
-    private fun framePanel(i: Int) {
+    private fun framePanel(i: Int) { project?.clips?.getOrNull(i)?.let { framePanelFor(it) } }
+
+    private fun framePanelFor(c: Clip) {
         val p = project ?: return
-        val c = p.clips.getOrNull(i) ?: return
-        framing = i
+        val i = p.clips.indexOf(c)
+        val isOverlay = i < 0
+        framingClip = c
         // show this clip on the viewer
-        if ((player?.currentMediaItemIndex ?: -1) != i) seekTimeline(p.startOf(i) + minOf(400L, c.lengthMs / 2))
+        if (isOverlay) { val t = timeline?.time() ?: 0L; if (t < c.at || t >= c.endAt) seekTimeline(c.at + minOf(400L, c.lengthMs / 2)) }
+        else if ((player?.currentMediaItemIndex ?: -1) != i) seekTimeline(p.startOf(i) + minOf(400L, c.lengthMs / 2))
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), dp(6)) }
-        fun again() { val keep = clipPanelBefore; framePanel(i); clipPanelBefore = keep }
+        fun again() { val keep = clipPanelBefore; framePanelFor(c); clipPanelBefore = keep }
         fun changed() { updateFrame() }
         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         row1.addView(word("Fill", !c.fit, 14f) { c.fit = false; changed(); again() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(14) })
@@ -992,23 +1018,29 @@ class RollActivity : Activity() {
         s.addView(LrSlider(this, "Left · right", c.ox, -1f, 1f, null, { "%+d".format((it * 100).toInt()) }) { c.ox = it; changed() })
         s.addView(LrSlider(this, "Down · up", c.oy, -1f, 1f, null, { "%+d".format((it * 100).toInt()) }) { c.oy = it; changed() })
         s.addView(LrSlider(this, "Rotate", c.rot, -180f, 180f, null, { "%+.0f°".format(it) }) { c.rot = it; changed() })
+        if (isOverlay) s.addView(LrSlider(this, "Opacity", c.opacity, 0f, 1f, null, { "${(it * 100).toInt()}%" }) { c.opacity = it; changed() })
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(4), 0, 0) }
         row2.addView(bare(R.drawable.i_rotate, "90°", size = 20) { c.rot = ((c.rot + 90f + 180f) % 360f) - 180f; changed(); again() })
         row2.addView(bare(R.drawable.i_flip, "Flip", if (c.flip) C.AMBER else C.TEXT, 20) { c.flip = !c.flip; changed(); again() })
         row2.addView(bare(R.drawable.i_zoom, "Ken Burns", if (c.kenBurns) C.AMBER else C.TEXT, 20) { c.kenBurns = !c.kenBurns; changed(); again() })
         row2.addView(bare(R.drawable.i_undo, "Reset", size = 20) { c.fit = false; c.bg = "blur"; c.scale = 1f; c.ox = 0f; c.oy = 0f; c.rot = 0f; c.flip = false; c.kenBurns = false; changed(); again() })
-        row2.addView(bare(R.drawable.i_copy, "To all", size = 20) { p.clips.forEach { o -> if (o !== c) o.framingFrom(c) }; toast("Same framing on every clip"); changed() })
+        if (isOverlay) {
+            // quick picture-in-picture corners
+            listOf("↖" to (-0.3f to 0.3f), "↗" to (0.3f to 0.3f), "↙" to (-0.3f to -0.3f), "↘" to (0.3f to -0.3f)).forEach { (l, xy) ->
+                row2.addView(text(l, 20f, C.TEXT, true).apply { setPadding(dp(12), dp(8), dp(12), dp(8)); background = ripple(); setOnClickListener { c.fit = true; c.scale = 0.42f; c.ox = xy.first; c.oy = xy.second; c.rot = 0f; changed(); again() } })
+            }
+        } else row2.addView(bare(R.drawable.i_copy, "To all", size = 20) { p.clips.forEach { o -> if (o !== c) o.framingFrom(c) }; toast("Same framing on every clip"); changed() })
         s.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row2) })
         s.addView(text("Drag the picture to move it, pinch to zoom.", 11.5f, C.FAINT).apply { setPadding(dp(4), dp(6), 0, 0) })
         col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        col.addView(clipFooter("Clip ${i + 1}"), LinearLayout.LayoutParams(-1, dp(46)))
+        col.addView(clipFooter(if (isOverlay) "V${c.track + 2}" else "Clip ${i + 1}"), LinearLayout.LayoutParams(-1, dp(46)))
         openClipPanel(col)
         updateFrame()
     }
 
     private var touchX = 0f; private var touchY = 0f; private var touchDist = 0f; private var touchScale = 1f
     private fun frameTouch(e: android.view.MotionEvent) {
-        val c = project?.clips?.getOrNull(framing) ?: return
+        val c = framingClip ?: return
         val w = glView.width.coerceAtLeast(1); val h = glView.height.coerceAtLeast(1)
         fun dist() = if (e.pointerCount >= 2) Math.hypot((e.getX(0) - e.getX(1)).toDouble(), (e.getY(0) - e.getY(1)).toDouble()).toFloat() else 0f
         when (e.actionMasked) {
@@ -1023,7 +1055,7 @@ class RollActivity : Activity() {
                 updateFrame()
             }
             android.view.MotionEvent.ACTION_POINTER_UP -> { touchDist = 0f; val k = if (e.actionIndex == 0) 1 else 0; touchX = e.getX(k); touchY = e.getY(k) }
-            android.view.MotionEvent.ACTION_UP -> { val keep = clipPanelBefore; framePanel(framing); clipPanelBefore = keep }
+            android.view.MotionEvent.ACTION_UP -> { val keep = clipPanelBefore; framePanelFor(c); clipPanelBefore = keep }
         }
     }
 
@@ -1255,6 +1287,146 @@ class RollActivity : Activity() {
         }
     }
 
+    // ---------------------------------------------------------------- V2 / V3 (clips over V1)
+
+    private val ovPlayers = arrayOfNulls<ExoPlayer>(2)
+    private val ovLists = arrayOf(emptyList<Clip>(), emptyList<Clip>())
+    private val ovKeys = arrayOf("", "")
+    private val layerSurfaces = arrayOfNulls<android.view.Surface>(2)
+    private var addingOverlay = false
+
+    /** (Re)loads the players for V2 and V3 when their clips change. */
+    private fun reloadOverlays() {
+        val p = project ?: return
+        for (k in 0..1) {
+            val list = p.overlays.filter { it.track == k }.sortedBy { it.at }
+            val key = list.joinToString("|") { "${it.uri}@${it.startMs}-${it.endMs}" }
+            if (key == ovKeys[k]) { ovLists[k] = list; continue }
+            ovKeys[k] = key; ovLists[k] = list
+            if (list.isEmpty()) { ovPlayers[k]?.release(); ovPlayers[k] = null; continue }
+            val pl = ovPlayers[k] ?: ExoPlayer.Builder(this).build().also { ovPlayers[k] = it; layerSurfaces[k]?.let { s -> it.setVideoSurface(s) } }
+            pl.setMediaItems(list.map { c ->
+                MediaItem.Builder().setUri(c.uri).setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(c.startMs).setEndPositionMs(c.endMs).build()).build()
+            })
+            pl.prepare()
+        }
+        updateFrame()
+    }
+
+    /** Keeps V2 / V3 on the same moment as the edit, and tells the viewer how they sit. */
+    private fun syncOverlays(t: Long) {
+        val p = project ?: return
+        val playing = player?.isPlaying == true
+        val out = arrayOfNulls<FloatArray>(2)
+        for (k in 0..1) {
+            val pl = ovPlayers[k]
+            val o = p.overlayAt(k, t)
+            if (o == null || pl == null) { pl?.let { if (it.isPlaying) it.pause() }; continue }
+            val idx = ovLists[k].indexOfFirst { it.id == o.id }
+            if (idx < 0) continue
+            val target = ((t - o.at) * o.speed).toLong()
+            if (pl.currentMediaItemIndex != idx || kotlin.math.abs(pl.currentPosition - target) > (if (playing) 180 else 40)) pl.seekTo(idx, target)
+            if (pl.playbackParameters.speed != o.speed) pl.playbackParameters = PlaybackParameters(o.speed)
+            pl.volume = if (p.clipSound()) o.volume else 0f
+            if (playing && !pl.isPlaying) pl.play() else if (!playing && pl.isPlaying) pl.pause()
+            if (p.vTracks.getOrNull(k)?.hide == true) continue
+            val kb = if (o.kenBurns) 1f + 0.14f * ((t - o.at).toFloat() / o.lengthMs.coerceAtLeast(1)).coerceIn(0f, 1f) else 1f
+            out[k] = floatArrayOf(o.aspect, if (o.fit) 1f else 0f, o.scale * kb, (o.rot * Math.PI / 180).toFloat(), o.ox, o.oy, if (o.flip) 1f else 0f, o.opacity)
+        }
+        glView.layers = out
+    }
+
+    /** New clips from "+ video": over V1 at the playhead, on V2 (or V3 if V2 is busy there). */
+    private fun placeOverlays(clips: List<Clip>) {
+        val p = project ?: return
+        snapshot()
+        var t = (timeline?.time() ?: 0L).coerceAtMost(maxOf(0, p.lengthMs - 300))
+        for (c in clips) {
+            val len = minOf(c.lengthMs, p.lengthMs - t)
+            if (len < 300) break
+            c.endMs = c.startMs + (len * c.speed).toLong()
+            c.at = t
+            val free = (0..1).firstOrNull { k -> (k >= p.vTracks.size || p.vTracks[k].lock != true) && p.overlays.none { it.track == k && it.at < t + len && it.endAt > t } }
+            if (free == null) { toast("V2 and V3 are both busy there"); break }
+            while (p.vTracks.size <= free) p.vTracks.add(Project.Track())
+            c.track = free
+            p.overlays.add(c)
+            t += len
+        }
+        store.save(p); reloadOverlays(); timeline?.invalidate()
+        clips.lastOrNull()?.let { timeline?.selectedText = it.id }
+        toast("On V${(clips.firstOrNull()?.track ?: 0) + 2} at the playhead · tap it again to place it in the frame")
+    }
+
+    private fun overlayMenu(o: Clip) {
+        val p = project ?: return
+        val col = vcol()
+        col.addView(headline("V${o.track + 2} clip", "${fmt(o.at, true)} – ${fmt(o.endAt, true)}"))
+        col.addView(action(R.drawable.i_aspect, "Frame", "Size, position, opacity · picture in picture") { closeSheet(); framePanelFor(o) })
+        col.addView(action(R.drawable.i_volume, "Volume", "${(o.volume * 100).toInt()}%") {
+            closeSheet(); snapshot(); o.volume = if (o.volume > 0f) 0f else 1f; store.save(p); toast(if (o.volume > 0f) "Sound on" else "Muted") })
+        col.addView(action(R.drawable.i_copy, "Copy", "Then Paste at the playhead") { closeSheet(); timeline?.selectedText = o.id; copySelected() })
+        col.addView(action(R.drawable.i_trash, "Delete", "Takes it off V${o.track + 2}") { closeSheet(); snapshot(); p.overlays.remove(o); timeline?.selectedText = null; store.save(p); reloadOverlays(); timeline?.invalidate() })
+        sheet(col)
+    }
+
+    // ---------------------------------------------------------------- copy, paste, delete
+
+    /** What Copy took: its kind ("clip", "overlay", "text", "audio") and its data. */
+    private var clipboard: Pair<String, JSONObject>? = null
+
+    private fun copySelected() {
+        val p = project ?: return
+        val id = timeline?.selectedText
+        val sel = timeline?.selected ?: -1
+        clipboard = when {
+            id != null && p.overlays.any { it.id == id } -> "overlay" to p.overlays.first { it.id == id }.json()
+            id != null && p.texts.any { it.id == id } -> "text" to p.texts.first { it.id == id }.json()
+            id != null && p.audio.any { it.id == id } -> "audio" to p.audio.first { it.id == id }.json()
+            sel >= 0 -> "clip" to p.clips[sel].json()
+            else -> { toast("Tap a clip, title or sound first"); return }
+        }
+        toast("Copied · move the playhead and tap Paste"); editBottom()
+    }
+
+    private fun pasteAtPlayhead() {
+        val p = project ?: return
+        val (kind, o) = clipboard ?: run { toast("Copy something first"); return }
+        val t = timeline?.time() ?: 0L
+        val fresh = JSONObject(o.toString()).put("id", java.util.UUID.randomUUID().toString())
+        snapshot()
+        when (kind) {
+            "clip" -> {
+                // goes in at the cut nearest the playhead
+                val c = Clip.from(fresh)
+                val (i, off) = if (p.clips.isEmpty()) 0 to 0L else p.at(t)
+                val at = if (p.clips.isEmpty() || off < p.clips[i].lengthMs / 2) i else i + 1
+                p.clips.add(at, c); timeline?.selected = at
+                store.save(p); reloadPlayer(keepTime = true); refresh(); return
+            }
+            "overlay" -> { placeOverlays(listOf(Clip.from(fresh))); return }
+            "text" -> { val x = TextItem.from(fresh); val len = x.endMs - x.startMs; x.startMs = t; x.endMs = t + len; p.texts.add(x); timeline?.selectedText = x.id; textKey = "" }
+            "audio" -> { val x = AudioItem.from(fresh); x.startMs = t; x.track = freeTrack(t, t + x.lengthMs); p.audio.add(x); timeline?.selectedText = x.id; refreshSoundtrack() }
+        }
+        store.save(p); timeline?.invalidate(); updateFrame()
+    }
+
+    /** Delete: whatever is selected — a V1 clip, a V2 / V3 clip, a title or a sound. */
+    private fun deleteSelected() {
+        val p = project ?: return
+        val id = timeline?.selectedText
+        val sel = timeline?.selected ?: -1
+        when {
+            id != null && p.overlays.any { it.id == id } -> { snapshot(); p.overlays.removeAll { it.id == id }; reloadOverlays() }
+            id != null && p.texts.any { it.id == id } -> { snapshot(); p.texts.removeAll { it.id == id }; textKey = "" }
+            id != null && p.audio.any { it.id == id } -> { snapshot(); p.audio.removeAll { it.id == id }; refreshSoundtrack() }
+            sel >= 0 -> { deleteClip(sel); return }
+            else -> { toast("Tap a clip, title or sound first"); return }
+        }
+        timeline?.selectedText = null
+        store.save(p); timeline?.invalidate(); updateFrame(); editBottomTools()
+    }
+
     // ---------------------------------------------------------------- track controls
 
     /** The audio track new sounds go on (0 = A2). */
@@ -1278,7 +1450,12 @@ class RollActivity : Activity() {
             k == "vL" -> { p.vLock = !p.vLock; say(if (p.vLock) "V1 locked: no trimming or clip changes" else "V1 unlocked") }
             k == "vM" -> { p.vMute = !p.vMute; say(if (p.vMute) "A1 (the clips' sound) muted" else "A1 on") }
             k == "vS" -> { p.vSolo = !p.vSolo; say(if (p.vSolo) "A1 solo" else "Solo off") }
-            k == "v+" -> { if (p.vLock) { say("V1 is locked"); return }; addingTo = p; pickVideos(); return }
+            k == "v+" -> { addingOverlay = true; addingTo = p; pickVideos(); return }
+            k.startsWith("o") && k.length >= 3 -> {
+                val i = k.substring(1, k.length - 1).toIntOrNull() ?: return
+                val tr = p.vTracks.getOrNull(i) ?: return
+                when (k.last()) { 'H' -> { tr.hide = !tr.hide; say(if (tr.hide) "V${i + 2} hidden" else "V${i + 2} showing") }; 'L' -> { tr.lock = !tr.lock; say(if (tr.lock) "V${i + 2} locked" else "V${i + 2} unlocked") } }
+            }
             k == "tH" -> { p.tHide = !p.tHide; textKey = ""; say(if (p.tHide) "Titles and captions hidden (also in the export)" else "Titles and captions showing") }
             k == "tL" -> { p.tLock = !p.tLock; say(if (p.tLock) "T1 locked" else "T1 unlocked") }
             k == "t+" -> { if (p.tLock) { say("T1 is locked"); return }; addText(); return }
