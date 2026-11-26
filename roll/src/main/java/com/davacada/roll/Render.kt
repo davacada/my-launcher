@@ -122,7 +122,7 @@ object Render {
     } catch (e: Exception) { null }
 
     fun composition(ctx: Context, p: Project, clips: List<Clip>, w: Int, h: Int, fps: Int, withSoundAsked: Boolean, lutDir: File, level: Int = 0,
-                    dissolve: Map<String, Bitmap> = emptyMap()): Composition {
+                    dissolve: Map<String, Bitmap> = emptyMap(), fromMs: Long = 0): Composition {
         val withSound = withSoundAsked && level < 2
         val grade = gradeEffects(ctx, p.grade, lutDir)
         val items = clips.mapIndexed { idx, c ->
@@ -138,6 +138,8 @@ object Render {
             video.add(RollFrame(clips, idx, w, h, clips.getOrNull(idx - 1)?.let { dissolve[it.id] }))
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
+            // titles and captions go on top of the grade
+            if (p.texts.isNotEmpty()) video.add(androidx.media3.effect.OverlayEffect(listOf(TextOverlay(ctx, p.texts.map { TextItem.from(it.json()) }, fromMs + clips.take(idx).sumOf { it.lengthMs }))))
             val b = EditedMediaItem.Builder(mi).setEffects(Effects(audio, video)).setRemoveAudio(!withSound)
             if (level == 0 && c.sourceMs > 0) b.setDurationUs(c.sourceMs * 1000)
             b.build()

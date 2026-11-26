@@ -124,7 +124,7 @@ class RollActivity : Activity() {
         when {
             sheetView != null -> closeSheet()
             exportView != null -> { if (exporting == null) closeExport() else toast("Exporting · wait or tap Cancel") }
-            panelOpen -> if (clipPanelBefore != null) closeClipPanel(false) else closePanel(false)
+            panelOpen -> if (clipPanelBefore != null) { editingText = null; timeline?.selectedText = null; closeClipPanel(false) } else if (bottom?.findViewWithTag<View>("grade") != null || gradeBefore != null) closePanel(false) else { panelOpen = false; editBottom() }
             project != null -> { store.save(project!!); releasePlayer(); project = null; home() }
             else -> @Suppress("DEPRECATION") super.onBackPressed()
         }
@@ -490,11 +490,14 @@ class RollActivity : Activity() {
         // hold the picture to see it without the look
         previewBox.setOnTouchListener { _, e ->
             if (framing >= 0) { frameTouch(e); return@setOnTouchListener true }
+            if (editingText != null) { textTouch(e); return@setOnTouchListener true }
             when (e.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> { main.postDelayed(showOriginal, 250); true }
                 android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                     main.removeCallbacks(showOriginal)
-                    if (showingOriginal) { showingOriginal = false; glView.bypass = false; updateLookTag() } else togglePlay(); true
+                    if (showingOriginal) { showingOriginal = false; glView.bypass = false; updateLookTag() }
+                    else if (player?.isPlaying != true && textAt(e.x, e.y)?.let { textEditor(it); true } == true) {}
+                    else togglePlay(); true
                 }
                 else -> true
             }
@@ -512,7 +515,7 @@ class RollActivity : Activity() {
         tr.addView(bare(R.drawable.i_aspect, null, size = 20) { aspectMenu() })
         col.addView(tr)
         bottom = FrameLayout(this)
-        col.addView(bottom, LinearLayout.LayoutParams(-1, dp(272)))
+        col.addView(bottom, LinearLayout.LayoutParams(-1, dp(300)))
         screen.addView(col, FrameLayout.LayoutParams(-1, -1))
         editBottom()
         setupPlayer()
@@ -536,7 +539,10 @@ class RollActivity : Activity() {
         tl.onAdd = { addingTo = p; pickVideos() }
         tl.onHold = { i -> clipMenu(i) }
         tl.onJoint = { i -> transitionPanel(i) }
-        col.addView(tl, LinearLayout.LayoutParams(-1, dp(118)))
+        tl.onText = { id -> p.texts.firstOrNull { it.id == id }?.let { textEditor(it) } }
+        tl.onLaneDown = { snapshotBefore = p.json().toString() }
+        tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); updateFrame() }
+        col.addView(tl, LinearLayout.LayoutParams(-1, dp(150)))
         toolsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(toolsRow) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
         b.addView(col, FrameLayout.LayoutParams(-1, -1))
@@ -560,6 +566,7 @@ class RollActivity : Activity() {
                 when { sel < 0 -> toast("Tap a clip first"); sel >= (project?.clips?.size ?: 0) - 1 -> toast("The last clip has nothing after it"); else -> transitionPanel(sel) } },
             bare(R.drawable.i_reverse, "Reverse", if (sel >= 0 && project?.clips?.getOrNull(sel)?.still?.isEmpty() == true) C.TEXT else C.FAINT) { if (sel >= 0) reverseClip(sel) else toast("Tap a clip first") },
             bare(R.drawable.i_freeze, "Freeze") { freezeFrame() },
+            bare(R.drawable.i_text, "Text") { textsPanel() },
             bare(R.drawable.i_filter, "Film") { filmPanel(Looks.FILM) },
             bare(R.drawable.i_adjust, "Adjust") { adjustPanel() },
             bare(R.drawable.i_fx, "Overlay") { overlayPanel() },
@@ -682,6 +689,38 @@ class RollActivity : Activity() {
         val f = Scene.frame(p.clips, i, local, Render.ratio(p))
         glView.prevBitmap = f.prev?.let { dissolves[it.id] }
         glView.frame = f
+        drawTexts(p.startOf(i) + local)
+    }
+
+    // ---------------------------------------------------------------- titles on the viewer
+
+    private var textBufs = arrayOfNulls<Bitmap>(2); private var textBuf = 0
+    private var textKey = ""
+    /** Draws the titles showing at [t] for the viewer (only when they'd look different). */
+    private fun drawTexts(t: Long) {
+        val p = project ?: return
+        val w = glView.width; val h = glView.height
+        if (w <= 0 || h <= 0) return
+        if (p.texts.isEmpty()) { if (textKey != "") { textKey = ""; glView.textBitmap = null }; return }
+        val key = TextDraw.key(p.texts, t, w, h) + (editingText?.id ?: "")
+        if (key == textKey) return
+        textKey = key
+        textBuf = 1 - textBuf
+        val b = textBufs[textBuf]?.takeIf { it.width == w && it.height == h } ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { textBufs[textBuf] = it }
+        b.eraseColor(Color.TRANSPARENT)
+        val c = android.graphics.Canvas(b)
+        TextDraw.draw(this, c, p.texts, t, w, h)
+        // the title being edited gets a dashed box
+        editingText?.let { it2 -> if (t in it2.startMs until it2.endMs) c.drawRect(TextDraw.bounds(this, it2, w, h), android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE; strokeWidth = dpf(1.5f); color = C.AMBER; pathEffect = android.graphics.DashPathEffect(floatArrayOf(dpf(6f), dpf(4f)), 0f) }) }
+        glView.textBitmap = b
+    }
+
+    private fun textAt(x: Float, y: Float): TextItem? {
+        val p = project ?: return null
+        val gx = x - glView.left; val gy = y - glView.top
+        val t = timeline?.time() ?: 0L
+        return TextDraw.active(p.texts, t).lastOrNull { TextDraw.bounds(this, it, glView.width, glView.height).contains(gx, gy) }
     }
 
     // ---------------------------------------------------------------- grade
@@ -876,6 +915,191 @@ class RollActivity : Activity() {
         "none" -> R.drawable.i_split; "dissolve" -> R.drawable.i_trans; "black", "white" -> R.drawable.i_sun
         "zoom" -> R.drawable.i_zoom; "whip", "slide" -> R.drawable.i_right; "spin" -> R.drawable.i_rotate
         "blur" -> R.drawable.i_drop; "burn" -> R.drawable.i_fx; else -> R.drawable.i_film
+    }
+
+    // ---------------------------------------------------------------- titles
+
+    private var editingText: TextItem? = null
+
+    /** All titles: add one, or pick one to edit. */
+    private fun textsPanel() {
+        val p = project ?: return
+        player?.pause()
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), dp(6)) }
+        s.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x22F2A541), pill(0, dpf(16f), dp(1), 0x59F2A541), pill(Color.WHITE, dpf(16f)))
+            addView(ImageView(context).apply { setImageResource(R.drawable.i_add); setColorFilter(C.AMBER) }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(12) })
+            addView(context.text("Add text at ${fmt(timeline?.time() ?: 0, true)}", 15.5f, C.TEXT, true))
+            setOnClickListener { addText() }
+        })
+        val sorted = p.texts.filter { !it.caption }.sortedBy { it.startMs }
+        if (sorted.isEmpty()) s.addView(text("Titles sit on top of the look. Tap one on the picture or on the timeline to change it.", 12.5f, C.SUB).apply { setPadding(dp(4), dp(12), dp(4), 0) })
+        sorted.forEach { t ->
+            s.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(12), dp(4), dp(12)); background = ripple()
+                addView(context.text(t.text.replace('\n', ' '), 15f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(context.text("${fmt(t.startMs, true)} – ${fmt(t.endMs, true)}", 11.5f, C.SUB, mono = true))
+                setOnClickListener { seekTimeline(t.startMs + minOf(600, (t.endMs - t.startMs) / 2)); textEditor(t) }
+            })
+        }
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { panelOpen = false; editBottom() } })
+        }, LinearLayout.LayoutParams(-1, dp(46)))
+        val b = bottom ?: return
+        panelOpen = true; b.removeAllViews(); b.addView(col, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun addText() {
+        val p = project ?: return
+        val t0 = (timeline?.time() ?: 0L).coerceAtMost(maxOf(0, p.lengthMs - 500))
+        val last = p.texts.lastOrNull { !it.caption }
+        val it = TextItem("Your text", t0, minOf(maxOf(p.lengthMs, t0 + 500), t0 + 3000)).apply { last?.let { l -> copyStyleFrom(l); y = 0.5f } }
+        clipPanelBefore = p.json().toString()
+        p.texts.add(it)
+        textEditor(it, fresh = true)
+    }
+
+    private var textTab = "style"
+
+    /** Everything about one title: words, font, style, colour, size, motion and timing. */
+    private fun textEditor(t: TextItem, fresh: Boolean = false) {
+        val p = project ?: return
+        player?.pause()
+        editingText = t; timeline?.selectedText = t.id
+        val now = timeline?.time() ?: 0L
+        if (now !in t.startMs until t.endMs) seekTimeline(t.startMs + minOf(500, (t.endMs - t.startMs) / 2))
+        fun again() { val keep = clipPanelBefore; textEditor(t); clipPanelBefore = keep }
+        fun changed() { textKey = ""; updateFrame(); timeline?.invalidate() }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val edit = EditText(this).apply {
+            setText(t.text); setSelection(t.text.length); setTextColor(C.TEXT); textSize = 17f; typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            background = pill(0xFF161616.toInt(), dpf(12f)); setPadding(dp(14), dp(10), dp(14), dp(10)); maxLines = 3
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                override fun afterTextChanged(e: android.text.Editable?) { t.text = e?.toString() ?: ""; changed() }
+            })
+        }
+        col.addView(edit, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(16), 0, dp(16), dp(6)) })
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(14), 0, dp(14), 0) }
+        listOf("style" to "Style", "font" to "Font", "color" to "Colour", "motion" to "Motion", "time" to "Timing").forEach { (k, l) ->
+            tabs.addView(word(l, textTab == k, 13f) { textTab = k; again() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(14) })
+        }
+        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(tabs) })
+        val s = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(2), dp(16), dp(4)) }
+        fun chips(opts: List<Pair<String, String>>, sel: String, pick: (String) -> Unit): View {
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            opts.forEach { (k, l) -> r.addView(word(l, sel == k, 14f) { pick(k); changed(); again() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(14) }) }
+            return HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(r) }
+        }
+        fun dots(sel: Int, pick: (Int) -> Unit): View {
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            TextDraw.COLORS.forEach { col0 ->
+                val on = (sel or 0xFF000000.toInt()) == col0
+                r.addView(FrameLayout(this).apply {
+                    setPadding(dp(5), dp(5), dp(5), dp(5)); background = ripple()
+                    addView(View(context).apply { background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(col0); setStroke(dp(if (on) 3 else 1), if (on) C.AMBER else 0x40FFFFFF) } },
+                        FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
+                    setOnClickListener { pick(col0); changed(); again() }
+                }, LinearLayout.LayoutParams(dp(40), dp(40)))
+            }
+            return HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(r) }
+        }
+        when (textTab) {
+            "style" -> {
+                s.addView(chips(TextDraw.STYLES, t.style) { t.style = it })
+                s.addView(LrSlider(this, "Size", t.size, 0.025f, 0.2f, null, { "${(it * 1000).toInt()}" }) { t.size = it; changed() })
+                s.addView(LrSlider(this, "Rotate", t.rot, -45f, 45f, null, { "%+.0f°".format(it) }) { t.rot = it; changed() })
+                s.addView(chips(listOf("top" to "Top", "middle" to "Middle", "bottom" to "Bottom", "left" to "Align left", "center" to "Centre", "right" to "Align right"), "") { k ->
+                    when (k) { "top" -> t.y = 0.16f; "middle" -> t.y = 0.5f; "bottom" -> t.y = 0.82f; else -> t.align = k } })
+                s.addView(text("Drag the words on the picture to move them, pinch to resize.", 11.5f, C.FAINT).apply { setPadding(dp(4), dp(4), 0, 0) })
+            }
+            "font" -> {
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                TextDraw.FONTS.forEach { f ->
+                    val on = t.font == f.id
+                    r.addView(LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+                        background = pill(if (on) 0x26F2A541 else 0xFF141414.toInt(), dpf(12f), dp(if (on) 2 else 1), if (on) C.AMBER else 0x14FFFFFF)
+                        addView(TextView(context).apply { text = if (f.caps) "AA" else "Aa"; textSize = 24f; setTextColor(if (on) C.AMBER else C.TEXT); typeface = TextDraw.face(context, f.id); gravity = Gravity.CENTER })
+                        addView(context.text(f.name, 10.5f, C.SUB).apply { gravity = Gravity.CENTER })
+                        setOnClickListener { t.font = f.id; changed(); again() }
+                    }, LinearLayout.LayoutParams(dp(78), dp(78)).apply { marginEnd = dp(8) })
+                }
+                s.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(r) })
+            }
+            "color" -> {
+                s.addView(text("TEXT", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(4), 0, 0) })
+                s.addView(dots(t.color) { t.color = it })
+                if (t.style == "box" || t.style == "pill") {
+                    s.addView(text("BOX", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(8), 0, 0) })
+                    s.addView(dots(t.boxColor) { c -> t.boxColor = (c and 0x00FFFFFF) or (t.boxColor and 0xFF000000.toInt()).let { a -> if (a == 0) 0xCC000000.toInt() else a } })
+                    s.addView(LrSlider(this, "Box opacity", (t.boxColor ushr 24) / 255f, 0f, 1f, null, { "${(it * 100).toInt()}%" }) { v -> t.boxColor = (t.boxColor and 0x00FFFFFF) or ((v * 255).toInt() shl 24); changed() })
+                }
+            }
+            "motion" -> {
+                s.addView(text("IN", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(4), 0, 0) })
+                s.addView(chips(TextDraw.ANIMS, t.animIn) { t.animIn = it; seekTimeline(t.startMs); player?.play() })
+                s.addView(text("OUT", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(8), 0, 0) })
+                s.addView(chips(TextDraw.ANIMS.filter { it.first != "type" }, t.animOut) { t.animOut = it; seekTimeline(maxOf(t.startMs, t.endMs - 900)); player?.play() })
+            }
+            else -> {
+                s.addView(text("${fmt(t.startMs, true)} – ${fmt(t.endMs, true)}  ·  %.1f s".format((t.endMs - t.startMs) / 1000f), 15f, C.TEXT, true, mono = true).apply { setPadding(dp(4), dp(6), 0, dp(6)) })
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                r.addView(bare(R.drawable.i_left, "Starts here", size = 20) { val n = timeline?.time() ?: 0L; if (n < t.endMs - 200) { t.startMs = n; changed(); again() } else toast("That's after it ends") })
+                r.addView(bare(R.drawable.i_right, "Ends here", size = 20) { val n = timeline?.time() ?: 0L; if (n > t.startMs + 200) { t.endMs = n; changed(); again() } else toast("That's before it starts") })
+                r.addView(bare(R.drawable.i_film, "Whole edit", size = 20) { t.startMs = 0; t.endMs = p.lengthMs; changed(); again() })
+                s.addView(r)
+                s.addView(LrSlider(this, "Length", (t.endMs - t.startMs) / 1000f, 0.5f, maxOf(1f, minOf(30f, p.lengthMs / 1000f)), null, { "%.1f s".format(it) }) { v -> t.endMs = t.startMs + (v * 1000).toLong(); changed() })
+                s.addView(text("Or drag its purple bar along the timeline.", 11.5f, C.FAINT).apply { setPadding(dp(4), dp(4), 0, 0) })
+            }
+        }
+        col.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(context.word("Cancel", false, 14f) { editingText = null; timeline?.selectedText = null; closeClipPanel(false) })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(bare(R.drawable.i_copy, null, size = 18) { val c2 = TextItem.from(t.json().put("id", java.util.UUID.randomUUID().toString())).apply { y = (t.y + 0.1f).coerceAtMost(0.9f) }; p.texts.add(c2); textEditor(c2) })
+            addView(bare(R.drawable.i_trash, null, 0xFFFF6B5E.toInt(), 18) { p.texts.remove(t); editingText = null; timeline?.selectedText = null; closeClipPanel(true) })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener {
+                if (t.text.isBlank()) p.texts.remove(t)
+                editingText = null; timeline?.selectedText = null; closeClipPanel(true) } })
+        }, LinearLayout.LayoutParams(-1, dp(46)))
+        openClipPanel(col)
+        changed()
+        if (fresh) main.postDelayed({ edit.requestFocus(); edit.selectAll(); (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showSoftInput(edit, 0) }, 200)
+    }
+
+    private var tDist = 0f; private var tSize = 0f
+    private fun textTouch(e: android.view.MotionEvent) {
+        val t = editingText ?: return
+        val w = glView.width.coerceAtLeast(1); val h = glView.height.coerceAtLeast(1)
+        fun dist() = if (e.pointerCount >= 2) Math.hypot((e.getX(0) - e.getX(1)).toDouble(), (e.getY(0) - e.getY(1)).toDouble()).toFloat() else 0f
+        when (e.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                // tapping a different title switches to it
+                val other = textAt(e.x, e.y)
+                if (other != null && other !== t) { val keep = clipPanelBefore; textEditor(other); clipPanelBefore = keep; return }
+                touchX = e.x; touchY = e.y
+            }
+            android.view.MotionEvent.ACTION_POINTER_DOWN -> { tDist = dist(); tSize = t.size }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                if (e.pointerCount >= 2 && tDist > 0f) t.size = (tSize * dist() / tDist).coerceIn(0.02f, 0.25f)
+                else if (e.pointerCount == 1) {
+                    t.x = (t.x + (e.x - touchX) / w).coerceIn(0.05f, 0.95f); t.y = (t.y + (e.y - touchY) / h).coerceIn(0.05f, 0.95f)
+                    touchX = e.x; touchY = e.y
+                }
+                textKey = ""; updateFrame()
+            }
+            android.view.MotionEvent.ACTION_POINTER_UP -> { tDist = 0f; val k = if (e.actionIndex == 0) 1 else 0; touchX = e.getX(k); touchY = e.getY(k) }
+        }
     }
 
     // ---------------------------------------------------------------- reverse, freeze
@@ -1369,7 +1593,7 @@ class RollActivity : Activity() {
                 "gif" -> {
                     val (a, b) = gifRange(p); val (w, h) = gifSize(p)
                     val tmp = File(outDir(), "gif-src.mp4"); val out = File(outDir(), "$safe-$stamp.gif")
-                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, a, b), w, h, gifFps, false, store.lutDir, lvl, diss) },
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, a, b), w, h, gifFps, false, store.lutDir, lvl, diss, a) },
                         tmp, MimeTypes.VIDEO_H264, 6_000_000, { pr -> renderExport("Rendering frames…", pr / 2) }) { err, _ ->
                         if (err != null) { exporting = null; renderExport("Couldn't export: $err"); return@export }
                         renderExport("Making the GIF…", 50)
@@ -1389,7 +1613,7 @@ class RollActivity : Activity() {
                     val r = Render.ratio(p)
                     val (w, h) = if (stSquare) 512 to 512 else if (r >= 1) 512 to ((512 / r).toInt() / 2 * 2) else ((512 * r).toInt() / 2 * 2) to 512
                     val tmp = File(outDir(), "sticker-src.mp4"); val out = File(outDir(), "$safe-$stamp.webm")
-                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, t0, minOf(p.lengthMs, t0 + 2990)), w, h, stFps, false, store.lutDir, lvl, diss) },
+                    exporting = Render.export(this, { lvl -> Render.composition(this, p, Render.range(p, t0, minOf(p.lengthMs, t0 + 2990)), w, h, stFps, false, store.lutDir, lvl, diss, t0) },
                         tmp, MimeTypes.VIDEO_H264, 8_000_000, { pr -> renderExport("Rendering…", pr / 2) }) { err, _ ->
                         if (err != null) { exporting = null; renderExport("Couldn't export: $err"); return@export }
                         renderExport("Encoding VP9…", 60)

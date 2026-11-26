@@ -16,7 +16,7 @@ jobs:
         run: gradle :roll:assembleDebug --no-daemon -q
       - name: Make test media
         run: |
-          sudo apt-get -qq install -y ffmpeg >/dev/null
+          which ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null)
           ffmpeg -loglevel error -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency=440 -t 5 -c:v libx264 -pix_fmt yuv420p -c:a aac a.mp4
           ffmpeg -loglevel error -f lavfi -i "mandelbrot=size=720x1280:rate=30" -f lavfi -i sine=frequency=660 -t 5 -c:v libx264 -pix_fmt yuv420p -c:a aac b.mp4
           ffmpeg -loglevel error -f lavfi -i "smptehdbars=size=1600x1200" -frames:v 1 c.jpg

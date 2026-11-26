@@ -38,6 +38,12 @@ class Timeline(ctx: Context) : View(ctx) {
     var onHold: ((Int) -> Unit)? = null
     /** Tapped the diamond between clip i and i + 1. */
     var onJoint: ((Int) -> Unit)? = null
+    /** Tapped a title or caption bar (its id), or dragged one along (then onLaneMoved). */
+    var onText: ((String) -> Unit)? = null
+    var onLaneMoved: (() -> Unit)? = null
+    var onLaneDown: (() -> Unit)? = null
+    var selectedText: String? = null
+        set(v) { field = v; invalidate() }
 
     private val d = resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -48,6 +54,8 @@ class Timeline(ctx: Context) : View(ctx) {
     private val clipTop get() = dp(26f)
     private val clipH get() = dp(64f)
     private val handleW get() = dp(12f)
+    private val textTop get() = clipTop + clipH + dp(10f)
+    private val laneH get() = dp(20f)
 
     // the timeline has its own colour: deep steel blue, so the tracks stand apart from the black app
     private val panel = Paint().apply { color = 0xFF0A1218.toInt() }
@@ -64,6 +72,10 @@ class Timeline(ctx: Context) : View(ctx) {
     private val plusLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); strokeWidth = dp(2f); strokeCap = Paint.Cap.ROUND }
     private val clipPath = Path(); private val r = RectF()
     private val diamond = Path()
+    private val bar = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val barText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF0A0A0A.toInt(); textSize = dp(10.5f); typeface = Typeface.create("sans-serif-medium", Typeface.BOLD) }
+    private val barLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); style = Paint.Style.STROKE; strokeWidth = dp(2f) }
+    private val laneHint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x556C8797; textSize = dp(10f) }
     private val jointFill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val jointShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC000000.toInt(); style = Paint.Style.STROKE; strokeWidth = dp(3f) }
 
@@ -147,6 +159,20 @@ class Timeline(ctx: Context) : View(ctx) {
             jointFill.color = if (clip.trans != "none") C.AMBER else 0xFFEFE8DF.toInt()
             c.drawPath(diamond, jointShadow); c.drawPath(diamond, jointFill)
         }
+        // titles and captions lane
+        c.drawRoundRect(dp(6f), textTop - dp(2f), width - dp(6f), textTop + laneH + dp(2f), dp(7f), dp(7f), lane)
+        if (p.texts.isEmpty()) c.drawText("T  titles and captions show here", dp(14f), textTop + laneH * 0.68f, laneHint)
+        for (it in p.texts) {
+            val a = x0 + it.startMs * pxPerMs; val b = x0 + it.endMs * pxPerMs
+            if (b < 0 || a > width) continue
+            r.set(a + dp(1f), textTop, b - dp(1f), textTop + laneH)
+            bar.color = if (it.caption) 0xFF6EE7A8.toInt() else 0xFFB794FF.toInt()
+            c.drawRoundRect(r, dp(5f), dp(5f), bar)
+            if (it.id == selectedText) c.drawRoundRect(r, dp(5f), dp(5f), barLine)
+            c.save(); c.clipRect(r)
+            c.drawText(it.text.replace('\n', ' '), r.left + dp(6f), r.top + laneH * 0.7f, barText)
+            c.restore()
+        }
         // add button after the last clip
         val ax = x0 + p.lengthMs * pxPerMs + dp(28f); val ay = clipTop + clipH / 2
         c.drawCircle(ax, ay, dp(18f), plus)
@@ -200,6 +226,11 @@ class Timeline(ctx: Context) : View(ctx) {
             val p = project ?: return true
             val ax = edgeX + p.lengthMs * pxPerMs + dp(28f)
             if (abs(e.x - ax) < dp(26f) && abs(e.y - (clipTop + clipH / 2)) < dp(30f)) { onAdd?.invoke(); return true }
+            // a title / caption bar
+            if (e.y in (textTop - dp(4f))..(textTop + laneH + dp(4f))) {
+                val t = ((e.x - edgeX) / pxPerMs).toLong()
+                p.texts.lastOrNull { t in it.startMs..it.endMs }?.let { onText?.invoke(it.id); return true }
+            }
             // a joint between clips
             if (abs(e.y - (clipTop + clipH / 2)) < dp(22f)) {
                 var jt = 0L
@@ -245,7 +276,13 @@ class Timeline(ctx: Context) : View(ctx) {
         if (pinch.isInProgress) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                trimming = 0
+                trimming = 0; moving = null
+                // press on the selected bar: drag to move it in time
+                val sel = p.texts.firstOrNull { it.id == selectedText }
+                if (sel != null && e.y in (textTop - dp(4f))..(textTop + laneH + dp(4f))) {
+                    val t = ((e.x - edgeX) / pxPerMs).toLong()
+                    if (t in sel.startMs..sel.endMs) { moving = sel; moveOrig = sel.startMs; downX = e.x; onLaneDown?.invoke(); return true }
+                }
                 if (selected in p.clips.indices && e.y in clipTop..(clipTop + clipH)) {
                     val a = edgeX + p.startOf(selected) * pxPerMs; val b = a + p.clips[selected].lengthMs * pxPerMs
                     if (abs(e.x - a) < handleW * 1.6f) { trimming = -1; trimClip = selected; trimOrig = p.clips[selected].startMs }
@@ -253,17 +290,26 @@ class Timeline(ctx: Context) : View(ctx) {
                     downX = e.x
                 }
             }
-            MotionEvent.ACTION_MOVE -> if (trimming != 0) {
+            MotionEvent.ACTION_MOVE -> if (moving != null) {
+                val m = moving!!; val len = m.endMs - m.startMs
+                m.startMs = (moveOrig + ((e.x - downX) / pxPerMs).toLong()).coerceIn(0, maxOf(0, p.lengthMs - 200)); m.endMs = m.startMs + len
+                invalidate(); return true
+            } else if (trimming != 0) {
                 val c = p.clips[trimClip]
                 val delta = ((e.x - downX) / pxPerMs * c.speed).toLong()
                 if (trimming < 0) c.startMs = (trimOrig + delta).coerceIn(0, c.endMs - 300)
                 else c.endMs = (trimOrig + delta).coerceIn(c.startMs + 300, c.sourceMs)
                 invalidate()
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (trimming != 0) { trimming = 0; onTrimmed?.invoke(trimClip); return true }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (moving != null) { val moved = abs(e.x - downX) > dp(4f); moving = null; if (moved) onLaneMoved?.invoke() else selectedText?.let { onText?.invoke(it) }; return true }
+                if (trimming != 0) { trimming = 0; onTrimmed?.invoke(trimClip); return true }
+            }
         }
         if (trimming != 0) return true
         return gestures.onTouchEvent(e)
     }
     private var downX = 0f
+    private var moving: TextItem? = null
+    private var moveOrig = 0L
 }
