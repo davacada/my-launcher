@@ -55,7 +55,7 @@ object Audio {
         ex.seekTo(fromMs * 1000, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
         val dec = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
         dec.configure(fmt, null, null, 0); dec.start()
-        var enc = AudioFormat.ENCODING_PCM_16BIT
+        var enc = if (fmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) fmt.getInteger(MediaFormat.KEY_PCM_ENCODING) else AudioFormat.ENCODING_PCM_16BIT
         val outCh = if (mono) 1 else 2
         val endUs = (fromMs + (lenMs * speed).toLong()) * 1000
         // gather the decoded samples (as floats, per output channel), then resample
@@ -80,14 +80,20 @@ object Audio {
                 } else if (o >= 0) {
                     val buf = dec.getOutputBuffer(o)!!.order(ByteOrder.LITTLE_ENDIAN)
                     buf.position(info.offset); buf.limit(info.offset + info.size)
-                    val bps = if (enc == AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+                    // 16-bit, float, 24-bit (some phones record it) or 32-bit samples
+                    val bps = when (enc) { AudioFormat.ENCODING_PCM_FLOAT, AudioFormat.ENCODING_PCM_32BIT -> 4; AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3; else -> 2 }
+                    fun sample(): Float = when (enc) {
+                        AudioFormat.ENCODING_PCM_FLOAT -> buf.getFloat()
+                        AudioFormat.ENCODING_PCM_32BIT -> buf.getInt() / 2147483648f
+                        AudioFormat.ENCODING_PCM_24BIT_PACKED -> { val b0 = buf.get().toInt() and 255; val b1 = buf.get().toInt() and 255; val b2 = buf.get().toInt(); ((b2 shl 16) or (b1 shl 8) or b0) / 8388608f }
+                        else -> buf.getShort() / 32768f
+                    }
                     val frames = info.size / (bps * ch)
                     var t = info.presentationTimeUs
                     val step = 1_000_000.0 / inRate
                     for (k in 0 until frames) {
-                        var l: Float; var r: Float
-                        if (bps == 4) { l = buf.getFloat(); r = if (ch > 1) buf.getFloat() else l; for (x in 2 until ch) buf.getFloat() }
-                        else { l = buf.getShort() / 32768f; r = if (ch > 1) buf.getShort() / 32768f else l; for (x in 2 until ch) buf.getShort() }
+                        val l = sample(); val r = if (ch > 1) sample() else l
+                        for (x in 2 until ch) sample()
                         val ts = t + (k * step).toLong()
                         if (ts >= fromMs * 1000 && ts < endUs) { if (outCh == 1) raw.add((l + r) / 2) else { raw.add(l); raw.add(r) } }
                     }

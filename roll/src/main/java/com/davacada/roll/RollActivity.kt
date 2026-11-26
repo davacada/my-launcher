@@ -99,7 +99,7 @@ class RollActivity : Activity() {
                 val p = Project(name = "Selftest"); p.aspect = "9:16"
                 val a = clip(vids[0]).apply { fit = true; bg = "blur"; trans = "dissolve"; transMs = 1000 }
                 val ph = Stills.stillClip(this, Stills.decodePhoto(this, Uri.fromFile(photo!!)), "photo", 3000).apply { trans = "zoom"; transMs = 800 }
-                val b = clip(vids.getOrElse(1) { vids[0] }).apply { trans = "whip"; transMs = 800; rot = 8f; scale = 1.2f }
+                val b = clip(vids.getOrElse(1) { vids[0] }).apply { trans = "whip"; transMs = 800; rot = 8f; scale = 1.2f; speed = 1.5f; endMs = 5000 }
                 log("reversing")
                 val r = Stills.reverse(this, clip(vids[0]).apply { endMs = 3000 }) { } ?: error("reverse failed")
                 p.clips.addAll(listOf(a, ph, b, r))
@@ -1986,8 +1986,8 @@ class RollActivity : Activity() {
                         if (err != null) renderExport("Couldn't export: $err")
                         else { val u = Render.saveToGallery(this, out, out.name, "video/mp4"); renderExport(note ?: "Saved to Movies/Roll", 100, out, "video/mp4", u) }
                     }
-                    if (p.audio.isNotEmpty() && !p.mute) {
-                        // with music or voiceovers: the picture first (no sound), then Roll mixes every sound and puts them together
+                    if (!p.mute) {
+                        // the picture first (no sound), then Roll mixes every sound (clips, music, voiceovers) and puts them together
                         val pic = File(outDir(), "picture-$stamp.mp4")
                         val copy = Project.from(p.json())
                         exporting = Render.export(this, { lvl -> Render.composition(this, p, p.clips, w, h, exFps, false, store.lutDir, lvl, diss) },

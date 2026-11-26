@@ -29,7 +29,8 @@ ls -la out.mp4 || true
 for f in shot*.png; do echo "BEGIN-$f"; base64 -w0 $f; echo; echo "END-$f"; done
 if [ -s out.mp4 ]; then
   ffprobe -v error -show_entries stream=codec_type,width,height,duration,sample_rate,channels -of compact out.mp4
-  ffmpeg -v error -i out.mp4 -af volumedetect -f null - 2>&1 | grep -i "mean_volume\|max_volume" || true
+  ffmpeg -hide_banner -i out.mp4 -af volumedetect -f null - 2>&1 | grep -i "mean_volume\|max_volume" || true
+  for t in 1 5 8 12; do echo "vol at $t: $(ffmpeg -hide_banner -ss $t -t 0.8 -i out.mp4 -af volumedetect -f null - 2>&1 | grep -o 'mean_volume: [-0-9.]* dB')"; done
   for t in 1.5 3.5 4.0 4.5 6.0 7.2 8.5 12.0; do ffmpeg -loglevel error -ss $t -i out.mp4 -frames:v 1 -vf scale=240:-2 ex_$t.png; done
   ffmpeg -loglevel error -i ex_1.5.png -i ex_3.5.png -i ex_4.0.png -i ex_4.5.png -i ex_6.0.png -i ex_7.2.png -i ex_8.5.png -i ex_12.0.png -filter_complex hstack=inputs=8 sheet.png
   echo "BEGIN-sheet"; base64 -w0 sheet.png; echo; echo "END-sheet"
