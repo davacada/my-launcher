@@ -153,6 +153,7 @@ object Audio {
             val len = min(it.lengthMs, p.lengthMs - it.startMs)
             if (len <= 0) continue
             val pcm = decode(ctx, it.uri, it.inMs, len)
+            android.util.Log.i("ROLLTEST", "mix ${it.name}: ${pcm.size / 2} frames, peak ${pcm.maxOfOrNull { s -> kotlin.math.abs(s.toInt()) } ?: 0}")
             val at = (it.startMs * RATE / 1000).toInt()
             val frames = pcm.size / 2
             val fi = it.fadeIn * RATE / 1000; val fo = it.fadeOut * RATE / 1000

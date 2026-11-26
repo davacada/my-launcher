@@ -42,7 +42,8 @@ object Mux {
             t += c.lengthMs
             progress((i + 1) * 60 / maxOf(1, p.clips.size))
         }
-        if (!p.mute) Audio.mix(ctx, p)?.let { f ->
+        val clipsOnly = acc.copyOf()
+        if (!p.mute) Audio.mix(ctx, p)?.also { android.util.Log.i("ROLLTEST", "soundtrack ${it.length()} bytes") }?.let { f ->
             // music + voice (already mixed with fades and ducking)
             val bytes = f.readBytes()
             val bb = ByteBuffer.wrap(bytes, 44, bytes.size - 44).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
@@ -50,6 +51,10 @@ object Mux {
             while (bb.hasRemaining() && k < acc.size) { acc[k] += bb.get() / 32768f; k++ }
         }
         progress(70)
+        // loudness per second (for the self-test log)
+        val secs = n / rate
+        android.util.Log.i("ROLLTEST", "rms/s clips: " + (0 until secs).joinToString(" ") { sec -> var e = 0.0; for (k in sec * rate * 2 until (sec + 1) * rate * 2) e += clipsOnly[k] * clipsOnly[k]; "%.3f".format(Math.sqrt(e / (rate * 2))) })
+        android.util.Log.i("ROLLTEST", "rms/s all:   " + (0 until secs).joinToString(" ") { sec -> var e = 0.0; for (k in sec * rate * 2 until (sec + 1) * rate * 2) e += acc[k] * acc[k]; "%.3f".format(Math.sqrt(e / (rate * 2))) })
         return ShortArray(acc.size) { i -> val v = acc[i]; val s = if (v > 0.9f) 0.9f + (v - 0.9f) / (1 + (v - 0.9f) * 10) else if (v < -0.9f) -0.9f + (v + 0.9f) / (1 - (v + 0.9f) * 10) else v; (s * 32767).toInt().coerceIn(-32768, 32767).toShort() }
     }
 
