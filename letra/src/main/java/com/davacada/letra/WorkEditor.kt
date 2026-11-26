@@ -99,10 +99,12 @@ class WorkEditor(a: LetraActivity, n: Note) : Editor(a, n) {
         val s = Shift(Work.today(), Work.nowMin(), null)
         n.shifts.add(s); changed()
         a.toast("Came in at " + Work.clock(s.inMin))
+        if (Places.enabled(a)) Places.atWork(a, s.inMin!!)
     }
 
     private fun leaving(s: Shift) {
         s.outMin = Work.nowMin(); changed()
+        Places.doneAtWork(a)
         s.minutes()?.let { a.toast("Left at ${Work.clock(s.outMin)} · ${Work.dur(it)}") }
     }
 

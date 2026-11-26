@@ -40,7 +40,8 @@ object Places {
     private const val PREFS = "work_places"
     const val CH = "work"
     const val NOTE_ID = 4100
-    const val RADIUS = 130f
+    const val AT_WORK_ID = 4101
+    const val RADIUS = 100f          // small, so "Done with work?" comes soon after you step out
 
     fun defaults() = mutableListOf(
         Place("Work", "Ulica Dušana Kvedra 46, 3230 Šentjur, Slovenia", true),
@@ -93,7 +94,7 @@ object Places {
                 .setCircularRegion(p.lat, p.lng, RADIUS)
                 .setExpirationDuration(Geofence.NEVER_EXPIRE)
                 .setTransitionTypes(if (p.work) Geofence.GEOFENCE_TRANSITION_DWELL or Geofence.GEOFENCE_TRANSITION_EXIT else Geofence.GEOFENCE_TRANSITION_ENTER)
-                .setLoiteringDelay(3 * 60_000)
+                .setLoiteringDelay(60_000)       // "At work?" after a minute inside
                 .build()
         }
         val req = GeofencingRequest.Builder().setInitialTrigger(0).addGeofences(fences).build()
@@ -174,6 +175,25 @@ object Places {
         return at
     }
 
+    /**
+     * While you're clocked in, a notification stays up with "Clock out now": tap it before you leave the
+     * building, so Urnik.NET (which wants you there) takes the clock-out.
+     */
+    fun atWork(c: Context, inMin: Int) {
+        channel(c)
+        val now = PendingIntent.getBroadcast(c, 30, Intent(c, AnswerReceiver::class.java).putExtra(EXTRA_KIND, ASK_OUT).putExtra(EXTRA_AT, -1).putExtra(EXTRA_ANSWER, "yes"),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val open = PendingIntent.getActivity(c, 31, Intent(c, LetraActivity::class.java).putExtra("openWork", true), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val n = Notification.Builder(c, CH).setSmallIcon(R.drawable.i_work).setColor(Look.TEAL)
+            .setContentTitle("At work since ${Work.clock(inMin)}")
+            .setContentText("Tap Clock out now before you leave the building")
+            .setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false).setContentIntent(open)
+            .addAction(Notification.Action.Builder(null, "Clock out now", now).build())
+            .build()
+        c.getSystemService(NotificationManager::class.java).notify(AT_WORK_ID, n)
+    }
+    fun doneAtWork(c: Context) = c.getSystemService(NotificationManager::class.java).cancel(AT_WORK_ID)
+
     /** Writes the answer into today's line of the timesheet and says what was written. */
     fun record(c: Context, kind: String, at: Int, answer: String) {
         val store = Store(c)
@@ -191,12 +211,14 @@ object Places {
             store.save(note)
             confirm(c, "Came in at ${Work.clock(min)} · written in Letra")
             toUrnik(c, kind, min)
+            atWork(c, min)
         } else {
             val s = open ?: note.shifts.firstOrNull { it.day == today } ?: Shift(today, null, null).also { note.shifts.add(it) }
             s.outMin = min
             store.save(note)
             confirm(c, "Left at ${Work.clock(min)}" + (s.minutes()?.let { " · ${Work.dur(it)} today" } ?: "") + " · written in Letra")
             toUrnik(c, kind, min)
+            doneAtWork(c)
         }
         Handler(Looper.getMainLooper()).post { Work.changed.toList().forEach { it() } }
     }
@@ -229,7 +251,7 @@ class FenceReceiver : BroadcastReceiver() {
         when (ev.geofenceTransition) {
             Geofence.GEOFENCE_TRANSITION_DWELL -> if (ids.any { it.startsWith("w") }) {
                 val cameToday = note?.shifts?.any { it.day == Work.today() && it.inMin != null } == true
-                if (!cameToday) Places.ask(c, Places.ASK_IN, (now - 3 + 1440) % 1440, where)
+                if (!cameToday) Places.ask(c, Places.ASK_IN, (now - 1 + 1440) % 1440, where)
             }
             Geofence.GEOFENCE_TRANSITION_EXIT -> if (ids.any { it.startsWith("w") } && open != null) {
                 p.edit().putInt("leftAt", now).putString("leftDay", Work.today()).apply()
@@ -247,7 +269,7 @@ class FenceReceiver : BroadcastReceiver() {
 class AnswerReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val kind = i.getStringExtra(Places.EXTRA_KIND) ?: return
-        val at = i.getIntExtra(Places.EXTRA_AT, Work.nowMin())
+        val at = i.getIntExtra(Places.EXTRA_AT, Work.nowMin()).let { if (it < 0) Work.nowMin() else it }   // -1: right now
         val typed = RemoteInput.getResultsFromIntent(i)?.getCharSequence(Places.KEY_REPLY)?.toString()
         Places.record(c, kind, at, typed ?: i.getStringExtra(Places.EXTRA_ANSWER) ?: "yes")
     }
