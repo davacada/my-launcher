@@ -24,6 +24,14 @@ class Shift(var day: String, var inMin: Int?, var outMin: Int?) {
 }
 
 object Work {
+    /** Told when something outside the editor (a reminder answer) changed the timesheet. */
+    val changed = mutableListOf<() -> Unit>()
+
+    /** The day still waiting for "out": today's, or last night's if it ran past midnight. */
+    fun openShift(n: Note): Shift? {
+        val yesterday = key.format(Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }.time)
+        return n.shifts.filter { it.inMin != null && it.outMin == null && (it.day == today() || it.day == yesterday) }.maxByOrNull { it.day }
+    }
     private val key = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     fun today(): String = key.format(Calendar.getInstance().time)
     fun cal(day: String): Calendar = Calendar.getInstance().apply { time = key.parse(day)!! }
@@ -60,10 +68,18 @@ class WorkEditor(a: LetraActivity, n: Note) : Editor(a, n) {
     private val bottom = FrameLayout(a)
     private var showAll = mutableSetOf<String>()
 
+    private val reload: () -> Unit = {
+        a.store.all().firstOrNull { it.id == n.id }?.let { fresh -> n.shifts.clear(); n.shifts.addAll(fresh.shifts); render(); renderBottom() }
+    }
+    init { Work.changed.add(reload) }
+    override fun release() { Work.changed.remove(reload); super.release() }
+
+    override fun topActions(): List<View> = listOf(a.iconButton(R.drawable.i_pin, "Location reminders", if (Places.enabled(a)) color else Look.UMBER) { placesSheet() })
+
     override fun view(): View { render(); return ScrollView(a).apply { isVerticalScrollBarEnabled = false; addView(box) } }
     override fun tools(): View { renderBottom(); return bottom }
 
-    private fun open(): Shift? = n.shifts.firstOrNull { it.day == Work.today() && it.inMin != null && it.outMin == null }
+    private fun open(): Shift? = Work.openShift(n)
 
     private fun renderBottom() {
         bottom.removeAllViews()
@@ -168,6 +184,76 @@ class WorkEditor(a: LetraActivity, n: Note) : Editor(a, n) {
         addView(a.text(label, 12f, Look.SUB, true).apply { setPadding(0, 0, a.dp(8), 0) })
         addView(a.text(Work.clock(m), 18f, if (m == null) Look.FAINT else Look.UMBER, true).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
         setOnClickListener { onClick() }
+    }
+
+    // ------------------------------------------------------------ location reminders
+
+    private fun placesSheet() {
+        val places = Places.load(a)
+        val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(a.text("When you've been at work for a few minutes, Letra asks “At work?”. When you leave, or get home with the day still open, it asks “Done with work?”. Tap Yes, type a time, or say it.", 13.5f, Look.SUB).apply { setLineSpacing(0f, 1.15f); setPadding(a.dp(6), 0, a.dp(6), a.dp(12)) })
+        val status = a.text("", 13f, Look.SUB).apply { setPadding(a.dp(6), a.dp(6), a.dp(6), 0) }
+        val edits = places.map { p ->
+            box.addView(a.text(if (p.work) "Work" else "Home", 12f, if (p.work) color else Look.SOFT, true).apply { letterSpacing = 0.06f; setPadding(a.dp(6), a.dp(8), 0, a.dp(2)) })
+            val e = android.widget.EditText(a).apply {
+                setText(p.address); textSize = 15f; setTextColor(Look.UMBER); background = pill(Look.PAPER, a.dpf(14f))
+                setPadding(a.dp(14), a.dp(10), a.dp(14), a.dp(10)); isSingleLine = true
+            }
+            box.addView(e, LinearLayout.LayoutParams(-1, -2))
+            box.addView(a.text(if (p.found) "✓ found on the map" else "not looked up yet", 11.5f, if (p.found) color else Look.FAINT).apply { setPadding(a.dp(10), a.dp(3), 0, 0) })
+            e
+        }
+        box.addView(status)
+        val on = Places.enabled(a)
+        val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, a.dp(14), 0, 0) }
+        row.addView(a.bigButton(if (on) "Save" else "Turn on", R.drawable.i_pin, color, true) {
+            places.forEachIndexed { i, p -> val t = edits[i].text.toString().trim(); if (t != p.address) { p.address = t; p.lat = 0.0; p.lng = 0.0 } }
+            status.text = "Finding the addresses…"
+            Thread {
+                val missing = Places.geocode(a, places)
+                Places.save(a, places)
+                a.main.post {
+                    if (missing.size == places.size) { status.text = "Couldn't find these addresses. Check the internet and the spelling."; return@post }
+                    askPermissions {
+                        Places.setEnabled(a, true)
+                        Places.arm(a) { err ->
+                            a.main.post {
+                                if (err != null) { status.text = err; Places.setEnabled(a, false) }
+                                else { a.closeSheet(); a.toast(if (missing.isEmpty()) "Location reminders are on" else "On, but couldn't find: " + missing.joinToString { it.address }); a.open(n) }
+                            }
+                        }
+                    }
+                }
+            }.start()
+        }, LinearLayout.LayoutParams(0, a.dp(52), 1f))
+        if (on) row.addView(a.bigButton("Turn off", null, color, false) {
+            Places.setEnabled(a, false); Places.arm(a); a.closeSheet(); a.toast("Location reminders are off"); a.open(n)
+        }, LinearLayout.LayoutParams(-2, a.dp(52)).apply { marginStart = a.dp(10) })
+        box.addView(row)
+        a.showSheet("Location reminders", ScrollView(a).apply { addView(box) })
+    }
+
+    /** Location while using the app, then "Allow all the time" (Android asks that one separately), then notifications. */
+    private fun askPermissions(then: () -> Unit) {
+        if (!Places.hasLocation(a)) {
+            a.permissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION, android.Manifest.permission.POST_NOTIFICATIONS)) {
+                if (Places.hasLocation(a)) askPermissions(then) else a.toast("Letra needs your location for this")
+            }
+            return
+        }
+        if (!Places.hasBackground(a)) {
+            AlertDialog.Builder(a, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert)
+                .setTitle("Allow all the time")
+                .setMessage("So Letra can notice when you get to work and leave, even when it's closed, choose “Allow all the time” on the next screen.")
+                .setPositiveButton("Continue") { _, _ ->
+                    a.permissions(arrayOf(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
+                        if (Places.hasBackground(a)) then() else a.toast("Choose “Allow all the time” for Letra's location")
+                    }
+                }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
+        then()
     }
 
     private fun remove(s: Shift) {

@@ -33,3 +33,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    // Geofences for the Work location reminders (battery-friendly; the phone does the watching).
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+}

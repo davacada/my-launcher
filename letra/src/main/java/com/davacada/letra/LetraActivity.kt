@@ -60,12 +60,21 @@ class LetraActivity : Activity() {
         setContentView(root)
         home()
         handleShare(intent)
+        openWorkIf(intent)
+        if (Places.enabled(this)) Places.arm(this)
+    }
+
+    private fun openWorkIf(i: android.content.Intent?) {
+        if (i?.getBooleanExtra("openWork", false) != true) return
+        i.removeExtra("openWork")
+        store.all().firstOrNull { it.mode == Note.WORK }?.let { open(it) }
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleShare(intent)
+        openWorkIf(intent)
     }
 
     // ---------------------------------------------------------------- shared in from other apps
@@ -531,8 +540,15 @@ class LetraActivity : Activity() {
         else { micThen = then; requestPermissions(need.toTypedArray(), 7) }
     }
 
+    private var permThen: (() -> Unit)? = null
+    fun permissions(list: Array<String>, then: () -> Unit) {
+        val need = list.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (need.isEmpty()) then() else { permThen = then; requestPermissions(need.toTypedArray(), 8) }
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 8) { val t = permThen; permThen = null; t?.invoke() }
         if (requestCode == 7) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) micThen?.invoke()
             else toast("Letra needs the microphone to record")
