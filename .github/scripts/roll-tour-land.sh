@@ -4,6 +4,7 @@ adb push a.mp4 b.mp4 c.jpg /data/local/tmp/
 adb shell run-as com.davacada.roll mkdir -p files/selftest
 for f in a.mp4 b.mp4 c.jpg; do adb shell run-as com.davacada.roll cp /data/local/tmp/$f files/selftest/$f; done
 adb shell settings put system accelerometer_rotation 0; adb shell settings put system user_rotation 1; sleep 3
+adb shell settings put global hide_error_dialogs 1; adb shell am force-stop com.google.android.apps.nexuslauncher; sleep 20
 adb logcat -c
 adb shell am start -n com.davacada.roll/.RollActivity --es selftest tour-land
 n=0
