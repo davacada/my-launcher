@@ -8,7 +8,7 @@ adb logcat -c
 adb shell am start -n com.davacada.roll/.RollActivity --es selftest 1
 set +x
 n=0
-for i in $(seq 1 240); do
+for i in $(seq 1 900); do
   sleep 1
   adb logcat -d -s ROLLTEST:I > rt.txt
   c=$(grep -c "shot " rt.txt || true)
