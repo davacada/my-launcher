@@ -664,9 +664,6 @@ class RollActivity : Activity() {
         tl.onLocked = { lane -> toast("$lane track is locked · tap its lock to change it") }
         tl.onLaneDown = { snapshotBefore = p.json().toString() }
         tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); reloadOverlays(); updateFrame(); refreshSoundtrack() }
-        // sideways the panel is tall: timeline and tools sit at the bottom, under your thumbs, with room above
-        val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-        if (sideways) col.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
         // the editing bar on top of the timeline: copy, paste, blade, title, snap
         val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setBackgroundColor(0xFF2A2B2F.toInt()); setPadding(dp(6), 0, dp(6), 0) }
