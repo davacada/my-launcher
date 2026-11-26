@@ -18,7 +18,8 @@ import androidx.media3.effect.GlShaderProgram
  * [prevFrame] is the last frame of the clip before, for a dissolve.
  */
 @UnstableApi
-class RollFrame(private val clips: List<Clip>, private val index: Int, private val outW: Int, private val outH: Int, private val prevFrame: Bitmap?) : GlEffect {
+class RollFrame(private val clips: List<Clip>, private val index: Int, private val outW: Int, private val outH: Int, private val prevFrame: Bitmap?,
+                private val fx: FloatArray = FloatArray(4)) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program()
 
     private inner class Program : BaseGlShaderProgram(false, 1) {
@@ -49,6 +50,7 @@ class RollFrame(private val clips: List<Clip>, private val index: Int, private v
             prog.setSamplerTexIdUniform("uPrev", if (prevTex != 0) prevTex else inputTexId, 1)
             val u = f.uniforms()
             prog.setFloatsUniform("uA", u[0]); prog.setFloatsUniform("uB", u[1]); prog.setFloatsUniform("uC", u[2])
+            prog.setFloatsUniform("uE", fx)
             prog.setFloatsUniform("uP1", u[3]); prog.setFloatsUniform("uP2", if (prevTex != 0) u[4] else floatArrayOf(0f, 0f, 0f, 0f))
             prog.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
@@ -71,7 +73,7 @@ void main() { gl_Position = aFramePosition; vUv = aFramePosition.xy * 0.5 + 0.5;
 precision highp float;
 uniform sampler2D uTexSampler;
 uniform sampler2D uPrev;
-uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2;
+uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uE;
 varying vec2 vUv;
 #define SRC(t) texture2D(uTexSampler, t)
 #define PREV(t) texture2D(uPrev, vec2((t).x, 1.0 - (t).y))

@@ -12,7 +12,8 @@ import kotlin.math.pow
 object Looks {
     class Look(val id: String, val name: String, val group: String, val note: String, val grain: Float, val vignette: Float, val f: (FloatArray) -> Unit)
 
-    const val FILM = "Film stocks"; const val CAMERA = "Cameras"; const val BW = "Black & white"
+    const val FILM = "Film stocks"; const val CINEMA = "Cinema"; const val CAMERA = "Cameras"; const val MOODS = "Moods"; const val BW = "Black & white"
+    val GROUPS = listOf(FILM, CINEMA, CAMERA, MOODS, BW)
 
     private fun luma(c: FloatArray) = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]
     private fun sat(c: FloatArray, s: Float) { val l = luma(c); for (i in 0..2) c[i] = l + (c[i] - l) * s }
@@ -45,6 +46,25 @@ object Looks {
         Look("16mm", "16mm Bolex", CAMERA, "Heavy grain, warm mids", 0.65f, 0.45f) { c -> lift(c, 0.04f, 0.96f); split(c, floatArrayOf(0f, 0.01f, 0.02f), floatArrayOf(0.04f, 0.02f, -0.02f), 1f); sat(c, 0.92f); s(c, 0.45f) },
         Look("cine709", "Cine 709", CAMERA, "Cinema roll-off, gentle contrast", 0.1f, 0.15f) { c -> for (i in 0..2) { val x = c[i]; c[i] = if (x < 0.7f) x else 0.7f + (1 - (1 - (x - 0.7f) / 0.6f).let { it * it }) * 0.3f }; s(c, 0.2f); sat(c, 0.95f) },
         Look("teal", "Blockbuster", CAMERA, "Teal shadows, warm skin", 0.12f, 0.25f) { c -> split(c, floatArrayOf(-0.04f, 0.02f, 0.06f), floatArrayOf(0.06f, 0.02f, -0.05f), 1f); s(c, 0.45f); sat(c, 1.05f) },
+        // cinema stocks and looks
+        Look("vision250d", "Vision3 250D", CINEMA, "Kodak cinema · daylight", 0.14f, 0.12f) { c -> lift(c, 0.02f, 0.985f); split(c, floatArrayOf(-0.01f, 0.01f, 0.025f), floatArrayOf(0.025f, 0.012f, -0.01f), 1f); s(c, 0.3f); sat(c, 0.96f) },
+        Look("vision500t", "Vision3 500T", CINEMA, "Kodak cinema · tungsten night", 0.24f, 0.18f) { c -> mul(c, 0.95f, 1f, 1.08f); split(c, floatArrayOf(-0.02f, 0.012f, 0.045f), floatArrayOf(0.045f, 0.015f, -0.02f), 1f); s(c, 0.35f); lift(c, 0.025f) },
+        Look("eterna", "Eterna", CINEMA, "Fuji · muted, soft", 0.12f, 0.15f) { c -> lift(c, 0.04f, 0.97f); sat(c, 0.74f); split(c, floatArrayOf(-0.01f, 0.02f, 0.015f), floatArrayOf(0.01f, 0.005f, -0.005f), 1f); s(c, 0.15f) },
+        Look("bleach", "Bleach bypass", CINEMA, "Silver kept · hard, desaturated", 0.25f, 0.3f) { c -> val l = luma(c); val k = l * l * (3 - 2 * l); for (i in 0..2) c[i] = c[i] * 0.55f + k * 0.45f; sat(c, 0.55f); s(c, 0.55f) },
+        Look("alexa", "Alexa 709", CINEMA, "Digital cinema · clean, warm skin", 0.06f, 0.1f) { c -> for (i in 0..2) { val x = c[i]; c[i] = if (x < 0.72f) x else 0.72f + (1 - (1 - (x - 0.72f) / 0.56f).let { it * it }) * 0.28f }; mul(c, 1.02f, 1.0f, 0.98f); s(c, 0.25f) },
+        Look("noir", "Neo-noir", CINEMA, "Deep teal shadows, hard light", 0.3f, 0.45f) { c -> split(c, floatArrayOf(-0.05f, 0.025f, 0.07f), floatArrayOf(0.04f, 0.01f, -0.04f), 1f); sat(c, 0.72f); s(c, 0.65f); lift(c, 0.015f, 0.97f) },
+        // moods
+        Look("classicchrome", "Classic Chrome", MOODS, "Fuji · documentary, cool and muted", 0.1f, 0.12f) { c -> sat(c, 0.78f); split(c, floatArrayOf(-0.01f, 0.01f, 0.02f), floatArrayOf(0.02f, 0.012f, -0.012f), 1f); s(c, 0.38f); lift(c, 0.02f) },
+        Look("kodachrome", "Kodachrome 64", MOODS, "Rich reds, deep blues", 0.12f, 0.2f) { c -> s(c, 0.55f); sat(c, 1.25f); mul(c, 1.05f, 1f, 0.93f); lift(c, 0.015f) },
+        Look("polaroid", "Polaroid", MOODS, "Instant · faded, warm", 0.2f, 0.35f) { c -> lift(c, 0.08f, 0.93f); mul(c, 1.03f, 1.0f, 0.94f); sat(c, 0.85f); split(c, floatArrayOf(0f, 0.01f, 0.03f), floatArrayOf(0.02f, 0.025f, -0.02f), 1f) },
+        Look("lomo", "Lomo", MOODS, "Saturated, dark corners", 0.25f, 0.65f) { c -> s(c, 0.8f); sat(c, 1.35f); mul(c, 1f, 1.05f, 0.9f) },
+        Look("agfa", "Agfa Vista", MOODS, "Warm reds, summer", 0.18f, 0.15f) { c -> mul(c, 1.08f, 1f, 0.93f); sat(c, 1.15f); s(c, 0.3f); lift(c, 0.02f) },
+        Look("crossproc", "Cross process", MOODS, "Slide in negative chemistry", 0.2f, 0.25f) { c -> c[0] = 0.5f + (c[0] - 0.5f) * 1.25f; c[1] = c[1] * 1.04f + 0.02f; c[2] = 0.12f + c[2] * 0.72f; s(c, 0.3f); sat(c, 1.15f) },
+        Look("matte", "Matte", MOODS, "Lifted blacks, soft", 0.1f, 0.1f) { c -> lift(c, 0.1f, 0.95f); s(c, 0.2f); sat(c, 0.9f) },
+        Look("moodygreen", "Moody green", MOODS, "Forest shadows, warm light", 0.15f, 0.3f) { c -> split(c, floatArrayOf(-0.02f, 0.03f, 0.01f), floatArrayOf(0.035f, 0.02f, -0.02f), 1f); mul(c, 0.97f, 1.02f, 0.96f); sat(c, 0.85f); s(c, 0.4f); lift(c, 0.03f) },
+        Look("golden", "Golden hour", MOODS, "Late sun on everything", 0.12f, 0.2f) { c -> mul(c, 1.08f, 1.01f, 0.85f); s(c, 0.25f); sat(c, 1.08f); split(c, floatArrayOf(0f, 0f, 0f), floatArrayOf(0.04f, 0.02f, -0.03f), 1f) },
+        Look("panf", "Pan F 50", BW, "Fine grain, crisp", 0.12f, 0.15f) { c -> bw(c, 0.25f, 0.65f, 0.1f); s(c, 0.6f) },
+        Look("sepia", "Sepia", BW, "Old print, warm", 0.3f, 0.35f) { c -> bw(c); lift(c, 0.05f, 0.95f); s(c, 0.3f); mul(c, 1.08f, 0.98f, 0.82f) },
     )
 
     fun byId(id: String) = ALL.firstOrNull { it.id == id }
@@ -74,10 +94,41 @@ object Looks {
             if (g.vibrance != 0f) { val mx = maxOf(c[0], c[1], c[2]); val mn = minOf(c[0], c[1], c[2]); val s0 = if (mx > 0f) (mx - mn) / mx else 0f; sat(c, 1f + g.vibrance * (1f - s0) * 0.9f) }
             if (g.saturation != 0f) sat(c, 1f + g.saturation)
             if (warm != 0f) { c[0] += warm; c[2] -= warm }
+            if (g.hue != 0f) hueShift(c, g.hue * 45f)
+            if (g.shSat > 0f || g.hiSat > 0f) splitTone(c, g)
+            if (g.fade > 0f) lift(c, g.fade * 0.16f, 1f - g.fade * 0.04f)
             if (g.tint != 0f) { c[1] -= g.tint * 0.06f; c[0] += g.tint * 0.025f; c[2] += g.tint * 0.025f }
             val rr = (c[0].coerceIn(0f, 1f) * 255 + 0.5f).toInt(); val g2 = (c[1].coerceIn(0f, 1f) * 255 + 0.5f).toInt(); val bb = (c[2].coerceIn(0f, 1f) * 255 + 0.5f).toInt()
             (0xFF shl 24) or (rr shl 16) or (g2 shl 8) or bb
         } } }
+    }
+
+    /** A colour for a hue (0..1), full strength. */
+    fun hueColor(h: Float): FloatArray {
+        val x = (h % 1f) * 6f; val f = x - x.toInt()
+        return when (x.toInt()) { 0 -> floatArrayOf(1f, f, 0f); 1 -> floatArrayOf(1 - f, 1f, 0f); 2 -> floatArrayOf(0f, 1f, f); 3 -> floatArrayOf(0f, 1 - f, 1f); 4 -> floatArrayOf(f, 0f, 1f); else -> floatArrayOf(1f, 0f, 1 - f) }
+    }
+
+    /** Split toning: shadows one colour, highlights another; balance moves the point between them. */
+    private fun splitTone(c: FloatArray, g: Grade) {
+        val l = luma(c).coerceIn(0f, 1f)
+        val pivot = 0.5f + g.balance * 0.3f
+        val ws = (1f - smooth(0f, pivot, l)) * g.shSat * 0.18f; val wh = smooth(pivot, 1f, l) * g.hiSat * 0.18f
+        val sc = hueColor(g.shHue); val hc = hueColor(g.hiHue)
+        for (i in 0..2) c[i] += (sc[i] - 0.5f) * ws + (hc[i] - 0.5f) * wh
+    }
+
+    /** Turns every hue by [deg] degrees (keeps brightness). */
+    private fun hueShift(c: FloatArray, deg: Float) {
+        val a = Math.toRadians(deg.toDouble()); val cs = Math.cos(a).toFloat(); val sn = Math.sin(a).toFloat()
+        val k = 0.57735f
+        val r = c[0]; val gg = c[1]; val b = c[2]
+        // rotate around the grey axis (Rodrigues)
+        val dot = (r + gg + b) * k
+        val cx = k * (b - gg); val cy = k * (r - b); val cz = k * (gg - r)
+        c[0] = r * cs + cx * sn + k * dot * (1 - cs)
+        c[1] = gg * cs + cy * sn + k * dot * (1 - cs)
+        c[2] = b * cs + cz * sn + k * dot * (1 - cs)
     }
 
     private fun smooth(a: Float, b: Float, x: Float): Float { val t = ((x - a) / (b - a)).coerceIn(0f, 1f); return t * t * (3 - 2 * t) }

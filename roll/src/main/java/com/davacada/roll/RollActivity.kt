@@ -102,6 +102,7 @@ class RollActivity : Activity() {
                 val r = Stills.reverse(this, clip(vids[0]).apply { endMs = 3000 }) { } ?: error("reverse failed")
                 p.clips.addAll(listOf(a, ph, b, r))
                 p.texts.add(TextItem("Hello Roll", 300, 5200).apply { style = "box"; font = "anton"; y = 0.2f })
+                p.grade.look = "vision500t"; p.grade.halation = 0.6f; p.grade.shSat = 0.5f
                 vids.getOrNull(1)?.let { f -> p.audio.add(AudioItem(Uri.fromFile(f).toString(), "Test music", "music", 2000, 0, 4000, 5000).apply { fadeIn = 500; fadeOut = 1000 }) }
                 p.texts.add(TextItem("a caption line here", 7000, 11000).apply { caption = true; style = "shadow"; y = 0.8f; size = 0.045f; words.addAll(listOf(0L, 800L, 1600L, 2400L)) })
                 log("clips " + p.clips.joinToString { "${it.lengthMs}" })
@@ -111,7 +112,7 @@ class RollActivity : Activity() {
                     val shots = listOf(1500L, starts[1] - 10, starts[1] + 300, starts[2] - 150, starts[2] + 1500, starts[3] + 800)
                     shots.forEachIndexed { k, t -> main.postDelayed({ seekTimeline(t); log("shot $k at $t") }, 4000L + k * 4000L) }
                     main.postDelayed({
-                        log("export start"); exFormat = "video"; exShort = 720; exFps = 25; openExport(); startExport()
+                        log("export start"); openExport(); exFormat = "video"; exShort = 720; exFps = 25; startExport()
                     }, 4000L + shots.size * 4000L)
                 }
             } catch (e: Throwable) { log("failed: $e"); android.util.Log.e("ROLLTEST", "failed", e) }
@@ -134,6 +135,26 @@ class RollActivity : Activity() {
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+    private fun prefs() = getSharedPreferences("roll", MODE_PRIVATE)
+
+    /** Turned sideways (or back): rebuild the editor in the new shape, keeping the edit, the time and the undo history. */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (project != null && exportView == null) relayout()
+    }
+
+    private fun relayout() {
+        val p = project ?: return
+        val t = timeline?.time() ?: 0L
+        val wasPlaying = player?.isPlaying == true
+        closeSheet(); editingText = null; framing = -1; clipPanelBefore = null
+        store.save(p)
+        val u = ArrayList(undo); val r = ArrayList(redo)
+        releasePlayer()
+        open(p, keepHistory = true)
+        undo.clear(); undo.addAll(u); redo.clear(); redo.addAll(r)
+        main.postDelayed({ seekTimeline(t); if (wasPlaying) player?.play() }, 300)
+    }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -461,8 +482,8 @@ class RollActivity : Activity() {
     private var videoSurface: android.view.Surface? = null
     private var videoRatio = 16f / 9f
 
-    private fun open(p: Project) {
-        project = p; undo.clear(); redo.clear(); panelOpen = false
+    private fun open(p: Project, keepHistory: Boolean = false) {
+        project = p; if (!keepHistory) { undo.clear(); redo.clear() }; panelOpen = false
         screen.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // top bar
@@ -524,8 +545,40 @@ class RollActivity : Activity() {
         tr.addView(bare(R.drawable.i_aspect, null, size = 20) { aspectMenu() })
         col.addView(tr)
         bottom = FrameLayout(this)
-        col.addView(bottom, LinearLayout.LayoutParams(-1, dp(326)))
-        screen.addView(col, FrameLayout.LayoutParams(-1, -1))
+        if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+            // sideways: the work panel on one side (drag its grip across to move it), the picture in the middle
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val side = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(0xFF070707.toInt()) }
+            val left = prefs().getBoolean("panelLeft", false)
+            val grip = FrameLayout(this).apply {
+                addView(View(context).apply { background = pill(0x40FFFFFF, dpf(2f)) }, FrameLayout.LayoutParams(dp(4), dp(44), Gravity.CENTER))
+                contentDescription = "Drag to move the panel to the other side"
+                var downX = 0f
+                setOnTouchListener { v, e ->
+                    when (e.actionMasked) {
+                        android.view.MotionEvent.ACTION_DOWN -> { downX = e.rawX; true }
+                        android.view.MotionEvent.ACTION_MOVE -> { side.translationX = e.rawX - downX; true }
+                        android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                            val w = resources.displayMetrics.widthPixels
+                            val toLeft = e.rawX < w / 2f
+                            side.animate().translationX(0f).setDuration(120).start()
+                            if (toLeft != left && kotlin.math.abs(e.rawX - downX) > dp(60)) { prefs().edit().putBoolean("panelLeft", toLeft).apply(); relayout() }
+                            v.performClick(); true
+                        }
+                        else -> true
+                    }
+                }
+            }
+            val sideW = (resources.displayMetrics.widthPixels * 0.42f).toInt()
+            if (left) { side.addView(bottom, LinearLayout.LayoutParams(0, -1, 1f)); side.addView(grip, LinearLayout.LayoutParams(dp(18), -1)) }
+            else { side.addView(grip, LinearLayout.LayoutParams(dp(18), -1)); side.addView(bottom, LinearLayout.LayoutParams(0, -1, 1f)) }
+            if (left) { row.addView(side, LinearLayout.LayoutParams(sideW, -1)); row.addView(col, LinearLayout.LayoutParams(0, -1, 1f)) }
+            else { row.addView(col, LinearLayout.LayoutParams(0, -1, 1f)); row.addView(side, LinearLayout.LayoutParams(sideW, -1)) }
+            screen.addView(row, FrameLayout.LayoutParams(-1, -1))
+        } else {
+            col.addView(bottom, LinearLayout.LayoutParams(-1, dp(326)))
+            screen.addView(col, FrameLayout.LayoutParams(-1, -1))
+        }
         editBottom()
         setupPlayer()
     }
@@ -747,7 +800,7 @@ class RollActivity : Activity() {
     /** The grade shows on the viewer straight away (drawn by GlPreview), paused or playing. */
     private fun applyGrade() {
         val p = project ?: return
-        if (::glView.isInitialized) { glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p)) }
+        if (::glView.isInitialized) { glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p)); glView.fx = p.grade.fx() }
         updateLookTag()
     }
 
@@ -1482,11 +1535,11 @@ class RollActivity : Activity() {
         val p = project ?: return
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(16), 0, dp(16), dp(6)) }
-        listOf(Looks.FILM, Looks.CAMERA, Looks.BW, "LUTs").forEach { t ->
+        (listOf(MINE) + Looks.GROUPS + "LUTs").forEach { t ->
             val on = if (lutTab) t == "LUTs" else t == tab
             tabs.addView(word(t, on, 13f) { if (t == "LUTs") filmPanel(tab, lutTab = true) else filmPanel(t) }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(14) })
         }
-        col.addView(tabs)
+        col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(tabs) })
         val strip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(14), 0, dp(14), 0) }
         if (lutTab) {
             strip.addView(lookTile(null, "None", p.grade.look == "none") { p.grade.look = "none"; applyGrade(); filmPanel(tab, true) })
@@ -1498,6 +1551,19 @@ class RollActivity : Activity() {
                 addView(ImageView(context).apply { setImageResource(R.drawable.i_import); setColorFilter(C.AMBER) }, LinearLayout.LayoutParams(dp(26), dp(26)))
                 addView(context.text("Import .cube", 11.5f, C.AMBER, true).apply { setPadding(0, dp(8), 0, 0) })
                 setOnClickListener { pickLut() }
+            }, LinearLayout.LayoutParams(dp(84), dp(118)))
+        } else if (tab == MINE) {
+            // your saved grades: tap to use, hold to delete
+            Presets(this).all().forEach { pr ->
+                strip.addView(lookTile(null, pr.name, false, preset = pr.grade) { p.grade.copyFrom(pr.grade); applyGrade(); toast("“${pr.name}” applied"); filmPanel(tab) }.apply {
+                    setOnLongClickListener { confirm("Delete “${pr.name}”?", "The preset goes; edits that used it keep their look.", "Delete") { Presets(this@RollActivity).delete(pr.name); filmPanel(tab) }; true }
+                })
+            }
+            strip.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; background = ripple()
+                addView(ImageView(context).apply { setImageResource(R.drawable.i_add); setColorFilter(C.AMBER) }, LinearLayout.LayoutParams(dp(26), dp(26)))
+                addView(context.text("Save this\ngrade", 11.5f, C.AMBER, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, 0) })
+                setOnClickListener { savePreset() }
             }, LinearLayout.LayoutParams(dp(84), dp(118)))
         } else {
             strip.addView(lookTile(null, "None", p.grade.look == "none") { p.grade.look = "none"; applyGrade(); filmPanel(tab) })
@@ -1514,13 +1580,14 @@ class RollActivity : Activity() {
             s.addView(slider("Grain", Looks.grainOf(p.grade), 0f, 1f) { p.grade.grain = it; applyGrade() })
             s.addView(slider("Vignette", Looks.vignetteOf(p.grade), 0f, 1f) { p.grade.vignette = it; applyGrade() })
             col.addView(ScrollView(this).apply { addView(s) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        } else col.addView(text(if (lutTab) "Your own .cube LUTs (from Resolve, Premiere, …) show up here." else "Pick a look. Hold the picture to compare with the original.", 12.5f, C.SUB).apply { setPadding(dp(20), dp(10), dp(20), 0) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        } else col.addView(text(when { lutTab -> "Your own .cube LUTs (from Resolve, Premiere, …) show up here."; tab == MINE -> "Save the whole grade (look, Adjust, effects, overlay) and use it on any project. Hold a preset to delete it."
+            else -> "Pick a look. Hold the picture to compare with the original." }, 12.5f, C.SUB).apply { setPadding(dp(20), dp(10), dp(20), 0) }, LinearLayout.LayoutParams(-1, 0, 1f))
         col.addView(panelFooter(), LinearLayout.LayoutParams(-1, dp(46)))
         openPanel(col)
     }
 
     /** A look shown on a frame of your own video. */
-    private fun lookTile(l: Looks.Look?, name: String, on: Boolean, lut: String? = null, onClick: () -> Unit): View = LinearLayout(this).apply {
+    private fun lookTile(l: Looks.Look?, name: String, on: Boolean, lut: String? = null, preset: Grade? = null, onClick: () -> Unit): View = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         val img = ImageView(context).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true; background = pill(0xFF1A1A1A.toInt(), dpf(10f))
@@ -1534,11 +1601,34 @@ class RollActivity : Activity() {
         bg.execute {
             val s = sample ?: project?.let { p -> p.clips.getOrNull(p.at(timeline?.time() ?: 0).first)?.let { c -> frameAt(c, c.startMs + 500, 180) } }?.also { sample = it }
             if (s != null) {
-                val g = Grade(look = when { l != null -> l.id; lut != null -> "lut:$lut"; else -> "none" })
+                val g = preset ?: Grade(look = when { l != null -> l.id; lut != null -> "lut:$lut"; else -> "none" })
                 val bm = gradePreview(s, g)
                 main.post { img.setImageBitmap(bm) }
             }
         }
+    }
+
+    private val MINE = "Mine"
+
+    private fun savePreset() {
+        val p = project ?: return
+        val col = vcol()
+        col.addView(text("SAVE GRADE AS", 11.5f, C.SUB, true).apply { letterSpacing = 0.14f })
+        val e = EditText(this).apply {
+            val def = Looks.byId(p.grade.look)?.name?.let { "$it · mine" } ?: "My grade"
+            setText(def); setSelection(def.length); setTextColor(C.TEXT); textSize = 22f; typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            background = null; setPadding(0, dp(6), 0, dp(10)); isSingleLine = true
+        }
+        col.addView(e)
+        col.addView(View(this).apply { setBackgroundColor(C.AMBER) }, LinearLayout.LayoutParams(-1, dp(2)))
+        val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(0, dp(14), 0, 0) }
+        r.addView(word("Cancel", false, 15f) { closeSheet() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(24) })
+        r.addView(text("Save", 15f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple()
+            setOnClickListener { val n = e.text.toString().trim().ifBlank { "My grade" }; Presets(this@RollActivity).save(n, p.grade); closeSheet(); toast("Saved “$n”"); val keep = gradeBefore; panelOpen = false; filmPanel(MINE); gradeBefore = keep } })
+        col.addView(r)
+        sheet(col)
+        e.requestFocus()
+        main.postDelayed({ (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showSoftInput(e, 0) }, 250)
     }
 
     /** Adjust, laid out like Lightroom: Light, Color and Effects, each a set of fine sliders. */
@@ -1549,16 +1639,17 @@ class RollActivity : Activity() {
         val g = p.grade
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(10), 0, dp(14), dp(2)) }
-        listOf(Triple("light", R.drawable.i_sun, "Light"), Triple("color", R.drawable.i_drop, "Color"), Triple("mix", R.drawable.i_filter, "Mix"), Triple("effects", R.drawable.i_fx, "Effects")).forEach { (k, ic, l) ->
+        listOf(Triple("light", R.drawable.i_sun, "Light"), Triple("color", R.drawable.i_drop, "Color"), Triple("mix", R.drawable.i_filter, "Mix"), Triple("split", R.drawable.i_split, "Split"), Triple("effects", R.drawable.i_fx, "Effects")).forEach { (k, ic, l) ->
             tabs.addView(bare(ic, l, if (adjTab == k) C.AMBER else C.SUB, 20) { adjTab = k; val keep = gradeBefore; panelOpen = false; adjustPanel(); gradeBefore = keep })
         }
         tabs.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         tabs.addView(word("Reset", false, 13f) {
             when (adjTab) {
-                "light" -> { g.exposure = 0f; g.contrast = 0f; g.highlights = 0f; g.shadows = 0f; g.whites = 0f; g.blacks = 0f }
-                "color" -> { g.warmth = 0f; g.tint = 0f; g.vibrance = 0f; g.saturation = 0f }
+                "light" -> { g.exposure = 0f; g.contrast = 0f; g.highlights = 0f; g.shadows = 0f; g.whites = 0f; g.blacks = 0f; g.fade = 0f }
+                "color" -> { g.warmth = 0f; g.tint = 0f; g.vibrance = 0f; g.saturation = 0f; g.hue = 0f }
                 "mix" -> java.util.Arrays.fill(g.mix, 0f)
-                else -> { g.grain = -1f; g.vignette = -1f }
+                "split" -> { g.shSat = 0f; g.hiSat = 0f; g.balance = 0f }
+                else -> { g.grain = -1f; g.vignette = -1f; g.bloom = 0f; g.halation = 0f; g.aberration = 0f; g.sharpen = 0f }
             }
             applyGrade(); val keep = gradeBefore; panelOpen = false; adjustPanel(); gradeBefore = keep
         })
@@ -1575,12 +1666,14 @@ class RollActivity : Activity() {
                 add("Shadows", g.shadows, -1f, 1f, null, pm) { g.shadows = it }
                 add("Whites", g.whites, -1f, 1f, null, pm) { g.whites = it }
                 add("Blacks", g.blacks, -1f, 1f, null, pm) { g.blacks = it }
+                add("Fade", g.fade, 0f, 1f, null, { "${(it * 100).toInt()}" }) { g.fade = it }
             }
             "color" -> {
                 add("Temp", g.warmth, -1f, 1f, intArrayOf(0xFF4A86D9.toInt(), 0xFFB7B7B7.toInt(), 0xFFE8C23A.toInt()), pm) { g.warmth = it }
                 add("Tint", g.tint, -1f, 1f, intArrayOf(0xFF4DBB5F.toInt(), 0xFFB7B7B7.toInt(), 0xFFD24FC4.toInt()), pm) { g.tint = it }
                 add("Vibrance", g.vibrance, -1f, 1f, null, pm) { g.vibrance = it }
                 add("Saturation", g.saturation, -1f, 1f, intArrayOf(0xFF8A8A8A.toInt(), 0xFFFF5A3C.toInt(), 0xFFFFC23C.toInt(), 0xFF3CC86E.toInt(), 0xFF3C8CFF.toInt(), 0xFFB45AFF.toInt()), pm) { g.saturation = it }
+                add("Hue", g.hue, -1f, 1f, intArrayOf(0xFF3C8CFF.toInt(), 0xFFB45AFF.toInt(), 0xFFFF5A3C.toInt(), 0xFFFFC23C.toInt(), 0xFF3CC86E.toInt()), { "%+.0f°".format(it * 45f) }) { g.hue = it }
             }
             "mix" -> {
                 // pick a colour, then move its hue, saturation and luminance
@@ -1604,9 +1697,25 @@ class RollActivity : Activity() {
                 add("Saturation", g.mix[i * 3 + 1], -1f, 1f, intArrayOf(0xFF8A8A8A.toInt(), col), pm) { g.mix[i * 3 + 1] = it }
                 add("Luminance", g.mix[i * 3 + 2], -1f, 1f, intArrayOf(0xFF151515.toInt(), col, 0xFFF4F4F4.toInt()), pm) { g.mix[i * 3 + 2] = it }
             }
+            "split" -> {
+                val rainbow = IntArray(7) { i -> val c = Looks.hueColor(i / 6f); Color.rgb((c[0] * 255).toInt(), (c[1] * 255).toInt(), (c[2] * 255).toInt()) }
+                val n100 = { v: Float -> "${(v * 100).toInt()}" }
+                s.addView(text("SHADOWS", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(2), 0, 0) })
+                add("Hue", g.shHue, 0f, 1f, rainbow, { "${(it * 360).toInt()}°" }) { g.shHue = it }
+                add("Amount", g.shSat, 0f, 1f, null, n100) { g.shSat = it }
+                s.addView(text("HIGHLIGHTS", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(6), 0, 0) })
+                add("Hue", g.hiHue, 0f, 1f, rainbow, { "${(it * 360).toInt()}°" }) { g.hiHue = it }
+                add("Amount", g.hiSat, 0f, 1f, null, n100) { g.hiSat = it }
+                add("Balance", g.balance, -1f, 1f, null, pm) { g.balance = it }
+            }
             else -> {
-                add("Grain", Looks.grainOf(g), 0f, 1f, null, { "${(it * 100).toInt()}" }) { g.grain = it }
-                add("Vignette", Looks.vignetteOf(g), 0f, 1f, null, { "${(it * 100).toInt()}" }) { g.vignette = it }
+                val n100 = { v: Float -> "${(v * 100).toInt()}" }
+                add("Grain", Looks.grainOf(g), 0f, 1f, null, n100) { g.grain = it }
+                add("Vignette", Looks.vignetteOf(g), 0f, 1f, null, n100) { g.vignette = it }
+                add("Bloom", g.bloom, 0f, 1f, null, n100) { g.bloom = it }
+                add("Halation", g.halation, 0f, 1f, null, n100) { g.halation = it }
+                add("Colour fringing", g.aberration, 0f, 1f, null, n100) { g.aberration = it }
+                add("Sharpen", g.sharpen, 0f, 1f, null, n100) { g.sharpen = it }
                 s.addView(text("Double-tap a slider to reset it. Hold the picture to see the original.", 11.5f, C.FAINT).apply { setPadding(dp(4), dp(10), 0, 0) })
             }
         }
@@ -1691,6 +1800,10 @@ class RollActivity : Activity() {
         val p = project ?: return
         if (p.clips.isEmpty()) { toast("Add a clip first"); return }
         player?.pause()
+        // the last export settings you used
+        prefs().let { pr -> exFormat = pr.getString("exFormat", exFormat) ?: exFormat; exShort = pr.getInt("exShort", exShort); exFps = pr.getInt("exFps", exFps); exQuality = pr.getInt("exQuality", exQuality)
+            gifW = pr.getInt("gifW", gifW); gifFps = pr.getInt("gifFps", gifFps); gifSecs = pr.getInt("gifSecs", gifSecs); gifLoop = pr.getString("gifLoop", gifLoop) ?: gifLoop
+            stSquare = pr.getBoolean("stSquare", stSquare); stFps = pr.getInt("stFps", stFps) }
         val v = FrameLayout(this).apply { background = grain(); isClickable = true }
         exportView = v
         root.addView(v, FrameLayout.LayoutParams(-1, -1))
@@ -1837,6 +1950,8 @@ class RollActivity : Activity() {
     private fun startExport() {
         val p = project ?: return
         store.save(p)
+        prefs().edit().putString("exFormat", exFormat).putInt("exShort", exShort).putInt("exFps", exFps).putInt("exQuality", exQuality)
+            .putInt("gifW", gifW).putInt("gifFps", gifFps).putInt("gifSecs", gifSecs).putString("gifLoop", gifLoop).putBoolean("stSquare", stSquare).putInt("stFps", stFps).apply()
         if (exDissolve == null && (p.clips.any { it.trans == "dissolve" } || (p.audio.isNotEmpty() && exFormat == "video"))) {
             renderExport("Getting ready…", 0)
             val copy = Project.from(p.json())

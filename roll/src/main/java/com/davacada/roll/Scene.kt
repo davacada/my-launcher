@@ -76,7 +76,7 @@ object Scene {
 
     /**
      * The fragment shader's body, shared by the viewer (GLSL 300, video texture) and the export (GLSL 100).
-     * The caller defines SRC(uv) and PREV(uv) and the uniforms uA, uB, uC, uP1, uP2.
+     * The caller defines SRC(uv) and PREV(uv) and the uniforms uA, uB, uC, uP1, uP2, uE (bloom, halation, fringing, sharpen).
      */
     const val BODY = """
 vec2 mapUv(vec2 uv, float srcA, float outA, float fit, float sc, vec2 off, float rot, float flip) {
@@ -105,10 +105,32 @@ vec3 background(vec2 uv) {
   return s / 16.0 * 0.72;
 }
 
+/** Light effects on the picture: bloom, halation (red glow), colour fringing, sharpen. */
+vec3 fx(vec2 t, vec3 c) {
+  if (uE.x + uE.y + uE.z + uE.w < 0.001) return c;
+  vec2 px = vec2(0.0011, 0.0011 * uA.x);
+  if (uE.w > 0.001) {
+    vec3 b = (SRC(t + vec2(px.x, 0.0)).rgb + SRC(t - vec2(px.x, 0.0)).rgb + SRC(t + vec2(0.0, px.y)).rgb + SRC(t - vec2(0.0, px.y)).rgb) * 0.25;
+    c += (c - b) * uE.w * 2.5;
+  }
+  if (uE.z > 0.001) { vec2 d = (t - 0.5) * uE.z * 0.014; c.r = SRC(clamp(t + d, 0.0, 1.0)).r; c.b = SRC(clamp(t - d, 0.0, 1.0)).b; }
+  if (uE.x + uE.y > 0.001) {
+    vec3 g = vec3(0.0);
+    for (int i = 0; i < 12; i++) {
+      float a = float(i) * 2.39996; float r = 0.005 + 0.03 * sqrt(float(i) / 12.0);
+      g += max(SRC(clamp(t + vec2(cos(a), sin(a) * uA.x) * r, 0.0, 1.0)).rgb - 0.62, 0.0);
+    }
+    g /= 12.0;
+    c += g * uE.x * 2.4;
+    c += vec3(1.0, 0.28, 0.12) * dot(g, vec3(0.333)) * uE.y * 3.2;
+  }
+  return c;
+}
+
 vec3 clipAt(vec2 uv, float sc, vec2 off, float rot) {
   vec2 t = mapUv(uv, uA.x, uA.y, uA.z, sc, off, rot, uC.x);
   if (!inside(t)) return background(uv);
-  return SRC(t).rgb;
+  return fx(t, SRC(t).rgb);
 }
 
 vec3 frameColor(vec2 uv) {

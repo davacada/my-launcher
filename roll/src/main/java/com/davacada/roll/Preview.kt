@@ -72,6 +72,9 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
     /** Titles and captions, drawn over everything at the viewer's size (premultiplied). */
     @Volatile var textBitmap: Bitmap? = null
         set(v) { field = v; textDirty = true; requestRender() }
+    /** Bloom, halation, fringing, sharpen (from the grade). */
+    @Volatile var fx = FloatArray(4)
+        set(v) { field = v; requestRender() }
     @Volatile private var prevDirty = false
     @Volatile private var textDirty = false
     private var prevTex = 0; private var textTex = 0
@@ -199,6 +202,8 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
         val u = f.uniforms()
         for ((k, name) in listOf("uA", "uB", "uC", "uP1", "uP2").withIndex()) GLES30.glUniform4fv(GLES30.glGetUniformLocation(prog, name), 1, u[k], 0)
         if (prevBitmap == null) GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uP2"), 0f, 0f, 0f, 0f)
+        val e = if (bypass) FloatArray(4) else fx
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uE"), e[0], e[1], e[2], e[3])
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, prevTex)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "uPrev"), 3)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE4); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textTex)
@@ -266,7 +271,7 @@ uniform float uVig;
 uniform float uOvA;
 uniform float uSeed;
 uniform vec2 uSize;
-uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2;
+uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uE;
 in vec2 vUv;
 out vec4 outColor;
 #define SRC(t) texture(uTex, (uSt * vec4((t), 0.0, 1.0)).xy)

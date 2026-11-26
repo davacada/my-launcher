@@ -77,26 +77,40 @@ class Grade(
     /** Colour mix: hue, saturation, luminance (-1..1) for red, orange, yellow, green, aqua, blue, purple, magenta. */
     val mix: FloatArray = FloatArray(24),
 ) {
+    // more colour: fade, hue, split toning
+    var fade = 0f; var hue = 0f
+    var shHue = 0.55f; var shSat = 0f; var hiHue = 0.09f; var hiSat = 0f; var balance = 0f
+    // light effects drawn on the picture itself: bloom, halation, colour fringing, sharpen
+    var bloom = 0f; var halation = 0f; var aberration = 0f; var sharpen = 0f
+    fun fx() = floatArrayOf(bloom, halation, aberration, sharpen)
     val mixed get() = mix.any { it != 0f }
     /** True when nothing changes the colours. */
     val neutral get() = look == "none" && exposure == 0f && contrast == 0f && saturation == 0f && warmth == 0f && tint == 0f &&
-        highlights == 0f && shadows == 0f && whites == 0f && blacks == 0f && vibrance == 0f && !mixed
+        highlights == 0f && shadows == 0f && whites == 0f && blacks == 0f && vibrance == 0f && !mixed && fade == 0f && hue == 0f && shSat == 0f && hiSat == 0f
 
     fun json(): JSONObject = JSONObject().put("look", look).put("str", strength.toDouble()).put("gr", grain.toDouble()).put("vi", vignette.toDouble())
         .put("ex", exposure.toDouble()).put("co", contrast.toDouble()).put("sa", saturation.toDouble()).put("wa", warmth.toDouble())
         .put("ti", tint.toDouble()).put("hi", highlights.toDouble()).put("sh", shadows.toDouble()).put("wh", whites.toDouble()).put("bl", blacks.toDouble()).put("vb", vibrance.toDouble())
         .put("ov", overlay).put("ova", overlayAmount.toDouble()).put("mix", JSONArray().apply { mix.forEach { put(it.toDouble()) } })
+        .put("fd", fade.toDouble()).put("hu", hue.toDouble()).put("shh", shHue.toDouble()).put("shs", shSat.toDouble()).put("hih", hiHue.toDouble()).put("his", hiSat.toDouble()).put("bal", balance.toDouble())
+        .put("bloom", bloom.toDouble()).put("hal", halation.toDouble()).put("ab", aberration.toDouble()).put("shp", sharpen.toDouble())
     fun copyFrom(g: Grade) {
         look = g.look; strength = g.strength; grain = g.grain; vignette = g.vignette; exposure = g.exposure; contrast = g.contrast; saturation = g.saturation; warmth = g.warmth
         tint = g.tint; highlights = g.highlights; shadows = g.shadows; whites = g.whites; blacks = g.blacks; vibrance = g.vibrance
         overlay = g.overlay; overlayAmount = g.overlayAmount; g.mix.copyInto(mix)
+        fade = g.fade; hue = g.hue; shHue = g.shHue; shSat = g.shSat; hiHue = g.hiHue; hiSat = g.hiSat; balance = g.balance
+        bloom = g.bloom; halation = g.halation; aberration = g.aberration; sharpen = g.sharpen
     }
     companion object {
         fun from(o: JSONObject?) = if (o == null) Grade() else Grade(o.optString("look", "none"), o.optDouble("str", 1.0).toFloat(), o.optDouble("gr", -1.0).toFloat(),
             o.optDouble("vi", -1.0).toFloat(), o.optDouble("ex", 0.0).toFloat(), o.optDouble("co", 0.0).toFloat(), o.optDouble("sa", 0.0).toFloat(), o.optDouble("wa", 0.0).toFloat(),
             o.optDouble("ti", 0.0).toFloat(), o.optDouble("hi", 0.0).toFloat(), o.optDouble("sh", 0.0).toFloat(), o.optDouble("wh", 0.0).toFloat(), o.optDouble("bl", 0.0).toFloat(), o.optDouble("vb", 0.0).toFloat(),
             o.optString("ov", "none"), o.optDouble("ova", 0.8).toFloat(),
-            FloatArray(24).also { m -> o.optJSONArray("mix")?.let { a -> for (i in 0 until minOf(24, a.length())) m[i] = a.optDouble(i).toFloat() } })
+            FloatArray(24).also { m -> o.optJSONArray("mix")?.let { a -> for (i in 0 until minOf(24, a.length())) m[i] = a.optDouble(i).toFloat() } }).apply {
+            fade = o.optDouble("fd", 0.0).toFloat(); hue = o.optDouble("hu", 0.0).toFloat(); shHue = o.optDouble("shh", 0.55).toFloat(); shSat = o.optDouble("shs", 0.0).toFloat()
+            hiHue = o.optDouble("hih", 0.09).toFloat(); hiSat = o.optDouble("his", 0.0).toFloat(); balance = o.optDouble("bal", 0.0).toFloat()
+            bloom = o.optDouble("bloom", 0.0).toFloat(); halation = o.optDouble("hal", 0.0).toFloat(); aberration = o.optDouble("ab", 0.0).toFloat(); sharpen = o.optDouble("shp", 0.0).toFloat()
+        }
     }
 }
 
