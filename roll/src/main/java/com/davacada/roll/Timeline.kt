@@ -59,6 +59,8 @@ class Timeline(ctx: Context) : View(ctx) {
     var onTrackHold: ((Int) -> Unit)? = null
     /** Tried to change something on a locked track. */
     var onLocked: ((String) -> Unit)? = null
+    /** Tapped a selected adjustment layer again (its id). */
+    var onAdjust: ((String) -> Unit)? = null
     /** Tapped a selected V2 / V3 clip again (its id). */
     var onOverlay: ((String) -> Unit)? = null
     /** Things snap to the playhead, edges and each other. */
@@ -80,8 +82,12 @@ class Timeline(ctx: Context) : View(ctx) {
     private val gap get() = dp(3f)
     private fun vCount() = project?.vTracks?.size ?: 0
     /** V2 is just above V1, V3 above V2 … */
-    private fun ovTop(k: Int) = rulerH + dp(4f) - scrollY + (vCount() - 1 - k) * (vH + gap)
-    private val vTop get() = rulerH + dp(4f) - scrollY + vCount() * (vH + gap)
+    private val fxH get() = dp(28f)
+    /** The FX lane (adjustment layers) sits on top of every video track, when there are any. */
+    private fun fxRows() = if (project?.adjusts?.isNotEmpty() == true) 1 else 0
+    private val fxTop get() = rulerH + dp(4f) - scrollY
+    private fun ovTop(k: Int) = fxTop + fxRows() * (fxH + gap) + (vCount() - 1 - k) * (vH + gap)
+    private val vTop get() = fxTop + fxRows() * (fxH + gap) + vCount() * (vH + gap)
     private val tTop get() = vTop + vH + gap
     private val a1Top get() = tTop + tH + gap
     private fun aTop(i: Int) = a1Top + (i + 1) * (aH + gap)
@@ -105,6 +111,9 @@ class Timeline(ctx: Context) : View(ctx) {
     private val wave = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF8EE0A8.toInt(); strokeWidth = dp(1f) }
     private val titleBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF7A56B5.toInt() }
     private val captionBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF3F8F7A.toInt() }
+    private val adjustBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFB0577E.toInt() }
+    private val gapBg = Paint().apply { color = 0xFF16171A.toInt() }
+    private val gapLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x22FFFFFF; strokeWidth = dp(1f) }
     private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF2F2F2.toInt(); textSize = dp(10f); typeface = Typeface.create("sans-serif-medium", Typeface.BOLD) }
     private val sel = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF29B38.toInt(); style = Paint.Style.STROKE; strokeWidth = dp(2.2f) }
     private val amber = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF29B38.toInt() }
@@ -154,6 +163,7 @@ class Timeline(ctx: Context) : View(ctx) {
         c.save(); c.clipRect(0f, rulerH, width.toFloat(), height.toFloat())
         // track backgrounds
         c.drawRect(0f, vTop, width.toFloat(), vTop + vH, trackBg)
+        if (fxRows() > 0) c.drawRect(0f, fxTop, width.toFloat(), fxTop + fxH, trackBg2)
         for (k in 0 until vCount()) c.drawRect(0f, ovTop(k), width.toFloat(), ovTop(k) + vH, if (k % 2 == 0) trackBg2 else trackBg)
         c.drawRect(0f, tTop, width.toFloat(), tTop + tH, trackBg2)
         c.drawRect(0f, a1Top, width.toFloat(), a1Top + aH, trackBg)
@@ -174,12 +184,15 @@ class Timeline(ctx: Context) : View(ctx) {
             if (b < headW || a > width) continue
             drawClipAt(c, o, a, b, ovTop(o.track), o.id == selectedText)
         }
+        // FX: adjustment layers over everything
+        for (a in p.adjusts) bar(c, x0 + a.at * pxPerMs, x0 + a.endAt * pxPerMs, fxTop, fxH, adjustBg,
+            "◐ " + (Looks.byId(a.grade.look)?.name ?: if (a.grade.look.startsWith("lut:")) a.grade.look.removePrefix("lut:") else "Adjustment"), a.id == selectedText, null)
         for (k in 0 until vCount()) if (p.vTracks[k].hide) c.drawRect(headW, ovTop(k), width.toFloat(), ovTop(k) + vH, dim)
         // joints between clips (orange when there's a transition)
         var jt = 0L
         p.clips.forEachIndexed { i, clip ->
             jt += clip.lengthMs
-            if (i == p.clips.size - 1) return@forEachIndexed
+            if (i == p.clips.size - 1 || p.clips[i + 1].still == "gap" || clip.still == "gap") return@forEachIndexed
             val x = x0 + jt * pxPerMs
             if (x < headW - dp(10f) || x > width + dp(20f)) return@forEachIndexed
             val y = vTop + vH / 2; val rr = dp(if (clip.trans != "none") 7f else 5f)
@@ -187,10 +200,6 @@ class Timeline(ctx: Context) : View(ctx) {
             jointFill.color = if (clip.trans != "none") 0xFFF29B38.toInt() else 0xFFE8E8EA.toInt()
             c.drawPath(diamond, jointShadow); c.drawPath(diamond, jointFill)
         }
-        // add after the last clip
-        val ax = x0 + p.lengthMs * pxPerMs + dp(24f); val ay = vTop + vH / 2
-        c.drawCircle(ax, ay, dp(15f), plus)
-        c.drawLine(ax - dp(6f), ay, ax + dp(6f), ay, plusLine); c.drawLine(ax, ay - dp(6f), ax, ay + dp(6f), plusLine)
 
         // T1: titles and captions
         if (p.texts.isEmpty()) c.drawText("titles and captions", headW + dp(10f), tTop + tH * 0.66f, hint)
@@ -235,6 +244,14 @@ class Timeline(ctx: Context) : View(ctx) {
 
     private fun drawClipAt(c: Canvas, clip: Clip, a: Float, b: Float, top: Float, isSel: Boolean) {
         r.set(a + dp(1f), top + dp(1f), b - dp(1f), top + vH - dp(1f))
+        if (clip.still == "gap") {
+            // empty V1 under clips that run past the end: just black
+            c.drawRect(r, gapBg)
+            c.save(); c.clipRect(r)
+            var x = r.left - r.height(); while (x < r.right) { c.drawLine(x, r.bottom, x + r.height(), r.top, gapLine); x += dp(10f) }
+            c.restore()
+            return
+        }
         c.save()
         clipPath.reset(); clipPath.addRoundRect(r, dp(4f), dp(4f), Path.Direction.CW); c.clipPath(clipPath)
         c.drawRect(r, videoBg)
@@ -271,6 +288,7 @@ class Timeline(ctx: Context) : View(ctx) {
 
     /** A1: the clip's own sound, its waveform at its volume. */
     private fun drawClipSound(c: Canvas, clip: Clip, a: Float, b: Float) {
+        if (clip.still == "gap") return
         r.set(a + dp(1f), a1Top + dp(1f), b - dp(1f), a1Top + aH - dp(1f))
         if (clip.still.isNotEmpty() || clip.revOf != null) {
             c.drawRoundRect(r, dp(3f), dp(3f), trackBg2)
@@ -342,6 +360,7 @@ class Timeline(ctx: Context) : View(ctx) {
         c.save(); c.clipRect(0f, rulerH, headW, height.toFloat())
         fun name(n: String, top: Float, h: Float) { c.drawText(n, dp(5f), top + h / 2 + dp(4f), headName); c.drawRect(0f, top + h + gap / 2, headW, top + h + gap / 2 + 1, headLine) }
         name("V1", vTop, vH); name("T1", tTop, tH); name("A1", a1Top, aH)
+        if (fxRows() > 0) name("FX", fxTop, fxH)
         for (k in 0 until p.vTracks.size) name("V${k + 2}", ovTop(k), vH)
         for (i in p.aTracks.indices) name("A${i + 2}", aTop(i), aH)
         c.restore()
@@ -423,6 +442,7 @@ class Timeline(ctx: Context) : View(ctx) {
     private fun snapPoints(p: Project, except: Any?): List<Long> {
         val out = arrayListOf(0L, timeMs, p.lengthMs)
         p.overlays.forEach { if (it !== except) { out.add(it.at); out.add(it.endAt) } }
+        p.adjusts.forEach { if (it !== except) { out.add(it.at); out.add(it.endAt) } }
         var t = 0L; p.clips.forEach { t += it.lengthMs; out.add(t) }
         p.texts.forEach { if (it !== except) { out.add(it.startMs); out.add(it.endMs) } }
         p.audio.forEach { if (it !== except) { out.add(it.startMs); out.add(it.endMs) } }
@@ -454,8 +474,10 @@ class Timeline(ctx: Context) : View(ctx) {
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             val p = project ?: return true
             val t = ((e.x - edgeX) / pxPerMs).toLong()
-            val ax = edgeX + p.lengthMs * pxPerMs + dp(24f)
-            if (abs(e.x - ax) < dp(22f) && abs(e.y - (vTop + vH / 2)) < dp(26f)) { if (p.vLock) onLocked?.invoke("V1") else onAdd?.invoke(); return true }
+            if (fxRows() > 0 && e.y in fxTop..(fxTop + fxH)) {
+                p.adjustAt(t)?.let { if (it.id != selectedText) { selectedText = it.id; onSelect?.invoke(-1); selectedText = it.id; performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) } else onAdjust?.invoke(it.id); return true }
+                selectedText = null; invalidate(); return true
+            }
             val ok = ovTrackAt(e.y)
             if (ok >= 0) {
                 p.overlayAt(ok, t)?.let {
@@ -554,6 +576,8 @@ class Timeline(ctx: Context) : View(ctx) {
                     moveMode = when { abs(t0 - start) <= edge -> -1; abs(t0 - end) <= edge -> 1; else -> 0 }
                     onLaneDown?.invoke()
                 }
+                val selX = p.adjusts.firstOrNull { it.id == selectedText }
+                if (selX != null && fxRows() > 0 && e.y in fxTop..(fxTop + fxH) && t0 in (selX.at - edge)..(selX.endAt + edge)) { grab(selX, selX.at, selX.endAt); return true }
                 val selO = p.overlays.firstOrNull { it.id == selectedText }
                 if (selO != null && p.vTracks.getOrNull(selO.track)?.lock != true && ovTrackAt(e.y) == selO.track && t0 in (selO.at - edge)..(selO.endAt + edge)) {
                     moving = selO; moveOrigStart = selO.at; moveOrigEnd = selO.endAt; moveOrigIn = selO.startMs; moveOrigSrcEnd = selO.endMs
@@ -588,6 +612,12 @@ class Timeline(ctx: Context) : View(ctx) {
                             m.startMs = src; m.at = moveOrigStart + ((src - moveOrigIn) / m.speed).toLong() }
                         else -> { val ne = snap(p, moveOrigEnd + dt, m); m.endMs = (moveOrigSrcEnd + ((ne - moveOrigEnd) * m.speed).toLong()).coerceIn(m.startMs + 300, m.sourceMs) }
                     }
+                    is Project.Adjust -> when (moveMode) {
+                        0 -> { val len = moveOrigEnd - moveOrigStart; var s = (moveOrigStart + dt).coerceAtLeast(0); val se = snap(p, s + len, m); val ss = snap(p, s, m)
+                            s = if (ss != s) ss else if (se != s + len) se - len else s; m.at = s.coerceIn(0, max(0, p.lengthMs - 300)) }
+                        -1 -> { val na = snap(p, moveOrigStart + dt, m).coerceIn(0, moveOrigEnd - 300); m.at = na; m.lengthMs = moveOrigEnd - na }
+                        else -> { val ne = snap(p, moveOrigEnd + dt, m).coerceAtLeast(m.at + 300); m.lengthMs = ne - m.at }
+                    }
                     is AudioItem -> when (moveMode) {
                         0 -> {
                             val len = moveOrigEnd - moveOrigStart; var s = (moveOrigStart + dt).coerceAtLeast(0); val se = snap(p, s + len, m); val ss = snap(p, s, m)
@@ -611,7 +641,7 @@ class Timeline(ctx: Context) : View(ctx) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (moving != null) {
                     val m = moving; val moved = abs(e.x - downX) > dp(4f) || abs(e.y - downY) > dp(8f); moving = null
-                    if (moved) onLaneMoved?.invoke() else selectedText?.let { when (m) { is AudioItem -> onAudio?.invoke(it); is Clip -> onOverlay?.invoke(it); else -> onText?.invoke(it) } }
+                    if (moved) onLaneMoved?.invoke() else selectedText?.let { when (m) { is AudioItem -> onAudio?.invoke(it); is Clip -> onOverlay?.invoke(it); is Project.Adjust -> onAdjust?.invoke(it); else -> onText?.invoke(it) } }
                     return true
                 }
                 if (trimming != 0) { trimming = 0; onTrimmed?.invoke(trimClip); return true }

@@ -87,10 +87,12 @@ class Grade(
     // light effects drawn on the picture itself: bloom, halation, colour fringing, sharpen
     var bloom = 0f; var halation = 0f; var aberration = 0f; var sharpen = 0f
     fun fx() = floatArrayOf(bloom, halation, aberration, sharpen)
+    /** A grade applied after this one (an adjustment layer over the project's grade). */
+    var next: Grade? = null
     val mixed get() = mix.any { it != 0f }
     /** True when nothing changes the colours. */
     val neutral get() = look == "none" && exposure == 0f && contrast == 0f && saturation == 0f && warmth == 0f && tint == 0f &&
-        highlights == 0f && shadows == 0f && whites == 0f && blacks == 0f && vibrance == 0f && !mixed && fade == 0f && hue == 0f && shSat == 0f && hiSat == 0f
+        highlights == 0f && shadows == 0f && whites == 0f && blacks == 0f && vibrance == 0f && !mixed && fade == 0f && hue == 0f && shSat == 0f && hiSat == 0f && (next?.neutral ?: true)
 
     fun json(): JSONObject = JSONObject().put("look", look).put("str", strength.toDouble()).put("gr", grain.toDouble()).put("vi", vignette.toDouble())
         .put("ex", exposure.toDouble()).put("co", contrast.toDouble()).put("sa", saturation.toDouble()).put("wa", warmth.toDouble())
@@ -98,6 +100,7 @@ class Grade(
         .put("ov", overlay).put("ova", overlayAmount.toDouble()).put("mix", JSONArray().apply { mix.forEach { put(it.toDouble()) } })
         .put("fd", fade.toDouble()).put("hu", hue.toDouble()).put("shh", shHue.toDouble()).put("shs", shSat.toDouble()).put("hih", hiHue.toDouble()).put("his", hiSat.toDouble()).put("bal", balance.toDouble())
         .put("bloom", bloom.toDouble()).put("hal", halation.toDouble()).put("ab", aberration.toDouble()).put("shp", sharpen.toDouble())
+        .apply { next?.let { put("next", it.json()) } }
     fun copyFrom(g: Grade) {
         look = g.look; strength = g.strength; grain = g.grain; vignette = g.vignette; exposure = g.exposure; contrast = g.contrast; saturation = g.saturation; warmth = g.warmth
         tint = g.tint; highlights = g.highlights; shadows = g.shadows; whites = g.whites; blacks = g.blacks; vibrance = g.vibrance
@@ -106,6 +109,14 @@ class Grade(
         bloom = g.bloom; halation = g.halation; aberration = g.aberration; sharpen = g.sharpen
     }
     companion object {
+        /** [top] laid over [base]: colours one after the other; grain, vignette, effects and overlay — the stronger. */
+        fun stacked(base: Grade, top: Grade): Grade = Grade().apply {
+            copyFrom(base); next = Grade().apply { copyFrom(top) }
+            grain = maxOf(Looks.grainOf(base), Looks.grainOf(top)); vignette = maxOf(Looks.vignetteOf(base), Looks.vignetteOf(top))
+            next!!.grain = 0f; next!!.vignette = 0f
+            if (top.overlay != "none") { overlay = top.overlay; overlayAmount = top.overlayAmount }
+            bloom = maxOf(bloom, top.bloom); halation = maxOf(halation, top.halation); aberration = maxOf(aberration, top.aberration); sharpen = maxOf(sharpen, top.sharpen)
+        }
         fun from(o: JSONObject?) = if (o == null) Grade() else Grade(o.optString("look", "none"), o.optDouble("str", 1.0).toFloat(), o.optDouble("gr", -1.0).toFloat(),
             o.optDouble("vi", -1.0).toFloat(), o.optDouble("ex", 0.0).toFloat(), o.optDouble("co", 0.0).toFloat(), o.optDouble("sa", 0.0).toFloat(), o.optDouble("wa", 0.0).toFloat(),
             o.optDouble("ti", 0.0).toFloat(), o.optDouble("hi", 0.0).toFloat(), o.optDouble("sh", 0.0).toFloat(), o.optDouble("wh", 0.0).toFloat(), o.optDouble("bl", 0.0).toFloat(), o.optDouble("vb", 0.0).toFloat(),
@@ -138,6 +149,20 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     val overlays = mutableListOf<Clip>()
     /** V2, V3 …: hide and lock. */
     val vTracks = mutableListOf<Track>()
+    /** Adjustment layers: a grade over everything below them, for a stretch of time. */
+    val adjusts = mutableListOf<Adjust>()
+    class Adjust(val id: String = UUID.randomUUID().toString(), var at: Long = 0, var lengthMs: Long = 5000, var grade: Grade = Grade()) {
+        val endAt get() = at + lengthMs
+        fun json(): JSONObject = JSONObject().put("id", id).put("at", at).put("len", lengthMs).put("grade", grade.json())
+        companion object { fun from(o: JSONObject) = Adjust(o.optString("id", UUID.randomUUID().toString()), o.optLong("at"), o.optLong("len", 5000), Grade.from(o.optJSONObject("grade"))) }
+    }
+    fun adjustAt(t: Long) = adjusts.lastOrNull { t >= it.at && t < it.endAt }
+    /** While an adjustment layer is being graded, the project's own grade waits here (and is what gets saved). */
+    var baseGrade: Grade? = null
+    /** The grade at [t]: the project's, with an adjustment layer over it if there's one there. */
+    fun gradeAt(t: Long): Grade { val b = baseGrade ?: grade; val a = adjustAt(t) ?: return b; return Grade.stacked(b, a.grade) }
+    /** Black filler at the end of V1, there so V2 / V3 can run past the last clip. */
+    fun gapCount() = clips.takeLastWhile { it.still == "gap" }.size
     /** The overlay showing on track [k] at [t], if any. */
     fun overlayAt(k: Int, t: Long) = overlays.lastOrNull { it.track == k && t >= it.at && t < it.endAt }
     private fun anySolo() = vSolo || aTracks.any { it.solo }
@@ -162,12 +187,13 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     }
 
     fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("created", created).put("updated", updated)
-        .put("clips", JSONArray().apply { clips.forEach { put(it.json()) } }).put("grade", grade.json()).put("aspect", aspect).put("mute", mute)
+        .put("clips", JSONArray().apply { clips.forEach { put(it.json()) } }).put("grade", (baseGrade ?: grade).json()).put("aspect", aspect).put("mute", mute)
         .put("texts", JSONArray().apply { texts.forEach { put(it.json()) } })
         .put("audio", JSONArray().apply { audio.forEach { put(it.json()) } }).put("duck", duck)
         .put("tracks", JSONObject().put("vm", vMute).put("vs", vSolo).put("vl", vLock).put("vh", vHide).put("th", tHide).put("tl", tLock))
         .put("atracks", JSONArray().apply { aTracks.forEach { put(it.json()) } })
         .put("overlays", JSONArray().apply { overlays.forEach { put(it.json()) } }).put("vtracks", JSONArray().apply { vTracks.forEach { put(it.json()) } })
+        .put("adjusts", JSONArray().apply { adjusts.forEach { put(it.json()) } })
 
     /** Takes everything from [q] (undo / redo). */
     fun copyFrom(q: Project) {
@@ -175,6 +201,7 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
         texts.clear(); texts.addAll(q.texts); audio.clear(); audio.addAll(q.audio); duck = q.duck
         vMute = q.vMute; vSolo = q.vSolo; vLock = q.vLock; vHide = q.vHide; tHide = q.tHide; tLock = q.tLock
         aTracks.clear(); aTracks.addAll(q.aTracks.map { Track(it.mute, it.solo, it.lock) })
+        adjusts.clear(); adjusts.addAll(q.adjusts)
         overlays.clear(); overlays.addAll(q.overlays); vTracks.clear(); vTracks.addAll(q.vTracks.map { Track(it.mute, it.solo, it.lock, it.hide) })
     }
 
@@ -192,6 +219,7 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
             audio.forEach { it.track = it.track.coerceIn(0, aTracks.size - 1) }
             o.optJSONArray("vtracks")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { vTracks.add(Track(lock = it.optBoolean("l"), hide = it.optBoolean("h"))) } }
             o.optJSONArray("overlays")?.let { a -> for (i in 0 until a.length()) overlays.add(Clip.from(a.getJSONObject(i))) }
+            o.optJSONArray("adjusts")?.let { a -> for (i in 0 until a.length()) adjusts.add(Adjust.from(a.getJSONObject(i))) }
             while (vTracks.size < (overlays.maxOfOrNull { it.track + 1 } ?: 0)) vTracks.add(Track())
         }
     }

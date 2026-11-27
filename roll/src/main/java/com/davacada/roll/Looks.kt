@@ -76,6 +76,36 @@ object Looks {
      * contrast, saturation and warmth. Cube is indexed [R][G][B], each an ARGB colour.
      */
     fun lut(g: Grade, lutDir: File): Array<Array<IntArray>> {
+        val first = lut1(g, lutDir)
+        val nx = g.next ?: return first
+        // an adjustment layer: its colours applied to what the first grade made
+        val second = lut1(nx, lutDir)
+        val n = SIZE; val k = (n - 1) / 255f
+        fun ch(v: Int, sh: Int) = (v shr sh and 255) * k
+        return Array(n) { r -> Array(n) { gg -> IntArray(n) { b ->
+            val v = first[r][gg][b]
+            sample(second, ch(v, 16), ch(v, 8), ch(v, 0))
+        } } }
+    }
+
+    /** Trilinear lookup in a cube (coordinates 0..SIZE-1). */
+    private fun sample(cube: Array<Array<IntArray>>, x: Float, y: Float, z: Float): Int {
+        val n = SIZE - 1
+        val x0 = x.toInt().coerceIn(0, n); val y0 = y.toInt().coerceIn(0, n); val z0 = z.toInt().coerceIn(0, n)
+        val x1 = minOf(n, x0 + 1); val y1 = minOf(n, y0 + 1); val z1 = minOf(n, z0 + 1)
+        val fx = x - x0; val fy = y - y0; val fz = z - z0
+        var out = 0xFF shl 24
+        for (sh in intArrayOf(16, 8, 0)) {
+            fun c(a: Int, b: Int, d: Int) = (cube[a][b][d] shr sh and 255).toFloat()
+            val c00 = c(x0, y0, z0) + (c(x1, y0, z0) - c(x0, y0, z0)) * fx; val c10 = c(x0, y1, z0) + (c(x1, y1, z0) - c(x0, y1, z0)) * fx
+            val c01 = c(x0, y0, z1) + (c(x1, y0, z1) - c(x0, y0, z1)) * fx; val c11 = c(x0, y1, z1) + (c(x1, y1, z1) - c(x0, y1, z1)) * fx
+            val v = (c00 + (c10 - c00) * fy) + ((c01 + (c11 - c01) * fy) - (c00 + (c10 - c00) * fy)) * fz
+            out = out or ((v + 0.5f).toInt().coerceIn(0, 255) shl sh)
+        }
+        return out
+    }
+
+    private fun lut1(g: Grade, lutDir: File): Array<Array<IntArray>> {
         val n = SIZE
         val look = byId(g.look)
         val cube = if (g.look.startsWith("lut:")) loadCube(File(lutDir, g.look.removePrefix("lut:"))) else null

@@ -177,6 +177,8 @@ class RollActivity : Activity() {
                 p.grade.look = "vision500t"; p.grade.halation = 0.6f; p.grade.shSat = 0.5f
                 vids.getOrNull(1)?.let { f -> p.audio.add(AudioItem(Uri.fromFile(f).toString(), "Test music", "music", 2000, 0, 4000, 5000).apply { fadeIn = 500; fadeOut = 1000 }) }
                 p.texts.add(TextItem("a caption line here", 7000, 11000).apply { caption = true; style = "shadow"; y = 0.8f; size = 0.045f; words.addAll(listOf(0L, 800L, 1600L, 2400L)) })
+                // the export test also cuts through an adjustment layer
+                if (intent?.getStringExtra("selftest")?.startsWith("tour") != true) p.adjusts.add(Project.Adjust(at = 2000, lengthMs = 3000, grade = Grade(look = "bleach")))
                 log("clips " + p.clips.joinToString { "${it.lengthMs}" })
                 main.post {
                     store.save(p); open(p)
@@ -188,6 +190,9 @@ class RollActivity : Activity() {
                             "add-sound" to { trackControl("a+") },
                             "overlay" to { closeSheet(); seekTimeline(1200); placeOverlays(listOf(clip(vids.getOrElse(1) { vids[0] }).apply { endMs = 4000; fit = true; scale = 0.42f; ox = 0.3f; oy = 0.3f })); seekTimeline(2500) },
                             "overlay-frame" to { p.overlays.firstOrNull()?.let { framePanelFor(it) } },
+                            "tail" to { closeClipPanel(false); seekTimeline(p.lengthMs - 1500); placeOverlays(listOf(clip(vids[0]).apply { endMs = 5000 })) },
+                            "adjust-layer" to { seekTimeline(3000); addAdjust(); editingAdjust?.grade?.let { it.look = "bleach"; it.exposure = 0.3f }; applyGrade() },
+                            "adjust-done" to { closePanel(true); seekTimeline(p.lengthMs - 600); refresh() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
                             "frame" to { framePanel(0) },
@@ -260,7 +265,7 @@ class RollActivity : Activity() {
 
     private fun relayout() {
         val p = project ?: return
-        closeSheet(); editingText = null; framingClip = null; clipPanelBefore = null; gradeBefore = null
+        closeSheet(); editingText = null; framingClip = null; clipPanelBefore = null; gradeBefore = null; endAdjustEdit()
         store.save(p)
         // keep the player and the picture; only the layout around them changes
         (glView.parent as? android.view.ViewGroup)?.removeView(glView)
@@ -284,6 +289,7 @@ class RollActivity : Activity() {
     // ================================================================ home
 
     private fun home() {
+        if (project != null) endAdjustEdit()
         screen.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, dp(40)) }
         val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(20), dp(14), dp(10), dp(6)) }
@@ -582,7 +588,7 @@ class RollActivity : Activity() {
             main.post {
                 if (clips.isEmpty()) { toast("Couldn't read those files"); return@post }
                 if (project === p && addingOverlay) { addingOverlay = false; placeOverlays(clips) }
-                else if (project === p) { snapshot(); val at = (timeline?.selected ?: -1).let { if (it >= 0) it + 1 else p.clips.size }; p.clips.addAll(at, clips); store.save(p); reloadPlayer(keepTime = true); refresh() }
+                else if (project === p) { snapshot(); val at = (timeline?.selected ?: -1).let { if (it >= 0) minOf(it + 1, p.clips.size - p.gapCount()) else p.clips.size - p.gapCount() }; p.clips.addAll(at, clips); store.save(p); reloadPlayer(keepTime = true); refresh() }
                 else { p.clips.addAll(clips); store.save(p); open(p) }
                 then?.invoke()
             }
@@ -736,9 +742,10 @@ class RollActivity : Activity() {
         tl.onTrack = { k -> trackControl(k) }
         tl.onTrackHold = { i -> trackMenu(i) }
         tl.onOverlay = { id -> p.overlays.firstOrNull { it.id == id }?.let { overlayMenu(it) } }
+        tl.onAdjust = { id -> p.adjusts.firstOrNull { it.id == id }?.let { adjustMenu(it) } }
         tl.onLocked = { lane -> toast("$lane track is locked · tap its lock to change it") }
         tl.onLaneDown = { snapshotBefore = p.json().toString() }
-        tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); reloadOverlays(); updateFrame(); refreshSoundtrack() }
+        tl.onLaneMoved = { snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); reloadOverlays(); updateFrame(); refreshSoundtrack(); fitTail(); applyGrade() }
         // the editing bar on top of the timeline: copy, paste, blade, title, snap
         val sideways = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setBackgroundColor(0xFF2A2B2F.toInt()); setPadding(dp(6), 0, dp(6), 0) }
@@ -752,7 +759,9 @@ class RollActivity : Activity() {
         bar.addView(barBtn(R.drawable.i_copy, "Copy") { copySelected() }, LinearLayout.LayoutParams(-2, -1))
         bar.addView(barBtn(R.drawable.i_paste, "Paste", if (clipboard != null) C.TEXT else C.FAINT) { pasteAtPlayhead() }, LinearLayout.LayoutParams(-2, -1))
         bar.addView(barBtn(R.drawable.i_split, "Blade") { split() }, LinearLayout.LayoutParams(-2, -1))
+        bar.addView(barBtn(R.drawable.i_freeze, "Freeze") { freezeFrame() }, LinearLayout.LayoutParams(-2, -1))
         bar.addView(barBtn(R.drawable.i_text, "Text") { textsPanel() }, LinearLayout.LayoutParams(-2, -1))
+        bar.addView(barBtn(R.drawable.i_adjust, "Adjustment") { addAdjust() }, LinearLayout.LayoutParams(-2, -1))
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         bar.addView(barBtn(R.drawable.i_magnet, "Snap", if (snapOn) C.AMBER else C.FAINT) { prefs().edit().putBoolean("snap", !tl.snapOn).apply(); editBottom() }, LinearLayout.LayoutParams(-2, -1))
         col.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; isFillViewport = true; addView(bar) }, LinearLayout.LayoutParams(-1, dp(38)))
@@ -780,7 +789,6 @@ class RollActivity : Activity() {
             bare(R.drawable.i_trans, "Transition", if (sel >= 0 && sel < (project?.clips?.size ?: 0) - 1) C.TEXT else C.FAINT) {
                 when { sel < 0 -> toast("Tap a clip first"); sel >= (project?.clips?.size ?: 0) - 1 -> toast("The last clip has nothing after it"); else -> transitionPanel(sel) } },
             bare(R.drawable.i_reverse, "Reverse", if (sel >= 0 && project?.clips?.getOrNull(sel)?.still?.isEmpty() == true) C.TEXT else C.FAINT) { if (sel >= 0) reverseClip(sel) else toast("Tap a clip first") },
-            bare(R.drawable.i_freeze, "Freeze") { freezeFrame() },
             bare(R.drawable.i_music, "Audio") { audioPanel() },
             bare(R.drawable.i_cc, "Captions") { captionsPanel() },
             bare(R.drawable.i_filter, "Film") { filmPanel(Looks.FILM) },
@@ -895,7 +903,35 @@ class RollActivity : Activity() {
         }
     }
 
-    private fun refresh() { timeline?.invalidate(); editBottomTools(); refreshTime(); previewBox.requestLayout(); updateFrame() }
+    private fun refresh() { timeline?.invalidate(); editBottomTools(); refreshTime(); previewBox.requestLayout(); updateFrame(); fitTail() }
+
+    private var tailBusy = false
+    /** Keeps black filler at the end of V1 as long as V2 / V3 run past the last clip, so the edit plays (and exports) to their end. */
+    private fun fitTail() {
+        val p = project ?: return
+        if (tailBusy || p.clips.isEmpty()) return
+        val gaps = p.gapCount()
+        val real = p.clips.size - gaps
+        if (real == 0) return
+        val v1 = p.clips.take(real).sumOf { it.lengthMs }
+        val cur = p.clips.takeLast(gaps).sumOf { it.lengthMs }
+        val need = maxOf(0L, (p.overlays.maxOfOrNull { it.endAt } ?: 0L) - v1)
+        if (need < 60 && gaps == 0) return
+        if (need >= 60 && kotlin.math.abs(need - cur) < 40) return
+        tailBusy = true
+        work {
+            val parts = ArrayList<Clip>()
+            try { var left = need; while (left >= 60) { val l = minOf(left, Stills.STILL_MS); parts.add(Stills.gapClip(this, l)); left -= l } } catch (e: Exception) {}
+            main.post {
+                tailBusy = false
+                if (project !== p) return@post
+                repeat(p.gapCount()) { p.clips.removeAt(p.clips.size - 1) }
+                p.clips.addAll(parts)
+                timeline?.selected?.let { if (it >= p.clips.size) timeline?.selected = -1 }
+                store.save(p); reloadPlayer(keepTime = true); timeline?.invalidate(); refreshTime()
+            }
+        }
+    }
 
     // ---------------------------------------------------------------- framing and transitions on the viewer
 
@@ -923,6 +959,7 @@ class RollActivity : Activity() {
         glView.frame = f
         drawTexts(p.startOf(i) + local)
         syncOverlays(p.startOf(i) + local)
+        if (p.adjusts.isNotEmpty() || p.baseGrade != null) { val g = p.gradeAt(p.startOf(i) + local); glView.setGrade(g); glView.fx = g.fx() }
     }
 
     // ---------------------------------------------------------------- titles on the viewer
@@ -961,7 +998,7 @@ class RollActivity : Activity() {
     /** The grade shows on the viewer straight away (drawn by GlPreview), paused or playing. */
     private fun applyGrade() {
         val p = project ?: return
-        if (::glView.isInitialized) { glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p)); glView.fx = p.grade.fx(); glView.hideVideo = p.vHide }
+        if (::glView.isInitialized) { val g = p.gradeAt(timeline?.time() ?: 0L); glView.setGrade(g); glView.setRatios(videoRatio, Render.ratio(p)); glView.fx = g.fx(); glView.hideVideo = p.vHide }
         updateLookTag()
     }
 
@@ -1414,8 +1451,7 @@ class RollActivity : Activity() {
         snapshot()
         var t = (timeline?.time() ?: 0L).coerceAtMost(maxOf(0, p.lengthMs - 300))
         for (c in clips) {
-            val len = minOf(c.lengthMs, p.lengthMs - t)
-            if (len < 300) break
+            val len = c.lengthMs
             c.endMs = c.startMs + (len * c.speed).toLong()
             c.at = t
             val free = (0..1).firstOrNull { k -> (k >= p.vTracks.size || p.vTracks[k].lock != true) && p.overlays.none { it.track == k && it.at < t + len && it.endAt > t } }
@@ -1425,7 +1461,7 @@ class RollActivity : Activity() {
             p.overlays.add(c)
             t += len
         }
-        store.save(p); reloadOverlays(); timeline?.invalidate()
+        store.save(p); reloadOverlays(); timeline?.invalidate(); fitTail()
         clips.lastOrNull()?.let { timeline?.selectedText = it.id }
         toast("On V${(clips.firstOrNull()?.track ?: 0) + 2} at the playhead · tap it again to place it in the frame")
     }
@@ -1438,7 +1474,58 @@ class RollActivity : Activity() {
         col.addView(action(R.drawable.i_volume, "Volume", "${(o.volume * 100).toInt()}%") {
             closeSheet(); snapshot(); o.volume = if (o.volume > 0f) 0f else 1f; store.save(p); toast(if (o.volume > 0f) "Sound on" else "Muted") })
         col.addView(action(R.drawable.i_copy, "Copy", "Then Paste at the playhead") { closeSheet(); timeline?.selectedText = o.id; copySelected() })
-        col.addView(action(R.drawable.i_trash, "Delete", "Takes it off V${o.track + 2}") { closeSheet(); snapshot(); p.overlays.remove(o); timeline?.selectedText = null; store.save(p); reloadOverlays(); timeline?.invalidate() })
+        col.addView(action(R.drawable.i_trash, "Delete", "Takes it off V${o.track + 2}") { closeSheet(); snapshot(); p.overlays.remove(o); timeline?.selectedText = null; store.save(p); reloadOverlays(); timeline?.invalidate(); fitTail() })
+        sheet(col)
+    }
+
+    // ---------------------------------------------------------------- adjustment layers
+
+    /** The adjustment layer whose grade the look / adjust / overlay panels are changing right now. */
+    private var editingAdjust: Project.Adjust? = null
+
+    private fun endAdjustEdit() {
+        val p = project ?: return
+        p.baseGrade?.let { p.grade = it }
+        p.baseGrade = null; editingAdjust = null
+        updateLookTag()
+    }
+
+    /** A new adjustment layer at the playhead, over everything below it, then its look. */
+    private fun addAdjust() {
+        val p = project ?: return
+        if (p.clips.isEmpty()) return
+        var t = timeline?.time() ?: 0L
+        if (t > p.lengthMs - 500) t = 0L
+        snapshot()
+        val a = Project.Adjust(at = t, lengthMs = minOf(5000L, p.lengthMs - t))
+        p.adjusts.add(a)
+        timeline?.selectedText = a.id; timeline?.selected = -1
+        store.save(p); refresh()
+        toast("Adjustment layer on FX · drag its ends to cover more")
+        editAdjust(a) { filmPanel(Looks.FILM) }
+    }
+
+    /** Opens a grade panel on [a] (the viewer shows it over the project's grade). */
+    private fun editAdjust(a: Project.Adjust, panel: () -> Unit) {
+        val p = project ?: return
+        if (editingAdjust != null && editingAdjust !== a) closePanel(true)
+        val t = timeline?.time() ?: 0L
+        if (t < a.at || t >= a.endAt) seekTimeline(a.at + minOf(400L, a.lengthMs / 2))
+        if (p.baseGrade == null) p.baseGrade = p.grade
+        p.grade = a.grade; editingAdjust = a
+        panel()
+        applyGrade()
+    }
+
+    private fun adjustMenu(a: Project.Adjust) {
+        val p = project ?: return
+        val col = vcol()
+        col.addView(headline("Adjustment layer", "${fmt(a.at, true)} – ${fmt(a.endAt, true)} · over everything below"))
+        col.addView(action(R.drawable.i_filter, "Look", Looks.byId(a.grade.look)?.name ?: "Film looks and your LUTs") { closeSheet(); editAdjust(a) { filmPanel(Looks.FILM) } })
+        col.addView(action(R.drawable.i_adjust, "Adjust", "Light, colour, effects") { closeSheet(); editAdjust(a) { adjustPanel() } })
+        col.addView(action(R.drawable.i_fx, "Overlay", "Light leaks, dust, film burn …") { closeSheet(); editAdjust(a) { overlayPanel() } })
+        col.addView(action(R.drawable.i_copy, "Copy", "Then Paste at the playhead") { closeSheet(); timeline?.selectedText = a.id; copySelected() })
+        col.addView(action(R.drawable.i_trash, "Delete", "Takes it off FX") { closeSheet(); snapshot(); p.adjusts.remove(a); timeline?.selectedText = null; store.save(p); applyGrade(); refresh() })
         sheet(col)
     }
 
@@ -1453,6 +1540,7 @@ class RollActivity : Activity() {
         val sel = timeline?.selected ?: -1
         clipboard = when {
             id != null && p.overlays.any { it.id == id } -> "overlay" to p.overlays.first { it.id == id }.json()
+            id != null && p.adjusts.any { it.id == id } -> "adjust" to p.adjusts.first { it.id == id }.json()
             id != null && p.texts.any { it.id == id } -> "text" to p.texts.first { it.id == id }.json()
             id != null && p.audio.any { it.id == id } -> "audio" to p.audio.first { it.id == id }.json()
             sel >= 0 -> "clip" to p.clips[sel].json()
@@ -1477,6 +1565,7 @@ class RollActivity : Activity() {
                 store.save(p); reloadPlayer(keepTime = true); refresh(); return
             }
             "overlay" -> { placeOverlays(listOf(Clip.from(fresh))); return }
+            "adjust" -> { val x = Project.Adjust.from(fresh); x.at = t.coerceAtMost(maxOf(0, p.lengthMs - 300)); x.lengthMs = minOf(x.lengthMs, p.lengthMs - x.at); p.adjusts.add(x); timeline?.selectedText = x.id; applyGrade() }
             "text" -> { val x = TextItem.from(fresh); val len = x.endMs - x.startMs; x.startMs = t; x.endMs = t + len; p.texts.add(x); timeline?.selectedText = x.id; textKey = "" }
             "audio" -> { val x = AudioItem.from(fresh); x.startMs = t; x.track = freeTrack(t, t + x.lengthMs); p.audio.add(x); timeline?.selectedText = x.id; refreshSoundtrack() }
         }
@@ -1489,7 +1578,8 @@ class RollActivity : Activity() {
         val id = timeline?.selectedText
         val sel = timeline?.selected ?: -1
         when {
-            id != null && p.overlays.any { it.id == id } -> { snapshot(); p.overlays.removeAll { it.id == id }; reloadOverlays() }
+            id != null && p.overlays.any { it.id == id } -> { snapshot(); p.overlays.removeAll { it.id == id }; reloadOverlays(); fitTail() }
+            id != null && p.adjusts.any { it.id == id } -> { snapshot(); p.adjusts.removeAll { it.id == id }; applyGrade() }
             id != null && p.texts.any { it.id == id } -> { snapshot(); p.texts.removeAll { it.id == id }; textKey = "" }
             id != null && p.audio.any { it.id == id } -> { snapshot(); p.audio.removeAll { it.id == id }; refreshSoundtrack() }
             sel >= 0 -> { deleteClip(sel); return }
@@ -1917,6 +2007,16 @@ class RollActivity : Activity() {
     private fun closePanel(keep: Boolean) {
         val p = project ?: return
         val before = gradeBefore
+        editingAdjust?.let { a ->
+            if (!keep && before != null) a.grade.copyFrom(before)
+            if (keep && before != null && before.json().toString() != a.grade.json().toString()) {
+                val now = Grade().apply { copyFrom(a.grade) }; a.grade.copyFrom(before); pushUndo(p.json().toString()); a.grade.copyFrom(now)
+            }
+            endAdjustEdit()
+            store.save(p); applyGrade(); timeline?.invalidate()
+            panelOpen = false; gradeBefore = null
+            editBottom(); return
+        }
         if (!keep && before != null) { p.grade.copyFrom(before); applyGrade() }
         if (keep && before != null && before.json().toString() != p.grade.json().toString()) {
             val now = p.grade.json(); p.grade = Grade.from(before.json()); pushUndo(p.json().toString()); p.grade = Grade.from(now)

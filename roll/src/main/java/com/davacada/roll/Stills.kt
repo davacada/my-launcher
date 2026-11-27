@@ -37,6 +37,20 @@ object Stills {
         d.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
     }
 
+    /** Black filler for the end of V1 (one small file, made once and reused): [showMs] long. */
+    fun gapClip(ctx: Context, showMs: Long): Clip {
+        val out = File(dir(ctx), "gap-black.mp4")
+        val w = 320; val h = 176
+        if (!out.exists() || out.length() == 0L) {
+            val tmp = File(dir(ctx), "gap-black.tmp.mp4")
+            val bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLACK) }
+            val yuv = Yuv(w, h).apply { set(bm) }
+            encode(tmp, w, h, (STILL_MS * FPS / 1000).toInt(), 300_000) { _ -> yuv }
+            tmp.renameTo(out)
+        }
+        return Clip(Uri.fromFile(out).toString(), STILL_MS, 0, showMs.coerceIn(100, STILL_MS), w = w, h = h).apply { still = "gap"; fit = true }
+    }
+
     /** A still clip from [bm]: [STILL_MS] long, shown for [showMs] at first. */
     fun stillClip(ctx: Context, bm: Bitmap, kind: String, showMs: Long): Clip {
         val (w, h) = encSize(bm.width, bm.height, 1920)

@@ -121,10 +121,12 @@ object Render {
         mr.release(); b
     } catch (e: Exception) { null }
 
-    fun composition(ctx: Context, p: Project, clips: List<Clip>, w: Int, h: Int, fps: Int, withSoundAsked: Boolean, lutDir: File, level: Int = 0,
+    fun composition(ctx: Context, p: Project, clipsIn: List<Clip>, w: Int, h: Int, fps: Int, withSoundAsked: Boolean, lutDir: File, level: Int = 0,
                     dissolve: Map<String, Bitmap> = emptyMap(), fromMs: Long = 0, soundtrack: File? = null): Composition {
         val withSound = withSoundAsked && level < 2
-        val grade = gradeEffects(ctx, p.grade, lutDir)
+        val clips = splitAtAdjusts(p, clipsIn, fromMs)
+        val grades = HashMap<String, Pair<List<Effect>, FloatArray>>()
+        fun gradeFor(t: Long): Pair<List<Effect>, FloatArray> { val g = p.gradeAt(t); return grades.getOrPut(g.json().toString()) { gradeEffects(ctx, g, lutDir) to g.fx() } }
         // V2 / V3: one frame reader for the whole export (only the clips that fall in this stretch)
         val endMs = fromMs + clips.sumOf { it.lengthMs }
         val ovClips = p.overlays.filter { it.track < 2 && it.endAt > fromMs && it.at < endMs }.map { Clip.from(it.json()) }
@@ -140,8 +142,10 @@ object Render {
             }
             // Phones like the Red Magic record 24-bit sound; the mixers only take 16-bit, so convert first.
             if (withSound) { audio.add(0, androidx.media3.common.audio.ToInt16PcmAudioProcessor()); audio.add(volume(c.volume)); audio.add(resample()) }
-            video.add(RollFrame(clips, idx, w, h, clips.getOrNull(idx - 1)?.let { dissolve[it.id] }, p.grade.fx(), p.vHide,
-                overlayFrames, shown, fromMs + clips.take(idx).sumOf { it.lengthMs }))
+            val startT = fromMs + clips.take(idx).sumOf { it.lengthMs }
+            val (grade, fx) = gradeFor(startT + c.lengthMs / 2)
+            video.add(RollFrame(clips, idx, w, h, clips.getOrNull(idx - 1)?.let { dissolve[it.id] }, fx, p.vHide,
+                overlayFrames, shown, startT))
             video.add(FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
             video.addAll(grade)
             // titles and captions go on top of the grade
@@ -161,6 +165,28 @@ object Render {
             .setHdrMode(if (level == 0) Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL else Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_MEDIACODEC)
             .experimentalSetForceAudioTrack(withSound && level == 0)
             .build()
+    }
+
+    /** Clips cut where adjustment layers begin and end, so each piece has one grade (export only). */
+    private fun splitAtAdjusts(p: Project, clips: List<Clip>, fromMs: Long): List<Clip> {
+        if (p.adjusts.isEmpty()) return clips
+        val cuts = p.adjusts.flatMap { listOf(it.at, it.endAt) }.toSortedSet()
+        val out = ArrayList<Clip>(); var t = fromMs
+        for (c in clips) {
+            val a = t; val b = t + c.lengthMs; t = b
+            val inner = cuts.filter { it > a + 80 && it < b - 80 }
+            if (inner.isEmpty() || c.speed <= 0f) { out.add(c); continue }
+            val edges = listOf(a) + inner + listOf(b)
+            for (k in 0 until edges.size - 1) {
+                val piece = Clip.from(c.json())
+                piece.startMs = c.startMs + ((edges[k] - a) * c.speed).toLong()
+                piece.endMs = c.startMs + ((edges[k + 1] - a) * c.speed).toLong()
+                if (k < edges.size - 2) piece.trans = "none"   // a cut inside the clip: no transition there
+                if (k > 0) piece.kenBurns = false
+                out.add(piece)
+            }
+        }
+        return out
     }
 
     class Job(var cancel: () -> Unit)
