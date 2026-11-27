@@ -2030,7 +2030,7 @@ class RollActivity : Activity() {
         orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(14), 0)
         addView(context.word("Cancel", false, 14f) { closePanel(false) })
         addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-        addView(context.text("Applies to the whole edit", 11.5f, C.FAINT))
+        addView(context.text(if (editingAdjust != null) "Applies to the adjustment layer" else "Applies to the whole edit", 11.5f, C.FAINT))
         addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
         addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener { closePanel(true) } })
     }
