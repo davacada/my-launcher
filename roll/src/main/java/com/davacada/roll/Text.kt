@@ -72,6 +72,15 @@ object TextDraw {
         Font("playfair", "Playfair", "f_playfair.ttf", 700), Font("dmserif", "DM Serif", "f_dmserif.ttf"),
         Font("marker", "Marker", "f_marker.ttf"), Font("caveat", "Caveat", "f_caveat.ttf", 700),
         Font("pacifico", "Pacifico", "f_pacifico.ttf"), Font("spacemono", "Space Mono", "f_spacemono.ttf"),
+        // cinematic: trailer titles, credits, period pieces, sci-fi, scripts (all SIL Open Font License, from Google Fonts)
+        Font("cinzel", "Cinzel", "f_cinzel.ttf", 600), Font("bodoni", "Bodoni", "f_bodoni.ttf", 600),
+        Font("cormorant", "Cormorant", "f_cormorant.ttf", 600), Font("italiana", "Italiana", "f_italiana.ttf"),
+        Font("marcellus", "Marcellus", "f_marcellus.ttf"), Font("tenor", "Tenor", "f_tenor.ttf"),
+        Font("josefin", "Josefin", "f_josefin.ttf", 300, caps = true), Font("oswald", "Oswald", "f_oswald.ttf", 500, caps = true),
+        Font("bigshoulders", "Big Shoulders", "f_bigshoulders.ttf", 800, caps = true), Font("sixcaps", "Six Caps", "f_sixcaps.ttf", caps = true),
+        Font("abril", "Abril", "f_abril.ttf"), Font("limelight", "Limelight", "f_limelight.ttf"),
+        Font("michroma", "Michroma", "f_michroma.ttf", caps = true), Font("orbitron", "Orbitron", "f_orbitron.ttf", 700, caps = true),
+        Font("courier", "Courier", "f_courier.ttf"),
         Font("sans", "Sans", null), Font("serif", "Serif", null),
     )
     val COLORS = intArrayOf(Color.WHITE, 0xFF0A0A0A.toInt(), 0xFFF2A541.toInt(), 0xFFFFE14D.toInt(), 0xFFFF5A5A.toInt(), 0xFFFF7EB6.toInt(), 0xFF7CD1FF.toInt(), 0xFF6EE7A8.toInt(), 0xFFB794FF.toInt())

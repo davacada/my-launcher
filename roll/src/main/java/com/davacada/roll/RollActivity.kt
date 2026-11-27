@@ -1401,8 +1401,12 @@ class RollActivity : Activity() {
                 s.addView(text("Drag the words on the picture to move them, pinch to resize.", 11.5f, C.FAINT).apply { setPadding(dp(4), dp(4), 0, 0) })
             }
             "font" -> {
+                // two rows: everyday fonts, and cinematic ones (trailers, credits, period, sci-fi, script pages)
+                val cine = TextDraw.FONTS.indexOfFirst { it.id == "cinzel" }
+                for ((title, list) in listOf("FONTS" to TextDraw.FONTS.filterIndexed { i, f -> i < cine || f.file == null }, "CINEMATIC" to TextDraw.FONTS.filterIndexed { i, f -> i >= cine && f.file != null })) {
+                s.addView(text(title, 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(8), 0, dp(6)) })
                 val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                TextDraw.FONTS.forEach { f ->
+                list.forEach { f ->
                     val on = t.font == f.id
                     r.addView(LinearLayout(this).apply {
                         orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
@@ -1413,6 +1417,7 @@ class RollActivity : Activity() {
                     }, LinearLayout.LayoutParams(dp(78), dp(78)).apply { marginEnd = dp(8) })
                 }
                 s.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(r) })
+                }
             }
             "color" -> {
                 s.addView(text("TEXT", 11f, C.SUB, true).apply { letterSpacing = 0.14f; setPadding(dp(4), dp(4), 0, 0) })
