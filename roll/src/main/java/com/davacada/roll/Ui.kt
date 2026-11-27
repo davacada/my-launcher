@@ -66,7 +66,7 @@ fun Context.bare(icon: Int, label: String?, color: Int = C.TEXT, size: Int = 22,
     minimumWidth = dp(52); setPadding(dp(6), dp(6), dp(6), dp(6))
     background = ripple()
     addView(ImageView(context).apply { setImageResource(icon); setColorFilter(color) }, LinearLayout.LayoutParams(dp(size), dp(size)))
-    if (label != null) addView(context.text(label, 10.5f, color, true).apply { setPadding(0, dp(5), 0, 0) })
+    if (label != null) addView(context.text(label, 10.5f, color, true).apply { setPadding(0, dp(5), 0, 0); isSingleLine = true })
     contentDescription = label ?: ""
     setOnClickListener { onClick() }
 }
