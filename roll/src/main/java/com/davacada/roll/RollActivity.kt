@@ -204,6 +204,7 @@ class RollActivity : Activity() {
                                 android.util.Log.i("ROLLTEST", "adjust A: ${p.gradeAt(x.at + 100).next?.exposure} look ${p.gradeAt(x.at + 100).next?.look} · B: ${p.gradeAt(y.at + 100).next?.exposure} look ${p.gradeAt(y.at + 100).next?.look} · same grade object: ${x.grade === y.grade}") } },
                             "add-text" to { closeSheet(); seekTimeline(1000); addText() },
                             "second-adjust" to { editingText = null; closeClipPanel(true); seekTimeline(2000); addAdjust(); closePanel(true); android.util.Log.i("ROLLTEST", "fx tracks ${p.adjusts.map { it.track }} text tracks ${p.texts.map { it.track }}") },
+                            "fonts" to { closeSheet(); p.texts.firstOrNull { !it.caption }?.let { t -> t.text = "THE LAST WINTER"; t.font = "cinzel"; t.style = "plain"; seekTimeline(t.startMs + 600); textTab = "font"; textEditor(t) } },
                             "transform" to { timeline?.selected = 0; timeline?.selectedText = null; refresh(); transformMenu() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
