@@ -112,9 +112,10 @@ class Grade(
     companion object {
         /** [top] laid over [base]: colours one after the other; grain, vignette, effects and overlay — the stronger. */
         fun stacked(base: Grade, top: Grade): Grade = Grade().apply {
-            copyFrom(base); next = Grade().apply { copyFrom(top) }
+            copyFrom(base)
+            var tail: Grade = this; while (tail.next != null) tail = tail.next!!
+            tail.next = Grade().apply { copyFrom(top); next = null; grain = 0f; vignette = 0f }
             grain = maxOf(Looks.grainOf(base), Looks.grainOf(top)); vignette = maxOf(Looks.vignetteOf(base), Looks.vignetteOf(top))
-            next!!.grain = 0f; next!!.vignette = 0f
             if (top.overlay != "none") { overlay = top.overlay; overlayAmount = top.overlayAmount }
             bloom = maxOf(bloom, top.bloom); halation = maxOf(halation, top.halation); aberration = maxOf(aberration, top.aberration); sharpen = maxOf(sharpen, top.sharpen)
         }
@@ -154,14 +155,25 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
     val adjusts = mutableListOf<Adjust>()
     class Adjust(val id: String = UUID.randomUUID().toString(), var at: Long = 0, var lengthMs: Long = 5000, var grade: Grade = Grade()) {
         val endAt get() = at + lengthMs
-        fun json(): JSONObject = JSONObject().put("id", id).put("at", at).put("len", lengthMs).put("grade", grade.json())
-        companion object { fun from(o: JSONObject) = Adjust(o.optString("id", UUID.randomUUID().toString()), o.optLong("at"), o.optLong("len", 5000), Grade.from(o.optJSONObject("grade"))) }
+        /** Its channel: FX1 = 0 (lowest), FX2 above it … higher ones are applied after lower ones. */
+        var track = 0
+        fun json(): JSONObject = JSONObject().put("id", id).put("at", at).put("len", lengthMs).put("grade", grade.json()).put("tk", track)
+        companion object { fun from(o: JSONObject) = Adjust(o.optString("id", UUID.randomUUID().toString()), o.optLong("at"), o.optLong("len", 5000), Grade.from(o.optJSONObject("grade"))).apply { track = o.optInt("tk", 0) } }
     }
     fun adjustAt(t: Long) = adjusts.lastOrNull { t >= it.at && t < it.endAt }
+    fun adjustAt(k: Int, t: Long) = adjusts.lastOrNull { it.track == k && t >= it.at && t < it.endAt }
+    fun fxCount() = (adjusts.maxOfOrNull { it.track } ?: -1) + 1
+    fun textCount() = (texts.maxOfOrNull { it.track } ?: -1) + 1
     /** While an adjustment layer is being graded, the project's own grade waits here (and is what gets saved). */
     var baseGrade: Grade? = null
     /** The grade at [t]: the project's, with an adjustment layer over it if there's one there. */
-    fun gradeAt(t: Long): Grade { val b = baseGrade ?: grade; val a = adjustAt(t) ?: return b; return Grade.stacked(b, a.grade) }
+    fun gradeAt(t: Long): Grade {
+        val b = baseGrade ?: grade
+        val over = adjusts.filter { t >= it.at && t < it.endAt }.sortedBy { it.track }
+        var g = b
+        for (a in over) g = Grade.stacked(g, a.grade)   // FX1, then FX2 on top of it …
+        return g
+    }
     /** Black filler at the end of V1, there so V2 / V3 can run past the last clip. */
     fun gapCount() = clips.takeLastWhile { it.still == "gap" }.size
     /** The overlay showing on track [k] at [t], if any. */

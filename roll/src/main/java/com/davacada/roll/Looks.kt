@@ -79,7 +79,7 @@ object Looks {
         val first = lut1(g, lutDir)
         val nx = g.next ?: return first
         // an adjustment layer: its colours applied to what the first grade made
-        val second = lut1(nx, lutDir)
+        val second = lut(nx, lutDir)   // (that grade may have another one after it)
         val n = SIZE; val k = (n - 1) / 255f
         fun ch(v: Int, sh: Int) = (v shr sh and 255) * k
         return Array(n) { r -> Array(n) { gg -> IntArray(n) { b ->

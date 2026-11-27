@@ -39,13 +39,15 @@ class TextItem(
     var animIn = "pop"; var animOut = "fade"
     var rot = 0f
     var caption = false               // made by Auto captions (styled together)
+    /** Which text channel it sits on (T1 = 0, T2 = 1 …). */
+    var track = 0
     /** Captions: when each word starts (ms from [startMs]), for the word-by-word highlight. */
     val words = mutableListOf<Long>()
     var highlight = 0xFFF2A541.toInt()
 
     fun json(): JSONObject = JSONObject().put("id", id).put("t", text).put("s", startMs).put("e", endMs).put("x", x.toDouble()).put("y", y.toDouble())
         .put("sz", size.toDouble()).put("f", font).put("c", color).put("st", style).put("bc", boxColor).put("al", align)
-        .put("ai", animIn).put("ao", animOut).put("r", rot.toDouble()).put("cap", caption).put("hl", highlight)
+        .put("ai", animIn).put("ao", animOut).put("r", rot.toDouble()).put("cap", caption).put("hl", highlight).put("tk", track)
         .put("w", JSONArray().apply { words.forEach { put(it) } })
 
     fun copyStyleFrom(o: TextItem) { x = o.x; y = o.y; size = o.size; font = o.font; color = o.color; style = o.style; boxColor = o.boxColor; align = o.align; animIn = o.animIn; animOut = o.animOut; rot = o.rot; highlight = o.highlight }
@@ -55,7 +57,7 @@ class TextItem(
             x = o.optDouble("x", 0.5).toFloat(); y = o.optDouble("y", 0.5).toFloat(); size = o.optDouble("sz", 0.07).toFloat()
             font = o.optString("f", "montserrat"); color = o.optInt("c", Color.WHITE); style = o.optString("st", "shadow"); boxColor = o.optInt("bc", 0xCC000000.toInt())
             align = o.optString("al", "center"); animIn = o.optString("ai", "pop"); animOut = o.optString("ao", "fade"); rot = o.optDouble("r", 0.0).toFloat()
-            caption = o.optBoolean("cap"); highlight = o.optInt("hl", 0xFFF2A541.toInt())
+            caption = o.optBoolean("cap"); highlight = o.optInt("hl", 0xFFF2A541.toInt()); track = o.optInt("tk", 0)
             o.optJSONArray("w")?.let { a -> for (i in 0 until a.length()) words.add(a.optLong(i)) }
         }
     }

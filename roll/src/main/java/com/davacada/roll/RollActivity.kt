@@ -202,6 +202,8 @@ class RollActivity : Activity() {
                             "blade-adjust" to { closeSheet(); p.adjusts.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split(); p.adjusts.lastOrNull()?.let { b -> editAdjust(b) { adjustPanel() }; b.grade.exposure = -0.8f; closePanel(true) }; timeline?.invalidate()
                                 val (x, y) = p.adjusts[0] to p.adjusts.last()
                                 android.util.Log.i("ROLLTEST", "adjust A: ${p.gradeAt(x.at + 100).next?.exposure} look ${p.gradeAt(x.at + 100).next?.look} · B: ${p.gradeAt(y.at + 100).next?.exposure} look ${p.gradeAt(y.at + 100).next?.look} · same grade object: ${x.grade === y.grade}") } },
+                            "add-text" to { closeSheet(); seekTimeline(1000); addText() },
+                            "second-adjust" to { editingText = null; closeClipPanel(true); seekTimeline(2000); addAdjust(); closePanel(true); android.util.Log.i("ROLLTEST", "fx tracks ${p.adjusts.map { it.track }} text tracks ${p.texts.map { it.track }}") },
                             "transform" to { timeline?.selected = 0; timeline?.selectedText = null; refresh(); transformMenu() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
@@ -774,7 +776,7 @@ class RollActivity : Activity() {
         bar.addView(barBtn(R.drawable.i_paste, "Paste", if (clipboard != null) C.TEXT else C.FAINT) { pasteAtPlayhead() }, LinearLayout.LayoutParams(-2, -1))
         bar.addView(barBtn(R.drawable.i_split, "Blade") { split() }, LinearLayout.LayoutParams(-2, -1))
         bar.addView(barBtn(R.drawable.i_freeze, "Freeze") { freezeFrame() }, LinearLayout.LayoutParams(-2, -1))
-        bar.addView(barBtn(R.drawable.i_text, "Text") { textsPanel() }, LinearLayout.LayoutParams(-2, -1))
+        bar.addView(barBtn(R.drawable.i_text, "Text") { addText() }, LinearLayout.LayoutParams(-2, -1))
         bar.addView(barBtn(R.drawable.i_adjust, "Adjustment") { addAdjust() }, LinearLayout.LayoutParams(-2, -1))
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         bar.addView(barBtn(R.drawable.i_magnet, "Snap", if (snapOn) C.AMBER else C.FAINT) { prefs().edit().putBoolean("snap", !tl.snapOn).apply(); toast(if (tl.snapOn) "Snap off" else "Snap on"); editBottom() }, LinearLayout.LayoutParams(-2, -1))
@@ -1330,8 +1332,16 @@ class RollActivity : Activity() {
         val last = p.texts.lastOrNull { !it.caption }
         val it = TextItem("Your text", t0, minOf(maxOf(p.lengthMs, t0 + 500), t0 + 3000)).apply { last?.let { l -> copyStyleFrom(l); y = 0.5f } }
         clipPanelBefore = p.json().toString()
+        it.track = freeTextTrack(it.startMs, it.endMs)   // an empty channel above the footage
         p.texts.add(it)
+        timeline?.invalidate()
         textEditor(it, fresh = true)
+    }
+
+    /** The lowest text channel with nothing on it between [a] and [b] (a new one if they're all busy). */
+    private fun freeTextTrack(a: Long, b: Long, except: TextItem? = null): Int {
+        val p = project ?: return 0
+        return (0..p.textCount()).first { k -> p.texts.none { it !== except && it.track == k && it.startMs < b && it.endMs > a } }
     }
 
     private var textTab = "style"
@@ -1435,7 +1445,7 @@ class RollActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(14), 0)
             addView(context.word("Cancel", false, 14f) { editingText = null; timeline?.selectedText = null; closeClipPanel(false) })
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(bare(R.drawable.i_copy, null, size = 18) { val c2 = TextItem.from(t.json().put("id", java.util.UUID.randomUUID().toString())).apply { y = (t.y + 0.1f).coerceAtMost(0.9f) }; p.texts.add(c2); textEditor(c2) })
+            addView(bare(R.drawable.i_copy, null, size = 18) { val c2 = TextItem.from(t.json().put("id", java.util.UUID.randomUUID().toString())).apply { y = (t.y + 0.1f).coerceAtMost(0.9f) }; c2.track = freeTextTrack(c2.startMs, c2.endMs); p.texts.add(c2); textEditor(c2) })
             addView(bare(R.drawable.i_trash, null, 0xFFFF6B5E.toInt(), 18) { p.texts.remove(t); editingText = null; timeline?.selectedText = null; closeClipPanel(true) })
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(context.text("Done", 14f, C.AMBER, true).apply { setPadding(dp(4), dp(8), dp(4), dp(8)); background = ripple(); setOnClickListener {
@@ -1606,11 +1616,11 @@ class RollActivity : Activity() {
         var t = timeline?.time() ?: 0L
         if (t > p.lengthMs - 500) t = 0L
         snapshot()
-        val a = Project.Adjust(at = t, lengthMs = minOf(5000L, p.lengthMs - t))
+        val a = Project.Adjust(at = t, lengthMs = minOf(5000L, p.lengthMs - t)).apply { track = p.fxCount() }   // a new channel on top
         p.adjusts.add(a)
         timeline?.selectedText = a.id; timeline?.selected = -1
         store.save(p); refresh()
-        toast("Adjustment layer on FX · drag its ends to cover more")
+        toast("Adjustment layer on FX${a.track + 1} · drag its ends to cover more")
         editAdjust(a) { filmPanel(Looks.FILM) }
     }
 
@@ -1629,12 +1639,12 @@ class RollActivity : Activity() {
     private fun adjustMenu(a: Project.Adjust) {
         val p = project ?: return
         val col = vcol()
-        col.addView(headline("Adjustment layer", "${fmt(a.at, true)} – ${fmt(a.endAt, true)} · over everything below"))
+        col.addView(headline("Adjustment layer · FX${a.track + 1}", "${fmt(a.at, true)} – ${fmt(a.endAt, true)} · over everything below"))
         col.addView(action(R.drawable.i_filter, "Look", Looks.byId(a.grade.look)?.name ?: "Film looks and your LUTs") { closeSheet(); editAdjust(a) { filmPanel(Looks.FILM) } })
         col.addView(action(R.drawable.i_adjust, "Adjust", "Light, colour, effects") { closeSheet(); editAdjust(a) { adjustPanel() } })
         col.addView(action(R.drawable.i_fx, "Overlay", "Light leaks, dust, film burn …") { closeSheet(); editAdjust(a) { overlayPanel() } })
         col.addView(action(R.drawable.i_copy, "Copy", "Then Paste at the playhead") { closeSheet(); timeline?.selectedText = a.id; copySelected() })
-        col.addView(action(R.drawable.i_trash, "Delete", "Takes it off FX") { closeSheet(); snapshot(); p.adjusts.remove(a); timeline?.selectedText = null; store.save(p); applyGrade(); refresh() })
+        col.addView(action(R.drawable.i_trash, "Delete", "Takes it off FX${a.track + 1}") { closeSheet(); snapshot(); p.adjusts.remove(a); timeline?.selectedText = null; store.save(p); applyGrade(); refresh() })
         sheet(col)
     }
 
@@ -1674,8 +1684,8 @@ class RollActivity : Activity() {
                 store.save(p); reloadPlayer(keepTime = true); refresh(); return
             }
             "overlay" -> { placeOverlays(listOf(Clip.from(fresh))); return }
-            "adjust" -> { val x = Project.Adjust.from(fresh); x.at = t.coerceAtMost(maxOf(0, p.lengthMs - 300)); x.lengthMs = minOf(x.lengthMs, p.lengthMs - x.at); p.adjusts.add(x); timeline?.selectedText = x.id; applyGrade() }
-            "text" -> { val x = TextItem.from(fresh); val len = x.endMs - x.startMs; x.startMs = t; x.endMs = t + len; p.texts.add(x); timeline?.selectedText = x.id; textKey = "" }
+            "adjust" -> { val x = Project.Adjust.from(fresh); x.at = t.coerceAtMost(maxOf(0, p.lengthMs - 300)); x.lengthMs = minOf(x.lengthMs, p.lengthMs - x.at); x.track = (0..p.fxCount()).first { k -> p.adjusts.none { it.track == k && it.at < x.endAt && it.endAt > x.at } }; p.adjusts.add(x); timeline?.selectedText = x.id; applyGrade() }
+            "text" -> { val x = TextItem.from(fresh); val len = x.endMs - x.startMs; x.startMs = t; x.endMs = t + len; x.track = freeTextTrack(x.startMs, x.endMs); p.texts.add(x); timeline?.selectedText = x.id; textKey = "" }
             "audio" -> { val x = AudioItem.from(fresh); x.startMs = t; x.track = freeTrack(t, t + x.lengthMs); p.audio.add(x); timeline?.selectedText = x.id; refreshSoundtrack() }
         }
         store.save(p); timeline?.invalidate(); updateFrame()
@@ -2010,7 +2020,10 @@ class RollActivity : Activity() {
                         snapshot()
                         val st = Captions.STYLES.firstOrNull { it.id == capStyle } ?: Captions.STYLES[0]
                         p.texts.removeAll { it.caption }
-                        items.forEach { st.apply(it); p.texts.add(it) }
+                        // captions share one channel of their own
+                        val ca = items.minOfOrNull { it.startMs } ?: 0L; val cb = items.maxOfOrNull { it.endMs } ?: 0L
+                        val ck = freeTextTrack(ca, cb)
+                        items.forEach { st.apply(it); it.track = ck; p.texts.add(it) }
                         store.save(p); textKey = ""; updateFrame(); timeline?.invalidate()
                         toast("${items.size} caption lines"); captionsPanel()
                     }
