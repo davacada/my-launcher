@@ -480,13 +480,6 @@ class Timeline(ctx: Context) : View(ctx) {
                     return true }
                 selectedText = null; return true
             }
-            if (false) {
-                // first tap selects (then drag it, or its ends); tap again to open it
-                p.texts.lastOrNull { t in it.startMs..it.endMs }?.let {
-                    if (p.tLock) onLocked?.invoke("T1") else if (it.id != selectedText) { selectedText = it.id; performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) } else onText?.invoke(it.id)
-                    return true }
-                selectedText = null; return true
-            }
             val tr = trackAt(p, e.y)
             if (tr >= 0) {
                 p.audio.lastOrNull { it.track == tr && t in it.startMs..it.endMs }?.let {
@@ -579,7 +572,6 @@ class Timeline(ctx: Context) : View(ctx) {
                     moveMode = when { abs(t0 - selO.at) <= edge -> -1; abs(t0 - selO.endAt) <= edge -> 1; else -> 0 }
                     onLaneDown?.invoke(); return true
                 }
-                if (false && selT != null && !p.tLock && e.y in tTop..(tTop + tH) && t0 in (selT.startMs - edge)..(selT.endMs + edge)) { grab(selT, selT.startMs, selT.endMs); return true }
                 if (selA != null && !p.trackLocked(selA.track) && trackAt(p, e.y) == selA.track && t0 in (selA.startMs - edge)..(selA.endMs + edge)) { grab(selA, selA.startMs, selA.endMs); return true }
                 if (selected in p.clips.indices && !p.vLock && e.y in vTop..(vTop + vH)) {
                     val a = edgeX + p.startOf(selected) * pxPerMs; val b = a + p.clips[selected].lengthMs * pxPerMs
