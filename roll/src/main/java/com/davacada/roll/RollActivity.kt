@@ -199,6 +199,7 @@ class RollActivity : Activity() {
                             "blade" to { closeSheet(); p.overlays.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split() } },
                             "play" to { closeSheet(); seekTimeline(1000); togglePlay() },
                             "pause" to { togglePlay(); main.postDelayed({ android.util.Log.i("ROLLTEST", "after pause: main=${player?.isPlaying}/${player?.playWhenReady} bed=${bed?.isPlaying} v2=${ovPlayers[0]?.isPlaying} v3=${ovPlayers[1]?.isPlaying}") }, 1500) },
+                            "blade-adjust" to { closeSheet(); p.adjusts.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split(); p.adjusts.lastOrNull()?.grade?.look = "portra400"; applyGrade(); timeline?.invalidate() } },
                             "transform" to { timeline?.selected = 0; timeline?.selectedText = null; refresh(); transformMenu() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
@@ -1090,6 +1091,15 @@ class RollActivity : Activity() {
             val cut = t - x.startMs
             b.startMs = t; b.inMs = x.inMs + cut; b.lengthMs = x.lengthMs - cut; b.fadeIn = 0; x.lengthMs = cut; x.fadeOut = 0
             p.audio.add(b); store.save(p); timeline?.invalidate(); refreshSoundtrack(); toast("Sound cut in two"); return
+        }
+        p.adjusts.firstOrNull { it.id == selId }?.let { x ->
+            // an adjustment layer: two layers, each with its own copy of the grade to change separately
+            if (t - x.at < 200 || x.endAt - t < 200) { toast("Put the playhead inside the adjustment layer"); return }
+            snapshot()
+            val b = Project.Adjust.from(x.json().put("id", java.util.UUID.randomUUID().toString()))
+            b.at = t; b.lengthMs = x.endAt - t; x.lengthMs = t - x.at
+            p.adjusts.add(b); timeline?.selectedText = b.id
+            store.save(p); timeline?.invalidate(); applyGrade(); toast("Cut in two · tap a part twice to grade it on its own"); return
         }
         p.overlays.firstOrNull { it.id == selId }?.let { o ->
             // a V2 / V3 clip
