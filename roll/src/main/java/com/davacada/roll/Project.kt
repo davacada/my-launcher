@@ -91,7 +91,7 @@ class Grade(
     var next: Grade? = null
     val mixed get() = mix.any { it != 0f }
     /** True when nothing changes the colours. */
-    val neutral get() = look == "none" && exposure == 0f && contrast == 0f && saturation == 0f && warmth == 0f && tint == 0f &&
+    val neutral: Boolean get() = look == "none" && exposure == 0f && contrast == 0f && saturation == 0f && warmth == 0f && tint == 0f &&
         highlights == 0f && shadows == 0f && whites == 0f && blacks == 0f && vibrance == 0f && !mixed && fade == 0f && hue == 0f && shSat == 0f && hiSat == 0f && (next?.neutral ?: true)
 
     fun json(): JSONObject = JSONObject().put("look", look).put("str", strength.toDouble()).put("gr", grain.toDouble()).put("vi", vignette.toDouble())
