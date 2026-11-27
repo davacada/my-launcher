@@ -59,6 +59,10 @@ class Timeline(ctx: Context) : View(ctx) {
     var onTrackHold: ((Int) -> Unit)? = null
     /** Tried to change something on a locked track. */
     var onLocked: ((String) -> Unit)? = null
+    /** A V1 clip dragged up onto V2 / V3 (clip index, track 0 = V2, timeline time). */
+    var onClipToTrack: ((Int, Int, Long) -> Unit)? = null
+    /** A V2 / V3 clip dragged down into V1 (its id, timeline time). */
+    var onOverlayToV1: ((String, Long) -> Unit)? = null
     /** Tapped a selected adjustment layer again (its id). */
     var onAdjust: ((String) -> Unit)? = null
     /** Tapped a selected V2 / V3 clip again (its id). */
@@ -232,6 +236,17 @@ class Timeline(ctx: Context) : View(ctx) {
         c.drawRect(cx - dp(0.8f), dp(10f), cx + dp(0.8f), height.toFloat(), playhead)
         val ph = Path().apply { moveTo(cx - dp(6f), dp(12f)); lineTo(cx + dp(6f), dp(12f)); lineTo(cx + dp(6f), dp(18f)); lineTo(cx, dp(23f)); lineTo(cx - dp(6f), dp(18f)); close() }
         c.drawPath(ph, playhead)
+
+        // a clip being moved to another track follows the finger
+        val lifted = (moving as? Clip)?.takeIf { lifting } ?: p.clips.getOrNull(lift)?.takeIf { lifting }
+        if (lifted != null) {
+            val w = lifted.lengthMs * pxPerMs
+            val a = liftX; val k = dropTrack(liftY)
+            val top = when { k >= 0 && k < vCount() -> ovTop(k); k == -1 -> vTop; k >= vCount() -> (if (vCount() > 0) ovTop(vCount() - 1) else vTop) - vH - gap; else -> liftY - vH / 2 }
+            r.set(a, top, a + w, top + vH)
+            c.drawRoundRect(r, dp(4f), dp(4f), ghost); c.drawRoundRect(r, dp(4f), dp(4f), ghostLine)
+            if (k >= vCount()) c.drawText("new V${k + 2}", a + dp(6f), top + dp(16f), label)
+        }
 
         drawHeaders(c, p)
     }
@@ -429,6 +444,18 @@ class Timeline(ctx: Context) : View(ctx) {
     private var trimming = 0; private var trimClip = -1; private var trimOrig = 0L
     private var downX = 0f; private var downY = 0f
     private var headTouch = false; private var headScroll = false
+    // a V1 clip being lifted to another track: its index, and where it is drawn while it follows the finger
+    private var lift = -1; private var lifting = false; private var liftX = 0f; private var liftY = 0f
+    private val ghost = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x995B8BD6.toInt() }
+    private val ghostLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF2A541.toInt(); style = Paint.Style.STROKE; strokeWidth = dp(2f) }
+    /** The track a lifted clip would land on: 0.. = V2.., -1 = V1, -2 = nowhere. Above the top track makes a new one (up to V3). */
+    private fun dropTrack(y: Float): Int {
+        val k = ovTrackAt(y)
+        if (k >= 0) return k
+        if (y in vTop..(vTop + vH)) return -1
+        if (y < (if (vCount() > 0) ovTop(vCount() - 1) else vTop) && vCount() < 2) return vCount()
+        return -2
+    }
     private var moving: Any? = null; private var moveMode = 0          // 0 move, -1 trim start, 1 trim end
     private var moveOrigStart = 0L; private var moveOrigEnd = 0L; private var moveOrigIn = 0L; private var moveOrigSrcEnd = 0L
     private var dir = 0                                                  // 0 undecided, 1 sideways, 2 up/down
@@ -457,6 +484,7 @@ class Timeline(ctx: Context) : View(ctx) {
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
             if (trimming != 0) return true
             if (dir == 0) dir = if (abs(dy) > abs(dx)) 2 else 1
+            if (dir == 1 && !lifting) lift = -1
             if (dir == 2) { scrollY += dy; invalidate() } else moveTo(timeMs + (dx / pxPerMs).toLong())
             return true
         }
@@ -573,13 +601,22 @@ class Timeline(ctx: Context) : View(ctx) {
                     onLaneDown?.invoke(); return true
                 }
                 if (selA != null && !p.trackLocked(selA.track) && trackAt(p, e.y) == selA.track && t0 in (selA.startMs - edge)..(selA.endMs + edge)) { grab(selA, selA.startMs, selA.endMs); return true }
+                lift = -1; lifting = false
                 if (selected in p.clips.indices && !p.vLock && e.y in vTop..(vTop + vH)) {
                     val a = edgeX + p.startOf(selected) * pxPerMs; val b = a + p.clips[selected].lengthMs * pxPerMs
                     if (abs(e.x - a) < handleW * 1.6f) { trimming = -1; trimClip = selected; trimOrig = p.clips[selected].startMs }
                     else if (abs(e.x - b) < handleW * 1.6f) { trimming = 1; trimClip = selected; trimOrig = p.clips[selected].endMs }
+                    else if (e.x in a..b && p.clips[selected].still != "gap") { lift = selected; liftX = a; liftY = e.y }
                 }
             }
-            MotionEvent.ACTION_MOVE -> if (moving != null) {
+            MotionEvent.ACTION_MOVE -> if (lift >= 0 && (lifting || (abs(e.y - downY) > dp(18f) && abs(e.y - downY) > abs(e.x - downX)))) {
+                // drag a V1 clip up to V2 / V3
+                if (!lifting) { lifting = true; performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) }
+                val a0 = edgeX + p.startOf(lift) * pxPerMs
+                val t = snap(p, ((a0 + e.x - downX - edgeX) / pxPerMs).toLong().coerceAtLeast(0), null)
+                liftX = edgeX + t * pxPerMs; liftY = e.y
+                invalidate(); return true
+            } else if (moving != null) {
                 val dt = ((e.x - downX) / pxPerMs).toLong()
                 when (val m = moving) {
                     is TextItem -> when (moveMode) {
@@ -593,6 +630,8 @@ class Timeline(ctx: Context) : View(ctx) {
                             val len = moveOrigEnd - moveOrigStart; var s = (moveOrigStart + dt).coerceAtLeast(0); val se = snap(p, s + len, m); val ss = snap(p, s, m)
                             s = if (ss != s) ss else if (se != s + len) se - len else s; m.at = s.coerceIn(0, max(0, p.lengthMs - 200))
                             val k = ovTrackAt(e.y); if (k >= 0 && p.vTracks[k].lock != true) m.track = k
+                            lifting = k < 0 && dropTrack(e.y) != -2
+                            liftX = edgeX + m.at * pxPerMs; liftY = e.y
                         }
                         -1 -> { val na = snap(p, moveOrigStart + dt, m).coerceAtLeast(0)
                             val src = (moveOrigIn + ((na - moveOrigStart) * m.speed).toLong()).coerceIn(0, moveOrigSrcEnd - 300)
@@ -626,6 +665,24 @@ class Timeline(ctx: Context) : View(ctx) {
                 invalidate()
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (lifting && lift >= 0) {
+                    val i = lift; lift = -1; lifting = false
+                    val k = dropTrack(e.y); val t = ((liftX - edgeX) / pxPerMs).toLong().coerceAtLeast(0)
+                    if (e.actionMasked == MotionEvent.ACTION_UP && k >= 0 && (k >= vCount() || p.vTracks[k].lock != true)) onClipToTrack?.invoke(i, k, t)
+                    invalidate(); return true
+                }
+                lift = -1
+                val mv = moving as? Clip
+                if (mv != null && lifting) {
+                    // a V2 / V3 clip let go over V1, or above the top track
+                    lifting = false; moving = null
+                    val k = dropTrack(e.y)
+                    if (e.actionMasked == MotionEvent.ACTION_UP) {
+                        if (k == -1 && !p.vLock) { onOverlayToV1?.invoke(mv.id, mv.at); return true }
+                        if (k >= vCount() && k < 2) { mv.track = k; onClipToTrack?.invoke(-1, k, mv.at) }
+                    }
+                    onLaneMoved?.invoke(); invalidate(); return true
+                }
                 if (moving != null) {
                     val m = moving; val moved = abs(e.x - downX) > dp(4f) || abs(e.y - downY) > dp(8f); moving = null
                     if (moved) onLaneMoved?.invoke() else selectedText?.let { when (m) { is AudioItem -> onAudio?.invoke(it); is Clip -> onOverlay?.invoke(it); is Project.Adjust -> onAdjust?.invoke(it); else -> onText?.invoke(it) } }
