@@ -199,7 +199,9 @@ class RollActivity : Activity() {
                             "blade" to { closeSheet(); p.overlays.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split() } },
                             "play" to { closeSheet(); seekTimeline(1000); togglePlay() },
                             "pause" to { togglePlay(); main.postDelayed({ android.util.Log.i("ROLLTEST", "after pause: main=${player?.isPlaying}/${player?.playWhenReady} bed=${bed?.isPlaying} v2=${ovPlayers[0]?.isPlaying} v3=${ovPlayers[1]?.isPlaying}") }, 1500) },
-                            "blade-adjust" to { closeSheet(); p.adjusts.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split(); p.adjusts.lastOrNull()?.grade?.look = "portra400"; applyGrade(); timeline?.invalidate() } },
+                            "blade-adjust" to { closeSheet(); p.adjusts.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split(); p.adjusts.lastOrNull()?.let { b -> editAdjust(b) { adjustPanel() }; b.grade.exposure = -0.8f; closePanel(true) }; timeline?.invalidate()
+                                val (x, y) = p.adjusts[0] to p.adjusts.last()
+                                android.util.Log.i("ROLLTEST", "adjust A: ${p.gradeAt(x.at + 100).next?.exposure} look ${p.gradeAt(x.at + 100).next?.look} · B: ${p.gradeAt(y.at + 100).next?.exposure} look ${p.gradeAt(y.at + 100).next?.look} · same grade object: ${x.grade === y.grade}") } },
                             "transform" to { timeline?.selected = 0; timeline?.selectedText = null; refresh(); transformMenu() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
@@ -801,9 +803,10 @@ class RollActivity : Activity() {
                 when { sel < 0 -> toast("Tap a clip first"); sel >= (project?.clips?.size ?: 0) - 1 -> toast("The last clip has nothing after it"); else -> transitionPanel(sel) } },
             bare(R.drawable.i_music, "Audio") { audioPanel() },
             bare(R.drawable.i_cc, "Captions") { captionsPanel() },
-            bare(R.drawable.i_filter, "Film") { filmPanel(Looks.FILM) },
-            bare(R.drawable.i_adjust, "Adjust") { adjustPanel() },
-            bare(R.drawable.i_fx, "Overlay") { overlayPanel() },
+            // with an adjustment layer selected these grade that layer only; otherwise the whole edit
+            bare(R.drawable.i_filter, "Film") { selectedAdjust()?.let { a -> editAdjust(a) { filmPanel(Looks.FILM) } } ?: filmPanel(Looks.FILM) },
+            bare(R.drawable.i_adjust, "Adjust") { selectedAdjust()?.let { a -> editAdjust(a) { adjustPanel() } } ?: adjustPanel() },
+            bare(R.drawable.i_fx, "Overlay") { selectedAdjust()?.let { a -> editAdjust(a) { overlayPanel() } } ?: overlayPanel() },
             bare(if (project?.mute == true) R.drawable.i_mute else R.drawable.i_volume, "Volume") { if (sel >= 0) volumeMenu(sel) else soundMenu() },
             bare(R.drawable.i_trash, "Delete", if (sel >= 0 || timeline?.selectedText != null) C.TEXT else C.FAINT) { deleteSelected() },
         ).forEach { row.addView(it, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(2); marginEnd = dp(2) }) }
@@ -1586,6 +1589,8 @@ class RollActivity : Activity() {
 
     /** The adjustment layer whose grade the look / adjust / overlay panels are changing right now. */
     private var editingAdjust: Project.Adjust? = null
+
+    private fun selectedAdjust() = project?.adjusts?.firstOrNull { it.id == timeline?.selectedText }
 
     private fun endAdjustEdit() {
         val p = project ?: return

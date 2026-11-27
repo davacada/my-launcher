@@ -107,6 +107,7 @@ class Grade(
         overlay = g.overlay; overlayAmount = g.overlayAmount; g.mix.copyInto(mix)
         fade = g.fade; hue = g.hue; shHue = g.shHue; shSat = g.shSat; hiHue = g.hiHue; hiSat = g.hiSat; balance = g.balance
         bloom = g.bloom; halation = g.halation; aberration = g.aberration; sharpen = g.sharpen
+        next = g.next?.let { n -> Grade().apply { copyFrom(n) } }
     }
     companion object {
         /** [top] laid over [base]: colours one after the other; grain, vignette, effects and overlay — the stronger. */
