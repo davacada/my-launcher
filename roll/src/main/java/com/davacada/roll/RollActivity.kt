@@ -196,6 +196,7 @@ class RollActivity : Activity() {
                             "music-tail" to { vids.getOrNull(1)?.let { f -> p.audio.add(AudioItem(Uri.fromFile(f).toString(), "Long music", "music", p.lengthMs - 1000, 0, 4500, 5000).apply { track = 0 }) }; store.save(p); refreshSoundtrack() },
                             "music-tail-end" to { seekTimeline(p.lengthMs - 300); refresh() },
                             "lift" to { seekTimeline(6500); clipToTrack(1, 1, 6000) },
+                            "blade" to { closeSheet(); p.overlays.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split() } },
                             "transform" to { timeline?.selected = 0; timeline?.selectedText = null; refresh(); transformMenu() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
@@ -1070,8 +1071,24 @@ class RollActivity : Activity() {
             b.startMs = t; b.inMs = x.inMs + cut; b.lengthMs = x.lengthMs - cut; b.fadeIn = 0; x.lengthMs = cut; x.fadeOut = 0
             p.audio.add(b); store.save(p); timeline?.invalidate(); refreshSoundtrack(); toast("Sound cut in two"); return
         }
-        val (i, off) = p.at(t)
+        p.overlays.firstOrNull { it.id == selId }?.let { o ->
+            // a V2 / V3 clip
+            if (t - o.at < 200 || o.endAt - t < 200) { toast("Put the playhead inside the clip"); return }
+            snapshot()
+            val cut = o.startMs + ((t - o.at) * o.speed).toLong()
+            val b = Clip.from(o.json().put("id", java.util.UUID.randomUUID().toString())); b.startMs = cut; b.at = t; o.endMs = cut
+            p.overlays.add(b); timeline?.selectedText = b.id
+            store.save(p); reloadOverlays(); timeline?.invalidate(); updateFrame(); return
+        }
+        // the selected V1 clip (or, with nothing selected, the one under the playhead)
+        val selClip = timeline?.selected ?: -1
+        val (i, off) = if (selClip in p.clips.indices) {
+            val st = p.startOf(selClip)
+            if (t <= st || t >= st + p.clips[selClip].lengthMs) { toast("Put the playhead inside the selected clip"); return }
+            selClip to (t - st)
+        } else p.at(t)
         val c = p.clips[i]
+        if (c.still == "gap") { toast("Nothing to cut there"); return }
         val cut = c.startMs + (off * c.speed).toLong()
         if (cut - c.startMs < 200 || c.endMs - cut < 200) { toast("Too close to the edge of the clip"); return }
         snapshot()
