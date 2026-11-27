@@ -281,8 +281,8 @@ class RollActivity : Activity() {
         try { open(p, keepHistory = true) } finally { reusing = false }
         undo.clear(); undo.addAll(u); redo.clear(); redo.addAll(r)
         timeline?.setTime(t); refreshTime(); applyGrade(); updateFrame()
-        playBtn?.setImageResource(if (player?.isPlaying == true) R.drawable.i_pause else R.drawable.i_play)
-        if (player?.isPlaying == true) main.post(ticker)
+        playBtn?.setImageResource(if (player?.playWhenReady == true) R.drawable.i_pause else R.drawable.i_play)
+        if (player?.isPlaying == true) { main.removeCallbacks(ticker); main.post(ticker) }
     }
 
 
@@ -836,10 +836,15 @@ class RollActivity : Activity() {
         glView.setGrade(p.grade); glView.setRatios(videoRatio, Render.ratio(p)); glView.hideVideo = p.vHide
         pl.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { clipParams(); updateFrame() }
+            // the button follows what you asked for (play / pause), not short stalls while the next clip loads
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                playBtn?.setImageResource(if (playWhenReady) R.drawable.i_pause else R.drawable.i_play)
+                if (!playWhenReady) stopOthers()
+            }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                playBtn?.setImageResource(if (isPlaying) R.drawable.i_pause else R.drawable.i_play)
-                if (isPlaying) main.post(ticker)
+                if (isPlaying) { main.removeCallbacks(ticker); main.post(ticker) }
                 bed?.let { b -> if (isPlaying) { b.seekTo(timelineTime()); b.play() } else b.pause() }
+                if (!isPlaying) { for (o in ovPlayers) o?.pause() }
             }
             override fun onPlayerError(error: PlaybackException) {
                 // a hiccup in the phone's decoder (e.g. when the picture's surface changes): quietly reload and carry on
@@ -918,7 +923,20 @@ class RollActivity : Activity() {
         }
     }
 
-    private fun togglePlay() { val pl = player ?: return; if (pl.isPlaying) pl.pause() else { if (project?.clips?.isEmpty() != false) return; pl.play() } }
+    private fun togglePlay() {
+        val pl = player ?: return
+        // playWhenReady, not isPlaying: while a clip is loading isPlaying is false, and a tap used to "play" instead of stopping
+        if (pl.playWhenReady) { pl.pause(); stopOthers() }
+        else { if (project?.clips?.isEmpty() != false) return; if (pl.playbackState == Player.STATE_ENDED) pl.seekTo(0, 0); pl.play() }
+    }
+
+    /** Music, voiceovers and V2 / V3 stop with the edit. */
+    private fun stopOthers() {
+        main.removeCallbacks(ticker)
+        bed?.pause()
+        for (o in ovPlayers) o?.pause()
+        timeline?.setTime(timelineTime()); refreshTime(); updateFrame()
+    }
 
     private fun refreshTime() {
         val p = project ?: return
@@ -1468,19 +1486,19 @@ class RollActivity : Activity() {
     /** Keeps V2 / V3 on the same moment as the edit, and tells the viewer how they sit. */
     private fun syncOverlays(t: Long) {
         val p = project ?: return
-        val playing = player?.isPlaying == true
+        val playing = player?.isPlaying == true && player?.playWhenReady == true
         val out = arrayOfNulls<FloatArray>(2)
         for (k in 0..1) {
             val pl = ovPlayers[k]
             val o = p.overlayAt(k, t)
-            if (o == null || pl == null) { pl?.let { if (it.isPlaying) it.pause() }; continue }
+            if (o == null || pl == null) { pl?.let { if (it.playWhenReady) it.pause() }; continue }
             val idx = ovLists[k].indexOfFirst { it.id == o.id }
             if (idx < 0) continue
             val target = ((t - o.at) * o.speed).toLong()
             if (pl.currentMediaItemIndex != idx || kotlin.math.abs(pl.currentPosition - target) > (if (playing) 180 else 40)) pl.seekTo(idx, target)
             if (pl.playbackParameters.speed != o.speed) pl.playbackParameters = PlaybackParameters(o.speed)
             pl.volume = if (p.clipSound()) o.volume else 0f
-            if (playing && !pl.isPlaying) pl.play() else if (!playing && pl.isPlaying) pl.pause()
+            if (playing && !pl.playWhenReady) pl.play() else if (!playing && pl.playWhenReady) pl.pause()
             if (p.vTracks.getOrNull(k)?.hide == true) continue
             val kb = if (o.kenBurns) 1f + 0.14f * ((t - o.at).toFloat() / o.lengthMs.coerceAtLeast(1)).coerceIn(0f, 1f) else 1f
             out[k] = floatArrayOf(o.aspect, if (o.fit) 1f else 0f, o.scale * kb, (o.rot * Math.PI / 180).toFloat(), o.ox, o.oy, if (o.flip) 1f else 0f, o.opacity)
@@ -1759,7 +1777,7 @@ class RollActivity : Activity() {
                 val b = bed ?: ExoPlayer.Builder(this).build().also { bed = it }
                 b.setMediaItem(MediaItem.fromUri(Uri.fromFile(f))); b.prepare()
                 b.seekTo(timelineTime())
-                if (player?.isPlaying == true) b.play()
+                if (player?.isPlaying == true && player?.playWhenReady == true) b.play()
             }
         }
     }
