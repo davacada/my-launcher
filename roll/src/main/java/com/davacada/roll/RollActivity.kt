@@ -197,6 +197,8 @@ class RollActivity : Activity() {
                             "music-tail-end" to { seekTimeline(p.lengthMs - 300); refresh() },
                             "lift" to { seekTimeline(6500); clipToTrack(1, 1, 6000) },
                             "blade" to { closeSheet(); p.overlays.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split() } },
+                            "play" to { closeSheet(); seekTimeline(1000); togglePlay() },
+                            "pause" to { togglePlay(); main.postDelayed({ android.util.Log.i("ROLLTEST", "after pause: main=${player?.isPlaying}/${player?.playWhenReady} bed=${bed?.isPlaying} v2=${ovPlayers[0]?.isPlaying} v3=${ovPlayers[1]?.isPlaying}") }, 1500) },
                             "transform" to { timeline?.selected = 0; timeline?.selectedText = null; refresh(); transformMenu() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
