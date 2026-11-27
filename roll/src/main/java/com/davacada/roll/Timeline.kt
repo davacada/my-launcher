@@ -89,7 +89,7 @@ class Timeline(ctx: Context) : View(ctx) {
     private fun ovTop(k: Int) = fxTop + fxRows() * (fxH + gap) + (vCount() - 1 - k) * (vH + gap)
     private val vTop get() = fxTop + fxRows() * (fxH + gap) + vCount() * (vH + gap)
     private val tTop get() = vTop + vH + gap
-    private val a1Top get() = tTop + tH + gap
+    private val a1Top get() = vTop + vH + gap   // no T1 lane: titles are edited from the Text tool
     private fun aTop(i: Int) = a1Top + (i + 1) * (aH + gap)
     private fun addTop(p: Project) = aTop(p.aTracks.size) + dp(2f)
     private fun contentH(p: Project) = addTop(p) + scrollY + dp(28f)
@@ -165,7 +165,6 @@ class Timeline(ctx: Context) : View(ctx) {
         c.drawRect(0f, vTop, width.toFloat(), vTop + vH, trackBg)
         if (fxRows() > 0) c.drawRect(0f, fxTop, width.toFloat(), fxTop + fxH, trackBg2)
         for (k in 0 until vCount()) c.drawRect(0f, ovTop(k), width.toFloat(), ovTop(k) + vH, if (k % 2 == 0) trackBg2 else trackBg)
-        c.drawRect(0f, tTop, width.toFloat(), tTop + tH, trackBg2)
         c.drawRect(0f, a1Top, width.toFloat(), a1Top + aH, trackBg)
         for (i in p.aTracks.indices) c.drawRect(0f, aTop(i), width.toFloat(), aTop(i) + aH, if (i % 2 == 0) trackBg2 else trackBg)
 
@@ -202,8 +201,6 @@ class Timeline(ctx: Context) : View(ctx) {
         }
 
         // T1: titles and captions
-        if (p.texts.isEmpty()) c.drawText("titles and captions", headW + dp(10f), tTop + tH * 0.66f, hint)
-        for (it in p.texts) bar(c, x0 + it.startMs * pxPerMs, x0 + it.endMs * pxPerMs, tTop, tH, if (it.caption) captionBg else titleBg, it.text.replace('\n', ' '), it.id == selectedText, null)
         // A2 …: music and voiceovers
         for (it in p.audio) {
             val top = aTop(it.track)
@@ -214,7 +211,6 @@ class Timeline(ctx: Context) : View(ctx) {
 
         // dim what you can't see or hear
         if (p.vHide) c.drawRect(headW, vTop, width.toFloat(), vTop + vH, dim)
-        if (p.tHide) c.drawRect(headW, tTop, width.toFloat(), tTop + tH, dim)
         if (!p.clipSound()) c.drawRect(headW, a1Top, width.toFloat(), a1Top + aH, dim)
         for (i in p.aTracks.indices) if (!p.trackSound(i)) c.drawRect(headW, aTop(i), width.toFloat(), aTop(i) + aH, dim)
         c.restore()
@@ -345,7 +341,6 @@ class Timeline(ctx: Context) : View(ctx) {
         out.add(Btn(RectF(dp(4f), dp(3f), headW - dp(8f), rulerH - dp(3f)), "v+", false))            // add above the video
         row(vTop, vH, listOf("vH" to p.vHide, "vL" to p.vLock))
         for (k in 0 until p.vTracks.size) row(ovTop(k), vH, listOf("o${k}H" to p.vTracks[k].hide, "o${k}L" to p.vTracks[k].lock))
-        row(tTop, tH, listOf("tH" to p.tHide, "tL" to p.tLock, "t+" to false))
         row(a1Top, aH, listOf("vM" to p.vMute, "vS" to p.vSolo))
         for (i in p.aTracks.indices) { val t = p.aTracks[i]; row(aTop(i), aH, listOf("a${i}M" to t.mute, "a${i}S" to t.solo, "a${i}L" to t.lock)) }
         out.add(Btn(RectF(dp(4f), addTop(p), headW - dp(8f), addTop(p) + dp(20f)), "a+", false))      // add under the audio
@@ -359,7 +354,7 @@ class Timeline(ctx: Context) : View(ctx) {
         c.drawRect(headW - dp(1f), 0f, headW, height.toFloat(), headLine)
         c.save(); c.clipRect(0f, rulerH, headW, height.toFloat())
         fun name(n: String, top: Float, h: Float) { c.drawText(n, dp(5f), top + h / 2 + dp(4f), headName); c.drawRect(0f, top + h + gap / 2, headW, top + h + gap / 2 + 1, headLine) }
-        name("V1", vTop, vH); name("T1", tTop, tH); name("A1", a1Top, aH)
+        name("V1", vTop, vH); name("A1", a1Top, aH)
         if (fxRows() > 0) name("FX", fxTop, fxH)
         for (k in 0 until p.vTracks.size) name("V${k + 2}", ovTop(k), vH)
         for (i in p.aTracks.indices) name("A${i + 2}", aTop(i), aH)
@@ -485,7 +480,7 @@ class Timeline(ctx: Context) : View(ctx) {
                     return true }
                 selectedText = null; return true
             }
-            if (e.y in tTop..(tTop + tH)) {
+            if (false) {
                 // first tap selects (then drag it, or its ends); tap again to open it
                 p.texts.lastOrNull { t in it.startMs..it.endMs }?.let {
                     if (p.tLock) onLocked?.invoke("T1") else if (it.id != selectedText) { selectedText = it.id; performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) } else onText?.invoke(it.id)
@@ -584,7 +579,7 @@ class Timeline(ctx: Context) : View(ctx) {
                     moveMode = when { abs(t0 - selO.at) <= edge -> -1; abs(t0 - selO.endAt) <= edge -> 1; else -> 0 }
                     onLaneDown?.invoke(); return true
                 }
-                if (selT != null && !p.tLock && e.y in tTop..(tTop + tH) && t0 in (selT.startMs - edge)..(selT.endMs + edge)) { grab(selT, selT.startMs, selT.endMs); return true }
+                if (false && selT != null && !p.tLock && e.y in tTop..(tTop + tH) && t0 in (selT.startMs - edge)..(selT.endMs + edge)) { grab(selT, selT.startMs, selT.endMs); return true }
                 if (selA != null && !p.trackLocked(selA.track) && trackAt(p, e.y) == selA.track && t0 in (selA.startMs - edge)..(selA.endMs + edge)) { grab(selA, selA.startMs, selA.endMs); return true }
                 if (selected in p.clips.indices && !p.vLock && e.y in vTop..(vTop + vH)) {
                     val a = edgeX + p.startOf(selected) * pxPerMs; val b = a + p.clips[selected].lengthMs * pxPerMs

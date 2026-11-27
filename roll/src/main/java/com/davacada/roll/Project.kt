@@ -213,7 +213,7 @@ class Project(val id: String = UUID.randomUUID().toString(), var name: String = 
             o.optJSONArray("texts")?.let { a -> for (i in 0 until a.length()) texts.add(TextItem.from(a.getJSONObject(i))) }
             o.optJSONArray("audio")?.let { a -> for (i in 0 until a.length()) audio.add(AudioItem.from(a.getJSONObject(i))) }
             duck = o.optBoolean("duck", true)
-            o.optJSONObject("tracks")?.let { t -> vMute = t.optBoolean("vm"); vSolo = t.optBoolean("vs"); vLock = t.optBoolean("vl"); vHide = t.optBoolean("vh"); tHide = t.optBoolean("th"); tLock = t.optBoolean("tl")
+            o.optJSONObject("tracks")?.let { t -> vMute = t.optBoolean("vm"); vSolo = t.optBoolean("vs"); vLock = t.optBoolean("vl"); vHide = t.optBoolean("vh"); tHide = false; tLock = false   // the T1 lane is gone; titles always show
                 aTracks[0] = Track(t.optBoolean("am"), t.optBoolean("as"), t.optBoolean("al")) }
             o.optJSONArray("atracks")?.let { a -> aTracks.clear(); for (i in 0 until a.length()) a.getJSONObject(i).let { aTracks.add(Track(it.optBoolean("m"), it.optBoolean("s"), it.optBoolean("l"))) }; if (aTracks.isEmpty()) aTracks.add(Track()) }
             audio.forEach { it.track = it.track.coerceIn(0, aTracks.size - 1) }
