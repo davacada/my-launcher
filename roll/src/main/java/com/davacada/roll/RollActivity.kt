@@ -197,7 +197,6 @@ class RollActivity : Activity() {
                             "music-tail-end" to { seekTimeline(p.lengthMs - 300); refresh() },
                             "lift" to { seekTimeline(6500); clipToTrack(1, 1, 6000) },
                             "blade" to { closeSheet(); p.overlays.firstOrNull()?.let { timeline?.selected = -1; timeline?.selectedText = it.id; seekTimeline(it.at + it.lengthMs / 2); split() } },
-                            "measure" to { toolsRow?.let { r -> for (k in 0 until r.childCount) { val v = r.getChildAt(k) as android.view.ViewGroup; val tv = v.getChildAt(1) as? android.widget.TextView; android.util.Log.i("ROLLTEST", "tool ${tv?.text} w=${v.width} tv=${tv?.width} need=${tv?.paint?.measureText(tv.text.toString())} parentW=${r.width} hsv=${(r.parent as View).width} lp=${v.layoutParams.width}") } } },
                             "transform" to { timeline?.selected = 0; timeline?.selectedText = null; refresh(); transformMenu() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },

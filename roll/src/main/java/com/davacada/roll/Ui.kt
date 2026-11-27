@@ -66,7 +66,13 @@ fun Context.bare(icon: Int, label: String?, color: Int = C.TEXT, size: Int = 22,
     minimumWidth = dp(52); setPadding(dp(6), dp(6), dp(6), dp(6))
     background = ripple()
     addView(ImageView(context).apply { setImageResource(icon); setColorFilter(color) }, LinearLayout.LayoutParams(dp(size), dp(size)))
-    if (label != null) addView(context.text(label, 10.5f, color, true).apply { setPadding(0, dp(5), 0, 0); isSingleLine = true })
+    if (label != null) {
+        val tv = context.text(label, 10.5f, color, true).apply { setPadding(0, dp(5), 0, 0); isSingleLine = true }
+        // wide enough for the whole word (the row otherwise squeezes long names like "Transform")
+        val need = kotlin.math.ceil(tv.paint.measureText(label)).toInt() + dp(2)
+        tv.minWidth = need; minimumWidth = maxOf(dp(52), need + dp(12))
+        addView(tv)
+    }
     contentDescription = label ?: ""
     setOnClickListener { onClick() }
 }
