@@ -31,6 +31,8 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
     var onLayerSurface: ((Int, Surface) -> Unit)? = null
     /** V2 / V3 now: aspect, fit, scale, rotation (rad), x, y, flip, opacity — or null when nothing shows. */
     @Volatile var layers = arrayOfNulls<FloatArray>(2)
+    /** False when this phone's GPU couldn't draw V2 / V3 in the viewer (the export still has them). */
+    @Volatile var layersOk = true
         set(v) { field = v; requestRender() }
     private val layerTex = IntArray(2); private val layerSt = arrayOfNulls<SurfaceTexture>(2); private val layerSurf = arrayOfNulls<Surface>(2)
     private val layerMat = Array(2) { FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) } }
@@ -169,7 +171,10 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
             val ls = Surface(lt); layerSurf[k]?.release(); layerSurf[k] = ls
             main.post { onLayerSurface?.invoke(k, ls) }
         }
-        prog = program(VERT, FRAG)
+        val withLayers = FRAG.replaceFirst("precision highp float;", "precision highp float;\n#define LAYERS 1")
+        prog = program(VERT, withLayers)
+        layersOk = prog != 0
+        if (prog == 0) { Log.e("Roll", "viewer: no V2/V3 layers on this GPU"); prog = program(VERT, FRAG) }
         lutDirty = true; ovUploaded = null
         val tex = SurfaceTexture(oesTex)
         tex.setOnFrameAvailableListener(this)
@@ -271,7 +276,7 @@ class GlPreview(ctx: Context, private val lutDir: File) : GLSurfaceView(ctx), GL
         GLES30.glAttachShader(p, shader(GLES30.GL_VERTEX_SHADER, v)); GLES30.glAttachShader(p, shader(GLES30.GL_FRAGMENT_SHADER, f))
         GLES30.glLinkProgram(p)
         val ok = IntArray(1); GLES30.glGetProgramiv(p, GLES30.GL_LINK_STATUS, ok, 0)
-        if (ok[0] == 0) Log.e("Roll", "link: " + GLES30.glGetProgramInfoLog(p))
+        if (ok[0] == 0) { Log.e("Roll", "link: " + GLES30.glGetProgramInfoLog(p)); GLES30.glDeleteProgram(p); return 0 }
         return p
     }
 
@@ -305,7 +310,9 @@ uniform float uSeed;
 uniform vec2 uSize;
 uniform vec4 uA; uniform vec4 uB; uniform vec4 uC; uniform vec4 uP1; uniform vec4 uP2; uniform vec4 uE;
 uniform float uHide;
+#ifdef LAYERS
 uniform samplerExternalOES uL0; uniform samplerExternalOES uL1;
+#endif
 uniform mat4 uL0M; uniform mat4 uL1M;
 uniform vec4 uL0A; uniform vec4 uL0B; uniform vec4 uL1A; uniform vec4 uL1B;
 in vec2 vUv;
@@ -314,17 +321,30 @@ out vec4 outColor;
 #define PREV(t) texture(uPrev, vec2((t).x, 1.0 - (t).y))
 """ + Scene.BODY + """
 /** An overlay (V2 / V3) laid over [c]: placed like a clip, but with nothing around it. */
-vec3 layer(vec3 c, vec2 uv, samplerExternalOES s, mat4 m, vec4 A, vec4 B) {
-  if (B.w < 0.001) return c;
-  vec2 t = mapUv(uv, A.x, uA.y, A.y, A.z, B.xy, A.w, B.z);
+// (written out for each layer: some phones' GPUs refuse a video texture passed into a function)
+vec3 layer0(vec3 c, vec2 uv) {
+#ifdef LAYERS
+  if (uL0B.w < 0.001) return c;
+  vec2 t = mapUv(uv, uL0A.x, uA.y, uL0A.y, uL0A.z, uL0B.xy, uL0A.w, uL0B.z);
   if (!inside(t)) return c;
-  return mix(c, texture(s, (m * vec4(t, 0.0, 1.0)).xy).rgb, B.w);
+  c = mix(c, texture(uL0, (uL0M * vec4(t, 0.0, 1.0)).xy).rgb, uL0B.w);
+#endif
+  return c;
+}
+vec3 layer1(vec3 c, vec2 uv) {
+#ifdef LAYERS
+  if (uL1B.w < 0.001) return c;
+  vec2 t = mapUv(uv, uL1A.x, uA.y, uL1A.y, uL1A.z, uL1B.xy, uL1A.w, uL1B.z);
+  if (!inside(t)) return c;
+  c = mix(c, texture(uL1, (uL1M * vec4(t, 0.0, 1.0)).xy).rgb, uL1B.w);
+#endif
+  return c;
 }
 float rand(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233)) + uSeed * 0.731) * 43758.5453); }
 void main() {
   vec3 c = uHide > 0.5 ? vec3(0.0) : frameColor(vUv);
-  c = layer(c, vUv, uL0, uL0M, uL0A, uL0B);
-  c = layer(c, vUv, uL1, uL1M, uL1A, uL1B);
+  c = layer0(c, vUv);
+  c = layer1(c, vUv);
   if (uUseLut > 0.5) c = texture(uLut, c * uLutScale + uLutOffset).rgb;
   if (uOvA > 0.001) { vec4 o = texture(uOv, vec2(vUv.x, 1.0 - vUv.y)); c = mix(c, o.rgb / max(o.a, 0.001), o.a * uOvA); }
   vec2 d = vUv - 0.5;
