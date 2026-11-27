@@ -193,6 +193,8 @@ class RollActivity : Activity() {
                             "tail" to { closeClipPanel(false); seekTimeline(p.lengthMs - 1500); placeOverlays(listOf(clip(vids[0]).apply { endMs = 5000 })) },
                             "adjust-layer" to { seekTimeline(3000); addAdjust(); editingAdjust?.grade?.let { it.look = "bleach"; it.exposure = 0.3f }; applyGrade() },
                             "adjust-done" to { closePanel(true); seekTimeline(p.lengthMs - 600); refresh() },
+                            "music-tail" to { vids.getOrNull(1)?.let { f -> p.audio.add(AudioItem(Uri.fromFile(f).toString(), "Long music", "music", p.lengthMs - 1000, 0, 4500, 5000).apply { track = 0 }) }; store.save(p); refreshSoundtrack() },
+                            "music-tail-end" to { seekTimeline(p.lengthMs - 300); refresh() },
                         ) else listOf<Pair<String, () -> Unit>>(
                             "editor" to { seekTimeline(1500); timeline?.selected = 0; refresh() },
                             "frame" to { framePanel(0) },
@@ -733,7 +735,7 @@ class RollActivity : Activity() {
         tl.project = p
         tl.onScrub = { t -> seekTimeline(t) }
         tl.onSelect = { i -> tl.selected = i; editBottomTools() }
-        tl.onTrimmed = { i -> snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); reloadPlayer(keepTime = true); refreshTime() }
+        tl.onTrimmed = { i -> snapshotBefore?.let { pushUndo(it) }; snapshotBefore = null; store.save(p); reloadPlayer(keepTime = true); refreshTime(); fitTail() }
         tl.onAdd = { addingTo = p; pickVideos() }
         tl.onHold = { i -> clipMenu(i) }
         tl.onJoint = { i -> transitionPanel(i) }
@@ -906,7 +908,7 @@ class RollActivity : Activity() {
     private fun refresh() { timeline?.invalidate(); editBottomTools(); refreshTime(); previewBox.requestLayout(); updateFrame(); fitTail() }
 
     private var tailBusy = false
-    /** Keeps black filler at the end of V1 as long as V2 / V3 run past the last clip, so the edit plays (and exports) to their end. */
+    /** Keeps black filler at the end of V1 as long as anything (V2 / V3, sound, titles) runs past the last clip, so the edit plays (and exports) to their end. */
     private fun fitTail() {
         val p = project ?: return
         if (tailBusy || p.clips.isEmpty()) return
@@ -915,7 +917,9 @@ class RollActivity : Activity() {
         if (real == 0) return
         val v1 = p.clips.take(real).sumOf { it.lengthMs }
         val cur = p.clips.takeLast(gaps).sumOf { it.lengthMs }
-        val need = maxOf(0L, (p.overlays.maxOfOrNull { it.endAt } ?: 0L) - v1)
+        // the edit runs to whatever ends last: V2 / V3, music and voiceovers, titles
+        val end = maxOf(p.overlays.maxOfOrNull { it.endAt } ?: 0L, p.audio.maxOfOrNull { it.endMs } ?: 0L, p.texts.maxOfOrNull { it.endMs } ?: 0L)
+        val need = maxOf(0L, end - v1)
         if (need < 60 && gaps == 0) return
         if (need >= 60 && kotlin.math.abs(need - cur) < 40) return
         tailBusy = true
@@ -1671,6 +1675,7 @@ class RollActivity : Activity() {
     private var bedKey = ""
     private fun refreshSoundtrack() {
         val p = project ?: return
+        fitTail()
         val key = Audio.key(p) + p.mute
         if (key == bedKey) return
         bedKey = key
@@ -1749,9 +1754,9 @@ class RollActivity : Activity() {
                 if (len <= 0) { toast("Couldn't read that sound file"); return@post }
                 snapshot()
                 val at = (timeline?.time() ?: 0L).let { if (it > p.lengthMs - 1000) 0L else it }
-                val a = AudioItem(u.toString(), name, "music", at, 0, minOf(len, maxOf(1000, p.lengthMs - at)), len).apply { fadeOut = minOf(1500, lengthMs / 4) }
+                val a = AudioItem(u.toString(), name, "music", at, 0, len, len).apply { fadeOut = minOf(1500, lengthMs / 4) }
                 a.track = freeTrack(at, at + a.lengthMs)
-                p.audio.add(a); store.save(p); refreshSoundtrack(); timeline?.invalidate()
+                p.audio.add(a); store.save(p); refreshSoundtrack(); timeline?.invalidate(); fitTail()
                 audioEditor(a)
             }
         }
@@ -1802,7 +1807,7 @@ class RollActivity : Activity() {
                     if (ms < 400) { file.delete(); toast("Too short"); audioPanel(); return@post }
                     snapshot()
                     val n = p.audio.count { it.kind == "voice" } + 1
-                    val a = AudioItem(Uri.fromFile(file).toString(), "Voiceover $n", "voice", start, 0, minOf(ms, maxOf(500, p.lengthMs - start)), ms)
+                    val a = AudioItem(Uri.fromFile(file).toString(), "Voiceover $n", "voice", start, 0, ms, ms)
                     a.track = freeTrack(start, start + a.lengthMs)
                     p.audio.add(a); store.save(p); refreshSoundtrack(); timeline?.invalidate(); audioPanel()
                 }
